@@ -234,6 +234,11 @@ const CHAINS: Record<number, ChainConfig> = {
     // surface is live on this chain; unset = it's absent. See ../../relayer and
     // docs/design/gasless-relay.md.
     relayerUrl: 'https://app.satorinet.io/relayer',
+    // Coined's indexer (coined/indexer) for the named-stream name box: its own
+    // host, under /idx (nginx strips the prefix; the service keeps /names,
+    // /search, /lookalike). It answers with Access-Control-Allow-Origin: *,
+    // and a failure here only drops the coined suggestions.
+    coinedIndexerUrl: 'https://coined.satorinet.io/idx',
     // A (top, = the token's immutable platformFeeRecipient), then C and B.
     splitters: [
       '0xcfB35ff791Ab9D7fFB70eD0e934F8298B9b94464',

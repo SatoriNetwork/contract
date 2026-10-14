@@ -1,5 +1,5 @@
 import { coinedIndexer } from './coinedIndexer';
-import { getCoinedIndexerUrl } from '../contracts/addresses';
+import { getCoinedIndexerUrl, TESTNET_CHAIN_ID } from '../contracts/addresses';
 
 // Same contract as indexerClient: rows when the Coined indexer is configured,
 // reachable and answers with a list; null for every other reason. The name box
@@ -33,6 +33,11 @@ describe('getCoinedIndexerUrl', () => {
   it('derives host from the page when only a port is given', () => {
     process.env.REACT_APP_COINED_INDEXER_PORT = '8799';
     expect(getCoinedIndexerUrl(31337)).toBe(`http://${window.location.hostname}:8799`);
+  });
+  it('points Base Sepolia at the live Coined indexer, under /idx on its own host', () => {
+    // nginx on coined.satorinet.io strips /idx and proxies to the service's
+    // /names, /search, /lookalike — the paths coinedIndexer below appends.
+    expect(getCoinedIndexerUrl(TESTNET_CHAIN_ID)).toBe('https://coined.satorinet.io/idx');
   });
 });
 
