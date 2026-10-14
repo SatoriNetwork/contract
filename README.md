@@ -254,32 +254,20 @@ Replace `0x...` with your deployed contract address.
 │       ├── deploy.js            # Deployment script
 │       └── setup.js             # Setup typical state
 │
-├── satori-ui/                   # React dApp
-│   ├── src/
-│   │   ├── components/
-│   │   │   ├── streams/StreamCreation.tsx  # Stream creation UI
-│   │   │   ├── charts/          # Data visualization
-│   │   │   ├── prediction/      # Prediction interface
-│   │   │   └── voting/          # Voting interface
-│   │   ├── hooks/               # React hooks
-│   │   ├── pages/               # Page components
-│   │   └── utils/               # Utilities
-│   ├── tests/                   # Playwright E2E tests
-│   │   ├── stream-creation-all-types.spec.ts  # 13 tests
-│   │   └── datastream-cycling.spec.ts
-│   └── public/                  # Static assets
-│
-└── docs/                        # Documentation
-    ├── features/
-    │   ├── UI_STREAM_CREATION.md    # User guide (NEW)
-    │   └── UNISWAP_TWAP.md          # Uniswap integration
-    ├── design/
-    │   ├── DATA_STREAMS.md          # DataStream architecture
-    │   └── VOTE.md                  # Voting system
-    ├── testing/
-    │   └── E2E_TESTING.md           # Playwright documentation (NEW)
-    └── issues/
-        └── ISSUES.md                # Current status
+└── satori-ui/                   # React dApp
+    ├── src/
+    │   ├── components/
+    │   │   ├── streams/StreamCreation.tsx  # Stream creation UI
+    │   │   ├── charts/          # Data visualization
+    │   │   ├── prediction/      # Prediction interface
+    │   │   └── voting/          # Voting interface
+    │   ├── hooks/               # React hooks
+    │   ├── pages/               # Page components
+    │   └── utils/               # Utilities
+    ├── tests/                   # Playwright E2E tests
+    │   ├── stream-creation-all-types.spec.ts  # 13 tests
+    │   └── datastream-cycling.spec.ts
+    └── public/                  # Static assets
 ```
 
 ## Documentation
