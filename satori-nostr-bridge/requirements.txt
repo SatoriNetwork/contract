@@ -1,0 +1,15 @@
+# satorilib carries the Nostr client (kinds 34600/34601, relay failover, dedupe).
+# Installed from git because it is a separate repository, not published to PyPI.
+satorilib @ git+https://github.com/SatoriNetwork/satorilib.git@main
+
+# Floor rather than a pin: satorilib was migrated to the 0.45 API on 2026-08-18
+# and no longer works on 0.44.x, so this is a MINIMUM and not a ceiling.
+# 0.45 was a breaking release (the client lost its signer, `send_event_builder`
+# and `handle_notifications` were removed, `subscribe`/`fetch_events` take a
+# ReqTarget, `Tag.as_vec` became `to_vec`), which is why the version matters
+# here at all.
+nostr-sdk>=0.45.0
+
+# satorilib's transitive needs, undeclared on its side.
+pycryptodome>=3.20
+websockets>=12

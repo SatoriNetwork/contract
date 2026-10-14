@@ -1,0 +1,254 @@
+[
+  {
+    "label": "_status",
+    "slot": "0",
+    "offset": 0,
+    "type": "t_uint256"
+  },
+  {
+    "label": "deployer",
+    "slot": "1",
+    "offset": 0,
+    "type": "t_address"
+  },
+  {
+    "label": "satoriCore",
+    "slot": "2",
+    "offset": 0,
+    "type": "t_address"
+  },
+  {
+    "label": "satoriVoting",
+    "slot": "3",
+    "offset": 0,
+    "type": "t_address"
+  },
+  {
+    "label": "satoriGames",
+    "slot": "4",
+    "offset": 0,
+    "type": "t_address"
+  },
+  {
+    "label": "satoriRegistry",
+    "slot": "5",
+    "offset": 0,
+    "type": "t_address"
+  },
+  {
+    "label": "satoriBounties",
+    "slot": "6",
+    "offset": 0,
+    "type": "t_address"
+  },
+  {
+    "label": "satoriEngine",
+    "slot": "7",
+    "offset": 0,
+    "type": "t_address"
+  },
+  {
+    "label": "satoriToken",
+    "slot": "8",
+    "offset": 0,
+    "type": "t_address"
+  },
+  {
+    "label": "_initialized",
+    "slot": "8",
+    "offset": 20,
+    "type": "t_bool"
+  },
+  {
+    "label": "admin",
+    "slot": "9",
+    "offset": 0,
+    "type": "t_address"
+  },
+  {
+    "label": "predictorFeeStored",
+    "slot": "10",
+    "offset": 0,
+    "type": "t_mapping(t_address,t_uint16)"
+  },
+  {
+    "label": "_roundBudget",
+    "slot": "11",
+    "offset": 0,
+    "type": "t_mapping(t_uint256,t_uint256)"
+  },
+  {
+    "label": "offchainBudget",
+    "slot": "12",
+    "offset": 0,
+    "type": "t_uint256"
+  },
+  {
+    "label": "_roundGross",
+    "slot": "13",
+    "offset": 0,
+    "type": "t_mapping(t_uint256,t_uint256)"
+  },
+  {
+    "label": "totalWeightPacked",
+    "slot": "14",
+    "offset": 0,
+    "type": "t_mapping(t_uint32,t_mapping(t_uint256,t_uint256))"
+  },
+  {
+    "label": "unclaimedRewards",
+    "slot": "15",
+    "offset": 0,
+    "type": "t_mapping(t_address,t_uint256)"
+  },
+  {
+    "label": "_unsettledPredictionCount",
+    "slot": "16",
+    "offset": 0,
+    "type": "t_mapping(t_address,t_mapping(t_uint32,t_uint256))"
+  },
+  {
+    "label": "predictionDelegateInfo",
+    "slot": "17",
+    "offset": 0,
+    "type": "t_mapping(t_address,t_struct(PredictionDelegate)_storage)"
+  },
+  {
+    "label": "predictionDelegationInfo",
+    "slot": "18",
+    "offset": 0,
+    "type": "t_mapping(t_address,t_mapping(t_uint32,t_mapping(t_uint256,t_struct(PredictionDelegationInfo)_storage)))"
+  },
+  {
+    "label": "_adapterPending",
+    "slot": "19",
+    "offset": 0,
+    "type": "t_mapping(t_address,t_mapping(t_uint32,t_mapping(t_uint256,t_uint8)))"
+  },
+  {
+    "label": "_delegationPeriods",
+    "slot": "20",
+    "offset": 0,
+    "type": "t_mapping(t_address,t_array(t_struct(DelegationPeriod)_storage)dyn_storage)"
+  },
+  {
+    "label": "_firstActiveDelegationPeriod",
+    "slot": "21",
+    "offset": 0,
+    "type": "t_mapping(t_address,t_uint256)"
+  },
+  {
+    "label": "_delegatePowerForRate",
+    "slot": "22",
+    "offset": 0,
+    "type": "t_mapping(t_address,t_uint256)"
+  },
+  {
+    "label": "_delegatePoolPending",
+    "slot": "23",
+    "offset": 0,
+    "type": "t_mapping(t_address,t_struct(Pending)_storage)"
+  },
+  {
+    "label": "_delegatorRewardRatePerRound",
+    "slot": "24",
+    "offset": 0,
+    "type": "t_mapping(t_address,t_mapping(t_uint256,t_uint256))"
+  },
+  {
+    "label": "claimDelegateInfo",
+    "slot": "25",
+    "offset": 0,
+    "type": "t_mapping(t_address,t_address)"
+  },
+  {
+    "label": "referral",
+    "slot": "26",
+    "offset": 0,
+    "type": "t_mapping(t_address,t_address)"
+  },
+  {
+    "label": "marketingFeeRecipient",
+    "slot": "27",
+    "offset": 0,
+    "type": "t_address"
+  },
+  {
+    "label": "pendingMarketingFeeRecipient",
+    "slot": "28",
+    "offset": 0,
+    "type": "t_address"
+  },
+  {
+    "label": "_frozenQ",
+    "slot": "29",
+    "offset": 0,
+    "type": "t_mapping(t_address,t_mapping(t_uint256,t_uint256))"
+  },
+  {
+    "label": "_roundPredictions",
+    "slot": "30",
+    "offset": 0,
+    "type": "t_mapping(t_address,t_mapping(t_uint256,t_uint256))"
+  },
+  {
+    "label": "_roundWins",
+    "slot": "31",
+    "offset": 0,
+    "type": "t_mapping(t_address,t_mapping(t_uint256,t_uint256))"
+  },
+  {
+    "label": "_accumA",
+    "slot": "32",
+    "offset": 0,
+    "type": "t_mapping(t_address,t_uint256)"
+  },
+  {
+    "label": "_accumB",
+    "slot": "33",
+    "offset": 0,
+    "type": "t_mapping(t_address,t_uint256)"
+  },
+  {
+    "label": "_accumK",
+    "slot": "34",
+    "offset": 0,
+    "type": "t_mapping(t_address,t_uint256)"
+  },
+  {
+    "label": "_accumRound",
+    "slot": "35",
+    "offset": 0,
+    "type": "t_mapping(t_address,t_uint256)"
+  },
+  {
+    "label": "_accumEpoch",
+    "slot": "36",
+    "offset": 0,
+    "type": "t_mapping(t_address,t_uint32)"
+  },
+  {
+    "label": "_lastPredictedRound",
+    "slot": "37",
+    "offset": 0,
+    "type": "t_mapping(t_address,t_uint256)"
+  },
+  {
+    "label": "_delegatePoolPendingK",
+    "slot": "38",
+    "offset": 0,
+    "type": "t_mapping(t_address,t_uint256)"
+  },
+  {
+    "label": "_roundWeightSnapshot",
+    "slot": "39",
+    "offset": 0,
+    "type": "t_mapping(t_address,t_mapping(t_uint256,t_uint256))"
+  },
+  {
+    "label": "emissionSplitAuthority",
+    "slot": "40",
+    "offset": 0,
+    "type": "t_address"
+  }
+]

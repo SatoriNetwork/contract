@@ -1,0 +1,128 @@
+[
+  {
+    "label": "voting",
+    "slot": "0",
+    "offset": 0,
+    "type": "t_contract(ISatoriVoting)"
+  },
+  {
+    "label": "rewards",
+    "slot": "1",
+    "offset": 0,
+    "type": "t_contract(ISatoriRewards)"
+  },
+  {
+    "label": "registry",
+    "slot": "2",
+    "offset": 0,
+    "type": "t_contract(ISatoriRegistry)"
+  },
+  {
+    "label": "games",
+    "slot": "3",
+    "offset": 0,
+    "type": "t_contract(ISatoriGames)"
+  },
+  {
+    "label": "bounties",
+    "slot": "4",
+    "offset": 0,
+    "type": "t_contract(ISatoriBounties)"
+  },
+  {
+    "label": "merkle",
+    "slot": "5",
+    "offset": 0,
+    "type": "t_address"
+  },
+  {
+    "label": "onChainMinted",
+    "slot": "6",
+    "offset": 0,
+    "type": "t_uint256"
+  },
+  {
+    "label": "merkleMinted",
+    "slot": "7",
+    "offset": 0,
+    "type": "t_uint256"
+  },
+  {
+    "label": "merkleReserveCumulative",
+    "slot": "8",
+    "offset": 0,
+    "type": "t_uint256"
+  },
+  {
+    "label": "_merkleReserveRate",
+    "slot": "9",
+    "offset": 0,
+    "type": "t_uint256"
+  },
+  {
+    "label": "_merkleReserveLastRound",
+    "slot": "10",
+    "offset": 0,
+    "type": "t_uint256"
+  },
+  {
+    "label": "defaultStreamInitialized",
+    "slot": "11",
+    "offset": 0,
+    "type": "t_bool"
+  },
+  {
+    "label": "_guard",
+    "slot": "12",
+    "offset": 0,
+    "type": "t_uint256"
+  },
+  {
+    "label": "_initialized",
+    "slot": "13",
+    "offset": 0,
+    "type": "t_bool"
+  },
+  {
+    "label": "satoriToken",
+    "slot": "13",
+    "offset": 1,
+    "type": "t_address"
+  },
+  {
+    "label": "allowedDelegator",
+    "slot": "14",
+    "offset": 0,
+    "type": "t_mapping(t_address,t_address)"
+  },
+  {
+    "label": "voteLockGovernor",
+    "slot": "15",
+    "offset": 0,
+    "type": "t_address"
+  },
+  {
+    "label": "relayNonces",
+    "slot": "16",
+    "offset": 0,
+    "type": "t_mapping(t_address,t_uint256)"
+  },
+  {
+    "label": "lastPredictionDelegation",
+    "slot": "17",
+    "offset": 0,
+    "type": "t_mapping(t_address,t_struct(LastDelegation)_storage)"
+  },
+  {
+    "label": "emission",
+    "slot": "18",
+    "offset": 0,
+    "type": "t_struct(EmissionSchedule)_storage"
+  },
+  {
+    "label": "emissionAuthority",
+    "slot": "22",
+    "offset": 0,
+    "type": "t_address"
+  }
+]

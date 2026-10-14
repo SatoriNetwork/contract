@@ -1,0 +1,31 @@
+# satori-nostr-bridge on Satori Central  ->  /root/satori-bridge/
+#
+# SEPARATE from deploy/central/docker-compose.yml on purpose, and the upstream
+# satori-nostr-bridge/docker-compose.yml explains why: the dapp stack is public,
+# keyless and read-only, while this holds a SIGNING KEY and publishes outward.
+# Folding it in would mean every dapp release needed the Nostr key present.
+#
+# What it does: reads the indexer's HTTP API as an ordinary client and mirrors
+# Satori data streams onto Nostr relays.
+#
+#   Base -> satori-indexer -> satori-nostr-bridge -> Nostr relays -> neuron
+#
+# It listens for nothing, so it publishes no port and needs no name or cert.
+services:
+  satori-nostr-bridge:
+    image: satori-nostr-bridge:latest
+    container_name: satori-nostr-bridge
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # The cursor. On a fresh volume the bridge republishes all history, which
+      # is why STATE_PATH must live here and not in the container filesystem.
+      - bridge-data:/data
+    networks: [central-lite_default]
+
+volumes:
+  bridge-data:
+
+networks:
+  central-lite_default:
+    external: true

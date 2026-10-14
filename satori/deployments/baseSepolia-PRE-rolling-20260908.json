@@ -1,0 +1,1051 @@
+{
+  "network": "baseSepolia",
+  "chainId": 84532,
+  "governor": "0x9d3109b8A045D63056Aa5C1d2c883F3F9fA18817",
+  "rewardsAdmin": "0x9d3109b8A045D63056Aa5C1d2c883F3F9fA18817",
+  "platformFeeRecipient": "0xcfB35ff791Ab9D7fFB70eD0e934F8298B9b94464",
+  "marketingFeeRecipient": "0x9f505692808622fc1F0fbb53324262162C788762",
+  "deploymentRound": 41395,
+  "deploymentBlock": 46268715,
+  "addresses": {
+    "token": "0x89eFc713C5325d034CfFCd6cB8dB2C858A3398D6",
+    "engine": "0x6cC5664Ca9F115c00f0fCc2EbBd4Eb7f41F6Bb14",
+    "engineImpl": "0x847E6e5218331127A500bfb6eC31d096C899D583",
+    "hub": "0x3afaB618FA68f565373e011fF978BbB4585E3472",
+    "voting": "0x142015e3DC2ADe1e29B6F433519155Da3FE1912D",
+    "rewards": "0xbA0Ad54D29AF67fAAfD4C7e4C6a6e75aa2cEEacB",
+    "registry": "0x428025C87fBC205ace79bE2D8B864C095805d3A5",
+    "games": "0x408184c5a203d5A9ecD72E5d508757347a9a60f4",
+    "bounties": "0x7C31CeB61Be993bc926f80B81bF688cE898C9468",
+    "votingImpl": "0xe72d253a831e5d4E26d8Cc9673979d59e4afbd41",
+    "rewardsImpl": "0xB8DAB509fC3f6AF146CB56E958998b5d818c4677",
+    "registryImpl": "0x894C9Dd74f670Ec4AAA4fA1a03A46414A5eBb08C",
+    "gamesImpl": "0xE73a4825a92cAf1294247A567e5Ca323F98e0863",
+    "bountiesImpl": "0x8ab650A0aAd977d7786BFb2C2E50a32FD858a531",
+    "hubImpl": "0x602813ab956d1A453a078FD3534DEF7BaFA47085",
+    "chainlinkAdapter": "0xABF6C93132E71Ef23A1eFf085980b342158aea7d",
+    "uniswapAdapter": "0x335A20e28552B414E25593D4389a2cb55Beb64cb",
+    "customAdapter": "0x4AE59A0Ad5D814eD9B5b89Ab66e75207712b8990",
+    "lens": "0x28eC2e30a1e3dFEF70F228BFCC0a4143245Af5b1"
+  },
+  "layouts": {
+    "SatoriVoting": [
+      {
+        "label": "deployer",
+        "slot": "0",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "satoriCore",
+        "slot": "1",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "satoriGames",
+        "slot": "2",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "satoriEngine",
+        "slot": "3",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "satoriToken",
+        "slot": "4",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "_initialized",
+        "slot": "4",
+        "offset": 20,
+        "type": "t_bool"
+      },
+      {
+        "label": "gameWeight",
+        "slot": "5",
+        "offset": 0,
+        "type": "t_mapping(t_uint32,t_uint256)"
+      },
+      {
+        "label": "totalBurnedWeight",
+        "slot": "6",
+        "offset": 0,
+        "type": "t_uint256"
+      },
+      {
+        "label": "gameDisabled",
+        "slot": "7",
+        "offset": 0,
+        "type": "t_mapping(t_uint32,t_bool)"
+      },
+      {
+        "label": "gameBurnAtRound",
+        "slot": "8",
+        "offset": 0,
+        "type": "t_mapping(t_uint32,t_mapping(t_uint256,t_uint256))"
+      },
+      {
+        "label": "totalBurnAtRound",
+        "slot": "9",
+        "offset": 0,
+        "type": "t_mapping(t_uint256,t_uint256)"
+      },
+      {
+        "label": "gameVotesAtRound",
+        "slot": "10",
+        "offset": 0,
+        "type": "t_mapping(t_uint32,t_mapping(t_uint256,t_uint256))"
+      },
+      {
+        "label": "roundVoteTotal",
+        "slot": "11",
+        "offset": 0,
+        "type": "t_mapping(t_uint256,t_uint256)"
+      },
+      {
+        "label": "_eligibleGamesAtRound",
+        "slot": "12",
+        "offset": 0,
+        "type": "t_mapping(t_uint256,t_array(t_uint32)dyn_storage)"
+      }
+    ],
+    "SatoriRewards": [
+      {
+        "label": "_status",
+        "slot": "0",
+        "offset": 0,
+        "type": "t_uint256"
+      },
+      {
+        "label": "deployer",
+        "slot": "1",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "satoriCore",
+        "slot": "2",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "satoriVoting",
+        "slot": "3",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "satoriGames",
+        "slot": "4",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "satoriRegistry",
+        "slot": "5",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "satoriBounties",
+        "slot": "6",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "satoriEngine",
+        "slot": "7",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "airdropStart",
+        "slot": "7",
+        "offset": 20,
+        "type": "t_uint64"
+      },
+      {
+        "label": "satoriToken",
+        "slot": "8",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "_initialized",
+        "slot": "8",
+        "offset": 20,
+        "type": "t_bool"
+      },
+      {
+        "label": "admin",
+        "slot": "9",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "predictorFeeStored",
+        "slot": "10",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_uint16)"
+      },
+      {
+        "label": "_roundBudget",
+        "slot": "11",
+        "offset": 0,
+        "type": "t_mapping(t_uint256,t_uint256)"
+      },
+      {
+        "label": "offchainBudget",
+        "slot": "12",
+        "offset": 0,
+        "type": "t_uint256"
+      },
+      {
+        "label": "streamProducedLastRound",
+        "slot": "13",
+        "offset": 0,
+        "type": "t_mapping(t_uint32,t_uint64)"
+      },
+      {
+        "label": "_roundGross",
+        "slot": "14",
+        "offset": 0,
+        "type": "t_mapping(t_uint256,t_uint256)"
+      },
+      {
+        "label": "totalWeightPacked",
+        "slot": "15",
+        "offset": 0,
+        "type": "t_mapping(t_uint32,t_mapping(t_uint256,t_uint256))"
+      },
+      {
+        "label": "unclaimedRewards",
+        "slot": "16",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_uint256)"
+      },
+      {
+        "label": "_unsettledPredictionCount",
+        "slot": "17",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_mapping(t_uint32,t_uint256))"
+      },
+      {
+        "label": "predictionDelegateInfo",
+        "slot": "18",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_struct(PredictionDelegate)_storage)"
+      },
+      {
+        "label": "predictionDelegationInfo",
+        "slot": "19",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_mapping(t_uint32,t_mapping(t_uint256,t_struct(PredictionDelegationInfo)_storage)))"
+      },
+      {
+        "label": "_adapterPending",
+        "slot": "20",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_mapping(t_uint32,t_mapping(t_uint256,t_uint8)))"
+      },
+      {
+        "label": "_delegationPeriods",
+        "slot": "21",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_array(t_struct(DelegationPeriod)_storage)dyn_storage)"
+      },
+      {
+        "label": "_firstActiveDelegationPeriod",
+        "slot": "22",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_uint256)"
+      },
+      {
+        "label": "_delegatePowerForRate",
+        "slot": "23",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_uint256)"
+      },
+      {
+        "label": "_delegatePoolPending",
+        "slot": "24",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_struct(Pending)_storage)"
+      },
+      {
+        "label": "_delegatorRewardRatePerRound",
+        "slot": "25",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_mapping(t_uint256,t_uint256))"
+      },
+      {
+        "label": "claimDelegateInfo",
+        "slot": "26",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_address)"
+      },
+      {
+        "label": "referral",
+        "slot": "27",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_address)"
+      },
+      {
+        "label": "airdropAllocation",
+        "slot": "28",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_uint256)"
+      },
+      {
+        "label": "airdropClaimed",
+        "slot": "29",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_uint256)"
+      },
+      {
+        "label": "airdropLoadedTotal",
+        "slot": "30",
+        "offset": 0,
+        "type": "t_uint256"
+      },
+      {
+        "label": "airdropClaimedTotal",
+        "slot": "31",
+        "offset": 0,
+        "type": "t_uint256"
+      },
+      {
+        "label": "marketingFeeRecipient",
+        "slot": "32",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "pendingMarketingFeeRecipient",
+        "slot": "33",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "_frozenQ",
+        "slot": "34",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_mapping(t_uint256,t_uint256))"
+      },
+      {
+        "label": "_roundPredictions",
+        "slot": "35",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_mapping(t_uint256,t_uint256))"
+      },
+      {
+        "label": "_roundWins",
+        "slot": "36",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_mapping(t_uint256,t_uint256))"
+      },
+      {
+        "label": "_accumA",
+        "slot": "37",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_uint256)"
+      },
+      {
+        "label": "_accumB",
+        "slot": "38",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_uint256)"
+      },
+      {
+        "label": "_accumK",
+        "slot": "39",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_uint256)"
+      },
+      {
+        "label": "_accumRound",
+        "slot": "40",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_uint256)"
+      },
+      {
+        "label": "_accumEpoch",
+        "slot": "41",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_uint32)"
+      },
+      {
+        "label": "_lastPredictedRound",
+        "slot": "42",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_uint256)"
+      },
+      {
+        "label": "_delegatePoolPendingK",
+        "slot": "43",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_uint256)"
+      },
+      {
+        "label": "_roundWeightSnapshot",
+        "slot": "44",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_mapping(t_uint256,t_uint256))"
+      },
+      {
+        "label": "airdropLoadingFinalized",
+        "slot": "45",
+        "offset": 0,
+        "type": "t_bool"
+      }
+    ],
+    "SatoriRegistry": [
+      {
+        "label": "adapter",
+        "slot": "0",
+        "offset": 0,
+        "type": "t_mapping(t_uint16,t_address)"
+      },
+      {
+        "label": "adapterName",
+        "slot": "1",
+        "offset": 0,
+        "type": "t_mapping(t_uint16,t_string_storage)"
+      },
+      {
+        "label": "isCommunityAdapter",
+        "slot": "2",
+        "offset": 0,
+        "type": "t_mapping(t_uint16,t_bool)"
+      },
+      {
+        "label": "nextAdapterId",
+        "slot": "3",
+        "offset": 0,
+        "type": "t_uint16"
+      },
+      {
+        "label": "deployer",
+        "slot": "3",
+        "offset": 2,
+        "type": "t_address"
+      },
+      {
+        "label": "satoriCore",
+        "slot": "4",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "satoriRewards",
+        "slot": "5",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "nextStreamId",
+        "slot": "5",
+        "offset": 20,
+        "type": "t_uint32"
+      },
+      {
+        "label": "streams",
+        "slot": "6",
+        "offset": 0,
+        "type": "t_array(t_struct(StreamMeta)_storage)dyn_storage"
+      },
+      {
+        "label": "historyData",
+        "slot": "7",
+        "offset": 0,
+        "type": "t_mapping(t_uint32,t_array(t_struct(HistoryEntry)_storage)_storage)"
+      },
+      {
+        "label": "ringMeta",
+        "slot": "8",
+        "offset": 0,
+        "type": "t_mapping(t_uint32,t_struct(RingMeta)_storage)"
+      },
+      {
+        "label": "derivedChildren",
+        "slot": "9",
+        "offset": 0,
+        "type": "t_mapping(t_uint32,t_array(t_uint32)dyn_storage)"
+      },
+      {
+        "label": "_familyActiveCount",
+        "slot": "10",
+        "offset": 0,
+        "type": "t_mapping(t_uint32,t_mapping(t_uint256,t_uint256))"
+      },
+      {
+        "label": "satoriEngine",
+        "slot": "11",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "satoriToken",
+        "slot": "12",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "_initialized",
+        "slot": "12",
+        "offset": 20,
+        "type": "t_bool"
+      }
+    ],
+    "SatoriGames": [
+      {
+        "label": "deployer",
+        "slot": "0",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "satoriCore",
+        "slot": "1",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "satoriRegistry",
+        "slot": "2",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "games",
+        "slot": "3",
+        "offset": 0,
+        "type": "t_array(t_struct(GameMeta)_storage)dyn_storage"
+      },
+      {
+        "label": "gameAdapter",
+        "slot": "4",
+        "offset": 0,
+        "type": "t_mapping(t_uint16,t_address)"
+      },
+      {
+        "label": "nextGameTypeId",
+        "slot": "5",
+        "offset": 0,
+        "type": "t_uint16"
+      },
+      {
+        "label": "gameAdapterName",
+        "slot": "6",
+        "offset": 0,
+        "type": "t_mapping(t_uint16,t_string_storage)"
+      },
+      {
+        "label": "isCommunityGameAdapter",
+        "slot": "7",
+        "offset": 0,
+        "type": "t_mapping(t_uint16,t_bool)"
+      },
+      {
+        "label": "isRegisteredGameAdapter",
+        "slot": "8",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_bool)"
+      },
+      {
+        "label": "_gamesByStream",
+        "slot": "9",
+        "offset": 0,
+        "type": "t_mapping(t_uint32,t_array(t_uint32)dyn_storage)"
+      },
+      {
+        "label": "binaryGameByStream",
+        "slot": "10",
+        "offset": 0,
+        "type": "t_mapping(t_uint32,t_uint32)"
+      },
+      {
+        "label": "satoriToken",
+        "slot": "11",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "_initialized",
+        "slot": "11",
+        "offset": 20,
+        "type": "t_bool"
+      }
+    ],
+    "SatoriBounties": [
+      {
+        "label": "_status",
+        "slot": "0",
+        "offset": 0,
+        "type": "t_uint256"
+      },
+      {
+        "label": "deployer",
+        "slot": "1",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "satoriCore",
+        "slot": "2",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "satoriRewards",
+        "slot": "3",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "pool",
+        "slot": "4",
+        "offset": 0,
+        "type": "t_mapping(t_uint32,t_mapping(t_address,t_uint256))"
+      },
+      {
+        "label": "ratePerRound",
+        "slot": "5",
+        "offset": 0,
+        "type": "t_mapping(t_uint32,t_mapping(t_address,t_uint256))"
+      },
+      {
+        "label": "gameBountyTokens",
+        "slot": "6",
+        "offset": 0,
+        "type": "t_mapping(t_uint32,t_array(t_address)dyn_storage)"
+      },
+      {
+        "label": "_gameTokenSeen",
+        "slot": "7",
+        "offset": 0,
+        "type": "t_mapping(t_uint32,t_mapping(t_address,t_bool))"
+      },
+      {
+        "label": "_dripFiredForRound",
+        "slot": "8",
+        "offset": 0,
+        "type": "t_mapping(t_uint32,t_mapping(t_uint32,t_mapping(t_address,t_bool)))"
+      },
+      {
+        "label": "roundBountyPot",
+        "slot": "9",
+        "offset": 0,
+        "type": "t_mapping(t_uint32,t_mapping(t_uint32,t_mapping(t_address,t_uint256)))"
+      },
+      {
+        "label": "roundBountyPotClaimed",
+        "slot": "10",
+        "offset": 0,
+        "type": "t_mapping(t_uint32,t_mapping(t_uint32,t_mapping(t_address,t_uint256)))"
+      },
+      {
+        "label": "_fundingEpochStartRound",
+        "slot": "11",
+        "offset": 0,
+        "type": "t_mapping(t_uint32,t_mapping(t_address,t_uint32))"
+      },
+      {
+        "label": "bountyStake",
+        "slot": "12",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_mapping(t_address,t_uint256))"
+      },
+      {
+        "label": "userStakedTokens",
+        "slot": "13",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_array(t_address)dyn_storage)"
+      },
+      {
+        "label": "_totalBoostStakeByKey",
+        "slot": "14",
+        "offset": 0,
+        "type": "t_mapping(t_uint32,t_mapping(t_uint32,t_mapping(t_uint96,t_mapping(t_address,t_uint256))))"
+      },
+      {
+        "label": "boostStakeForPrediction",
+        "slot": "15",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_mapping(t_uint32,t_mapping(t_uint256,t_mapping(t_address,t_uint256))))"
+      },
+      {
+        "label": "_adapterActiveToken",
+        "slot": "16",
+        "offset": 0,
+        "type": "t_mapping(t_uint32,t_mapping(t_uint256,t_address))"
+      },
+      {
+        "label": "_adapterBountyTotal",
+        "slot": "17",
+        "offset": 0,
+        "type": "t_mapping(t_uint32,t_mapping(t_uint256,t_uint256))"
+      },
+      {
+        "label": "_adapterBountyPaid",
+        "slot": "18",
+        "offset": 0,
+        "type": "t_mapping(t_uint32,t_mapping(t_uint256,t_uint256))"
+      },
+      {
+        "label": "boostedTokensInRound",
+        "slot": "19",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_mapping(t_uint256,t_array(t_address)dyn_storage))"
+      },
+      {
+        "label": "stakeLockedUntil",
+        "slot": "20",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_mapping(t_address,t_uint64))"
+      },
+      {
+        "label": "satoriEngine",
+        "slot": "21",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "satoriToken",
+        "slot": "22",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "_initialized",
+        "slot": "22",
+        "offset": 20,
+        "type": "t_bool"
+      }
+    ],
+    "SatoriHub": [
+      {
+        "label": "voting",
+        "slot": "0",
+        "offset": 0,
+        "type": "t_contract(ISatoriVoting)"
+      },
+      {
+        "label": "rewards",
+        "slot": "1",
+        "offset": 0,
+        "type": "t_contract(ISatoriRewards)"
+      },
+      {
+        "label": "registry",
+        "slot": "2",
+        "offset": 0,
+        "type": "t_contract(ISatoriRegistry)"
+      },
+      {
+        "label": "games",
+        "slot": "3",
+        "offset": 0,
+        "type": "t_contract(ISatoriGames)"
+      },
+      {
+        "label": "bounties",
+        "slot": "4",
+        "offset": 0,
+        "type": "t_contract(ISatoriBounties)"
+      },
+      {
+        "label": "merkle",
+        "slot": "5",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "onChainMinted",
+        "slot": "6",
+        "offset": 0,
+        "type": "t_uint256"
+      },
+      {
+        "label": "merkleMinted",
+        "slot": "7",
+        "offset": 0,
+        "type": "t_uint256"
+      },
+      {
+        "label": "merkleReserveCumulative",
+        "slot": "8",
+        "offset": 0,
+        "type": "t_uint256"
+      },
+      {
+        "label": "_merkleReserveRate",
+        "slot": "9",
+        "offset": 0,
+        "type": "t_uint256"
+      },
+      {
+        "label": "_merkleReserveLastRound",
+        "slot": "10",
+        "offset": 0,
+        "type": "t_uint256"
+      },
+      {
+        "label": "defaultStreamInitialized",
+        "slot": "11",
+        "offset": 0,
+        "type": "t_bool"
+      },
+      {
+        "label": "_guard",
+        "slot": "12",
+        "offset": 0,
+        "type": "t_uint256"
+      },
+      {
+        "label": "_initialized",
+        "slot": "13",
+        "offset": 0,
+        "type": "t_bool"
+      },
+      {
+        "label": "satoriToken",
+        "slot": "13",
+        "offset": 1,
+        "type": "t_address"
+      },
+      {
+        "label": "allowedDelegator",
+        "slot": "14",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_address)"
+      }
+    ],
+    "SatoriEngine": [
+      {
+        "label": "_initialized",
+        "slot": "0",
+        "offset": 0,
+        "type": "t_bool"
+      },
+      {
+        "label": "_reentrancyGuard",
+        "slot": "1",
+        "offset": 0,
+        "type": "t_uint256"
+      },
+      {
+        "label": "token",
+        "slot": "2",
+        "offset": 0,
+        "type": "t_contract(IEngineToken)"
+      },
+      {
+        "label": "hub",
+        "slot": "3",
+        "offset": 0,
+        "type": "t_contract(IEngineGateway)"
+      },
+      {
+        "label": "satoriVoting",
+        "slot": "4",
+        "offset": 0,
+        "type": "t_contract(ISatoriVoting)"
+      },
+      {
+        "label": "satoriRewards",
+        "slot": "5",
+        "offset": 0,
+        "type": "t_contract(ISatoriRewards)"
+      },
+      {
+        "label": "satoriRegistry",
+        "slot": "6",
+        "offset": 0,
+        "type": "t_contract(ISatoriRegistry)"
+      },
+      {
+        "label": "satoriGames",
+        "slot": "7",
+        "offset": 0,
+        "type": "t_contract(ISatoriGames)"
+      },
+      {
+        "label": "satoriBounties",
+        "slot": "8",
+        "offset": 0,
+        "type": "t_contract(ISatoriBounties)"
+      },
+      {
+        "label": "deploymentRound",
+        "slot": "9",
+        "offset": 0,
+        "type": "t_uint256"
+      },
+      {
+        "label": "__retiredRenounceFlag",
+        "slot": "10",
+        "offset": 0,
+        "type": "t_bool"
+      },
+      {
+        "label": "_roundState",
+        "slot": "11",
+        "offset": 0,
+        "type": "t_mapping(t_uint256,t_struct(RoundState)_storage)"
+      },
+      {
+        "label": "userPredictions",
+        "slot": "12",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_mapping(t_uint32,t_uint256))"
+      },
+      {
+        "label": "predictedStreamsCount",
+        "slot": "13",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_mapping(t_uint256,t_uint256))"
+      },
+      {
+        "label": "defaultStreamInitialized",
+        "slot": "14",
+        "offset": 0,
+        "type": "t_bool"
+      },
+      {
+        "label": "defaultStreamLastFlushedRound",
+        "slot": "15",
+        "offset": 0,
+        "type": "t_uint256"
+      },
+      {
+        "label": "gameStreakState",
+        "slot": "16",
+        "offset": 0,
+        "type": "t_mapping(t_uint32,t_struct(GameStreakState)_storage)"
+      },
+      {
+        "label": "_dustSignal",
+        "slot": "17",
+        "offset": 0,
+        "type": "t_mapping(t_uint32,t_mapping(t_uint256,t_int256))"
+      },
+      {
+        "label": "dustFloor",
+        "slot": "18",
+        "offset": 0,
+        "type": "t_uint16"
+      },
+      {
+        "label": "topGradient",
+        "slot": "18",
+        "offset": 2,
+        "type": "t_uint16"
+      },
+      {
+        "label": "bottomGradient",
+        "slot": "18",
+        "offset": 4,
+        "type": "t_uint16"
+      },
+      {
+        "label": "topShift",
+        "slot": "18",
+        "offset": 6,
+        "type": "t_uint16"
+      },
+      {
+        "label": "dustTarget",
+        "slot": "18",
+        "offset": 8,
+        "type": "t_uint16"
+      },
+      {
+        "label": "dustTargetSet",
+        "slot": "18",
+        "offset": 10,
+        "type": "t_bool"
+      },
+      {
+        "label": "offchainReporter",
+        "slot": "18",
+        "offset": 11,
+        "type": "t_address"
+      },
+      {
+        "label": "curveOperator",
+        "slot": "19",
+        "offset": 0,
+        "type": "t_address"
+      }
+    ],
+    "SatoriMerkle": [
+      {
+        "label": "_status",
+        "slot": "0",
+        "offset": 0,
+        "type": "t_uint256"
+      },
+      {
+        "label": "satoriCore",
+        "slot": "1",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "rootPublisher",
+        "slot": "2",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "pendingRootPublisher",
+        "slot": "3",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "merkleRoot",
+        "slot": "4",
+        "offset": 0,
+        "type": "t_bytes32"
+      },
+      {
+        "label": "alreadyMintedTo",
+        "slot": "5",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_uint256)"
+      },
+      {
+        "label": "merkleClaimedTotal",
+        "slot": "6",
+        "offset": 0,
+        "type": "t_uint256"
+      },
+      {
+        "label": "satoriToken",
+        "slot": "7",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "deployer",
+        "slot": "8",
+        "offset": 0,
+        "type": "t_address"
+      },
+      {
+        "label": "_initialized",
+        "slot": "8",
+        "offset": 20,
+        "type": "t_bool"
+      }
+    ]
+  }
+}

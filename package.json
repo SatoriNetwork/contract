@@ -1,0 +1,42 @@
+{
+  "name": "app",
+  "version": "1.0.0",
+  "description": "Satori Protocol: an immutable SATORI token plus a UUPS-upgradeable prediction engine, hub and children, with a dapp, indexer and Nostr bridge. See docs/CODE_INDEX.md for the canonical file list.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "cd satori && npx hardhat test",
+    "fuzz:build": "bash -c 'export PATH=\"$HOME/.foundry/bin:$PATH\"; command -v forge >/dev/null 2>&1 || bash satori/scripts/setup-foundry.sh; forge build --root satori'",
+    "verify": "npm test && npm run fuzz:build && npm run forge",
+    "invariant:setup": "bash satori/scripts/setup-foundry.sh",
+    "invariant": "bash -c 'export PATH=\"$HOME/.foundry/bin:$PATH\"; cd satori && forge test --match-path \"test/foundry/*.invariant.t.sol\"'",
+    "forge": "bash -c 'export PATH=\"$HOME/.foundry/bin:$PATH\"; cd satori && forge test --no-match-path \"test/foundry/*.halmos.t.sol\"'",
+    "invariant:deep": "bash -c 'export PATH=\"$HOME/.foundry/bin:$PATH\"; cd satori && FOUNDRY_PROFILE=deep forge test --match-path \"test/foundry/*.invariant.t.sol\"'",
+    "invariant:marathon": "bash -c 'export PATH=\"$HOME/.foundry/bin:$PATH\"; cd satori && FOUNDRY_PROFILE=marathon forge test --match-path \"test/foundry/*.invariant.t.sol\"'",
+    "halmos": "bash -c 'export PATH=\"$HOME/.foundry/bin:$PATH\"; cd satori && halmos --contract ConservationArithmeticHalmos --solver-timeout-assertion 180000'",
+    "supersim:start": "bash -c 'export PATH=\"$HOME/.foundry/bin:$PATH\"; command -v supersim >/dev/null || { echo \"supersim not installed — brew install ethereum-optimism/tap/supersim, or grab a release binary from github.com/ethereum-optimism/supersim/releases\"; exit 1; }; supersim --interop.autorelay'",
+    "supersim": "node satori/scripts/supersim-harness.js",
+    "layout:check": "cd satori && npx hardhat run scripts/check-storage-layout.js",
+    "layout:snapshot": "cd satori && LAYOUT_SNAPSHOT=1 npx hardhat run scripts/check-storage-layout.js",
+    "preflight": "bash scripts/preflight.sh",
+    "hooks:install": "bash scripts/install-git-hooks.sh"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@nomicfoundation/hardhat-network-helpers": "^1.1.2",
+    "@nomicfoundation/hardhat-toolbox": "^6.1.0",
+    "@openzeppelin/contracts": "^5.4.0",
+    "chai": "^4.5.0",
+    "dotenv": "^17.4.2",
+    "hardhat": "^2.26.5",
+    "hardhat-gas-reporter": "^2.3.0",
+    "solidity-coverage": "^0.8.16"
+  },
+  "dependencies": {
+    "merkletreejs": "^0.6.0"
+  }
+}

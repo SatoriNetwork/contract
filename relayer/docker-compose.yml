@@ -1,0 +1,10 @@
+services:
+  relayer:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file: .env
+    volumes:
+      # Mounted so editing fees.json on the host reprices live.
+      - ./fees.json:/app/fees.json:ro
+    restart: unless-stopped

@@ -1,0 +1,20 @@
+{
+  "network": "baseSepolia",
+  "chainId": 84532,
+  "platformFeeRecipient": "0xcfB35ff791Ab9D7fFB70eD0e934F8298B9b94464",
+  "a": "0xcfB35ff791Ab9D7fFB70eD0e934F8298B9b94464",
+  "c": "0xb0d5c95C5557BF45409C37429e5275987446D3f3",
+  "b": "0x06963bB2c7e17de638AE5262740831f5EC7E1f65",
+  "payees": {
+    "PAYEE_1": "0xB56Ae5Ef9242D67959B3260898e77C702a2E8318",
+    "PAYEE_2": "0x08caC8E71E5b7386b28A15a2034CA226C5e44927",
+    "PAYEE_3": "0x5ee63151238C333340ebE5Ca77A10c53B7Cc4Ae6",
+    "PAYEE_4": "0x57d03e8579E6B09f7d99A90cEbD03f2D258c60E2"
+  },
+  "authorities": {
+    "C": "0x61a9E0Fe02068C4BCCea665D21e93ebE81d62f18",
+    "B": "0x4C2023A722342d4D3b8865dC42d605b2df903Cb6"
+  },
+  "deployer": "0x9d3109b8A045D63056Aa5C1d2c883F3F9fA18817",
+  "note": "Reconstructed by hand from the 2026-08-01 deploy, which predates deploy-splitters.js writing this file. Every field below was read back off Base Sepolia and matched before this file was committed."
+}

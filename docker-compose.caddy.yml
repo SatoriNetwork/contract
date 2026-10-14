@@ -1,0 +1,25 @@
+# Overlay for a machine that ALREADY runs a Caddy which owns 80/443 — the first
+# target for this is a droplet already serving another site that way.
+#
+#   docker compose --env-file .env.deploy -f docker-compose.yml -f docker-compose.caddy.yml up -d
+#
+# It joins the existing Caddy's network so that Caddy can address these two by
+# container name, which is sturdier than proxying to a host port: no reliance on
+# the docker bridge address, and nothing has to be published on a public
+# interface for the proxy to find it.
+#
+# The port publishing from the base file stays, bound to loopback, purely so the
+# services can be curled from the server itself while debugging.
+services:
+  ui:
+    container_name: satori-ui
+    networks: [default, proxy]
+
+  indexer:
+    container_name: satori-indexer
+    networks: [default, proxy]
+
+networks:
+  proxy:
+    external: true
+    name: ${PROXY_NETWORK:?set PROXY_NETWORK, e.g. inklets_default}

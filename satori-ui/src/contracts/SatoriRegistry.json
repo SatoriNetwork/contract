@@ -1,0 +1,1569 @@
+{
+  "contractName": "SatoriRegistry",
+  "abi": [
+    {
+      "inputs": [],
+      "stateMutability": "nonpayable",
+      "type": "constructor"
+    },
+    {
+      "inputs": [],
+      "name": "AdapterIdSpaceExhausted",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "AdapterReadFailed",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "AdapterStreamImmutable",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "AlreadyInitialized",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "ArrayLengthMismatch",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "CadenceGapNotElapsed",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "CadenceRoundsNotElapsed",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "CoreAlreadyInitialized",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "InvalidAdapter",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "InvalidCadence",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "InvalidCoreAddress",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "InvalidProvider",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "InvalidStreamId",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "NameTaken",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "NonMonotonicRound",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "NotPullStream",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "NotSimpleStream",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "NotStreamProvider",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "OnlyDeployer",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "OnlySatoriCore",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "UnknownAdapter",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "UpgradeBadImplementation",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "UpgradeUnauthorized",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "ZeroTokenAddress",
+      "type": "error"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "uint16",
+          "name": "adapterId",
+          "type": "uint16"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "impl",
+          "type": "address"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "registrant",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "bool",
+          "name": "community",
+          "type": "bool"
+        },
+        {
+          "indexed": false,
+          "internalType": "string",
+          "name": "name",
+          "type": "string"
+        }
+      ],
+      "name": "AdapterRegistered",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "uint32",
+          "name": "streamId",
+          "type": "uint32"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "creator",
+          "type": "address"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "provider",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint16",
+          "name": "adapterId",
+          "type": "uint16"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint24",
+          "name": "minCadenceMinutes",
+          "type": "uint24"
+        },
+        {
+          "indexed": false,
+          "internalType": "bytes",
+          "name": "config",
+          "type": "bytes"
+        },
+        {
+          "indexed": false,
+          "internalType": "string",
+          "name": "name",
+          "type": "string"
+        }
+      ],
+      "name": "DataStreamCreated",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "uint32",
+          "name": "streamId",
+          "type": "uint32"
+        },
+        {
+          "indexed": false,
+          "internalType": "string",
+          "name": "newName",
+          "type": "string"
+        }
+      ],
+      "name": "NameUpdated",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "uint16",
+          "name": "adapterId",
+          "type": "uint16"
+        }
+      ],
+      "name": "NamedAdapterSet",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "uint32",
+          "name": "streamId",
+          "type": "uint32"
+        },
+        {
+          "indexed": true,
+          "internalType": "bytes32",
+          "name": "nameKey",
+          "type": "bytes32"
+        }
+      ],
+      "name": "NamedStreamCreated",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "uint32",
+          "name": "streamId",
+          "type": "uint32"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "oldProvider",
+          "type": "address"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "newProvider",
+          "type": "address"
+        }
+      ],
+      "name": "ProviderChanged",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "newCore",
+          "type": "address"
+        }
+      ],
+      "name": "SatoriCoreSet",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "uint32",
+          "name": "streamId",
+          "type": "uint32"
+        },
+        {
+          "indexed": false,
+          "internalType": "int256",
+          "name": "oldValue",
+          "type": "int256"
+        },
+        {
+          "indexed": false,
+          "internalType": "int256",
+          "name": "newValue",
+          "type": "int256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "hour",
+          "type": "uint256"
+        }
+      ],
+      "name": "StreamValueUpdated",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "provider",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "requested",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "written",
+          "type": "uint256"
+        }
+      ],
+      "name": "StreamValuesBatchSet",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "caller",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "requested",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "updated",
+          "type": "uint256"
+        }
+      ],
+      "name": "StreamValuesBatchUpdated",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "implementation",
+          "type": "address"
+        }
+      ],
+      "name": "Upgraded",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [],
+      "name": "UpgradesRenounced",
+      "type": "event"
+    },
+    {
+      "inputs": [],
+      "name": "HISTORY_SIZE",
+      "outputs": [
+        {
+          "internalType": "uint16",
+          "name": "",
+          "type": "uint16"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint16",
+          "name": "",
+          "type": "uint16"
+        }
+      ],
+      "name": "adapter",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint16",
+          "name": "",
+          "type": "uint16"
+        }
+      ],
+      "name": "adapterName",
+      "outputs": [
+        {
+          "internalType": "string",
+          "name": "",
+          "type": "string"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "contractId",
+      "outputs": [
+        {
+          "internalType": "bytes32",
+          "name": "",
+          "type": "bytes32"
+        }
+      ],
+      "stateMutability": "pure",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "creator",
+          "type": "address"
+        },
+        {
+          "internalType": "string",
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "internalType": "uint16",
+          "name": "adapterId",
+          "type": "uint16"
+        },
+        {
+          "internalType": "address",
+          "name": "provider",
+          "type": "address"
+        },
+        {
+          "internalType": "bytes",
+          "name": "config",
+          "type": "bytes"
+        },
+        {
+          "internalType": "uint24",
+          "name": "minCadenceMinutes",
+          "type": "uint24"
+        }
+      ],
+      "name": "createAdapterDataStream",
+      "outputs": [
+        {
+          "internalType": "uint32",
+          "name": "streamId",
+          "type": "uint32"
+        }
+      ],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "creator",
+          "type": "address"
+        },
+        {
+          "internalType": "string",
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "internalType": "address",
+          "name": "provider",
+          "type": "address"
+        },
+        {
+          "internalType": "uint24",
+          "name": "minCadenceMinutes",
+          "type": "uint24"
+        }
+      ],
+      "name": "createSimpleDataStream",
+      "outputs": [
+        {
+          "internalType": "uint32",
+          "name": "streamId",
+          "type": "uint32"
+        }
+      ],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "getAllDataStreams",
+      "outputs": [
+        {
+          "internalType": "uint32[]",
+          "name": "",
+          "type": "uint32[]"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32",
+          "name": "streamId",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint256",
+          "name": "anchorHour",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "targetAfterHour",
+          "type": "uint256"
+        }
+      ],
+      "name": "getAnchorFirstAfter",
+      "outputs": [
+        {
+          "internalType": "int232",
+          "name": "anchor",
+          "type": "int232"
+        },
+        {
+          "internalType": "int232",
+          "name": "post",
+          "type": "int232"
+        },
+        {
+          "internalType": "bool",
+          "name": "found",
+          "type": "bool"
+        },
+        {
+          "internalType": "bool",
+          "name": "anchorEvicted",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "getDataStreamCount",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32",
+          "name": "streamId",
+          "type": "uint32"
+        }
+      ],
+      "name": "getDataStreamInfo",
+      "outputs": [
+        {
+          "internalType": "string",
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "internalType": "address",
+          "name": "provider",
+          "type": "address"
+        },
+        {
+          "internalType": "uint8",
+          "name": "streamType",
+          "type": "uint8"
+        },
+        {
+          "internalType": "int256",
+          "name": "value",
+          "type": "int256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "valueHour",
+          "type": "uint256"
+        },
+        {
+          "internalType": "bool",
+          "name": "exists",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "offset",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "limit",
+          "type": "uint256"
+        }
+      ],
+      "name": "getDataStreams",
+      "outputs": [
+        {
+          "internalType": "uint32[]",
+          "name": "ids",
+          "type": "uint32[]"
+        },
+        {
+          "internalType": "uint256",
+          "name": "nextOffset",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32",
+          "name": "streamId",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint256",
+          "name": "afterHour",
+          "type": "uint256"
+        }
+      ],
+      "name": "getFirstTwoValuesAfter",
+      "outputs": [
+        {
+          "internalType": "int232",
+          "name": "valueB",
+          "type": "int232"
+        },
+        {
+          "internalType": "int232",
+          "name": "valueC",
+          "type": "int232"
+        },
+        {
+          "internalType": "bool",
+          "name": "found",
+          "type": "bool"
+        },
+        {
+          "internalType": "bool",
+          "name": "anchorEvicted",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32",
+          "name": "streamId",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint256",
+          "name": "afterHour",
+          "type": "uint256"
+        }
+      ],
+      "name": "getFirstValueAfter",
+      "outputs": [
+        {
+          "internalType": "int232",
+          "name": "valueB",
+          "type": "int232"
+        },
+        {
+          "internalType": "bool",
+          "name": "found",
+          "type": "bool"
+        },
+        {
+          "internalType": "bool",
+          "name": "anchorEvicted",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32",
+          "name": "streamId",
+          "type": "uint32"
+        }
+      ],
+      "name": "getHistory",
+      "outputs": [
+        {
+          "internalType": "int232[]",
+          "name": "values",
+          "type": "int232[]"
+        },
+        {
+          "internalType": "uint24[]",
+          "name": "rounds",
+          "type": "uint24[]"
+        },
+        {
+          "internalType": "uint16",
+          "name": "count",
+          "type": "uint16"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32",
+          "name": "streamId",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint256",
+          "name": "offset",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "limit",
+          "type": "uint256"
+        }
+      ],
+      "name": "getHistoryPage",
+      "outputs": [
+        {
+          "internalType": "int232[]",
+          "name": "values",
+          "type": "int232[]"
+        },
+        {
+          "internalType": "uint24[]",
+          "name": "entryHours",
+          "type": "uint24[]"
+        },
+        {
+          "internalType": "uint16",
+          "name": "total",
+          "type": "uint16"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32",
+          "name": "streamId",
+          "type": "uint32"
+        }
+      ],
+      "name": "getLatestUpdateInfo",
+      "outputs": [
+        {
+          "internalType": "uint16",
+          "name": "count",
+          "type": "uint16"
+        },
+        {
+          "internalType": "uint64",
+          "name": "latestHour",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint64",
+          "name": "lastUpdateTimestamp",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint24",
+          "name": "minCadenceMinutes",
+          "type": "uint24"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32",
+          "name": "streamId",
+          "type": "uint32"
+        }
+      ],
+      "name": "getRecentHistory",
+      "outputs": [
+        {
+          "internalType": "int256[]",
+          "name": "values",
+          "type": "int256[]"
+        },
+        {
+          "internalType": "uint256[]",
+          "name": "updateHours",
+          "type": "uint256[]"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32",
+          "name": "streamId",
+          "type": "uint32"
+        }
+      ],
+      "name": "getValue",
+      "outputs": [
+        {
+          "internalType": "int256",
+          "name": "",
+          "type": "int256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32",
+          "name": "streamId",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint256",
+          "name": "hour",
+          "type": "uint256"
+        }
+      ],
+      "name": "getValueAtHour",
+      "outputs": [
+        {
+          "internalType": "int256",
+          "name": "",
+          "type": "int256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32",
+          "name": "streamId",
+          "type": "uint32"
+        }
+      ],
+      "name": "getValueState",
+      "outputs": [
+        {
+          "components": [
+            {
+              "internalType": "int232[3]",
+              "name": "values",
+              "type": "int232[3]"
+            },
+            {
+              "internalType": "uint24[3]",
+              "name": "rounds",
+              "type": "uint24[3]"
+            },
+            {
+              "internalType": "uint8",
+              "name": "currentIdx",
+              "type": "uint8"
+            },
+            {
+              "internalType": "uint8",
+              "name": "count",
+              "type": "uint8"
+            },
+            {
+              "internalType": "uint64",
+              "name": "lastUpdateTimestamp",
+              "type": "uint64"
+            }
+          ],
+          "internalType": "struct SatoriTypes.ValueState",
+          "name": "vs",
+          "type": "tuple"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "implementation",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "impl",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "_token",
+          "type": "address"
+        }
+      ],
+      "name": "initialize",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint16",
+          "name": "",
+          "type": "uint16"
+        }
+      ],
+      "name": "isCommunityAdapter",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32",
+          "name": "streamId",
+          "type": "uint32"
+        }
+      ],
+      "name": "isNamedStream",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "namedAdapterId",
+      "outputs": [
+        {
+          "internalType": "uint16",
+          "name": "",
+          "type": "uint16"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "",
+          "type": "bytes32"
+        }
+      ],
+      "name": "namedNameTaken",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "nextAdapterId",
+      "outputs": [
+        {
+          "internalType": "uint16",
+          "name": "",
+          "type": "uint16"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "nextStreamId",
+      "outputs": [
+        {
+          "internalType": "uint32",
+          "name": "",
+          "type": "uint32"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "proxiableUUID",
+      "outputs": [
+        {
+          "internalType": "bytes32",
+          "name": "",
+          "type": "bytes32"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "impl",
+          "type": "address"
+        },
+        {
+          "internalType": "string",
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "internalType": "address",
+          "name": "registrant",
+          "type": "address"
+        },
+        {
+          "internalType": "bool",
+          "name": "community",
+          "type": "bool"
+        }
+      ],
+      "name": "registerAdapter",
+      "outputs": [
+        {
+          "internalType": "uint16",
+          "name": "id",
+          "type": "uint16"
+        }
+      ],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "renounceUpgrade",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "satoriCore",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "satoriEngine",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "satoriRewards",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "satoriToken",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32",
+          "name": "streamId",
+          "type": "uint32"
+        },
+        {
+          "internalType": "string",
+          "name": "newName",
+          "type": "string"
+        }
+      ],
+      "name": "setDataStreamName",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint16",
+          "name": "id",
+          "type": "uint16"
+        }
+      ],
+      "name": "setNamedAdapterId",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32",
+          "name": "streamId",
+          "type": "uint32"
+        },
+        {
+          "internalType": "address",
+          "name": "newProvider",
+          "type": "address"
+        }
+      ],
+      "name": "setProvider",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "_satoriCore",
+          "type": "address"
+        }
+      ],
+      "name": "setSatoriCore",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "_engine",
+          "type": "address"
+        }
+      ],
+      "name": "setSatoriEngine",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32",
+          "name": "streamId",
+          "type": "uint32"
+        },
+        {
+          "internalType": "int232",
+          "name": "newValue",
+          "type": "int232"
+        }
+      ],
+      "name": "setValue",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32",
+          "name": "streamId",
+          "type": "uint32"
+        },
+        {
+          "internalType": "int232",
+          "name": "newValue",
+          "type": "int232"
+        },
+        {
+          "internalType": "uint24",
+          "name": "round",
+          "type": "uint24"
+        }
+      ],
+      "name": "setValueForRound",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32[]",
+          "name": "streamIds",
+          "type": "uint32[]"
+        },
+        {
+          "internalType": "int232[]",
+          "name": "values",
+          "type": "int232[]"
+        }
+      ],
+      "name": "setValues",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "written",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32",
+          "name": "streamId",
+          "type": "uint32"
+        }
+      ],
+      "name": "streamExists",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32",
+          "name": "streamId",
+          "type": "uint32"
+        }
+      ],
+      "name": "streamMinCadenceMinutes",
+      "outputs": [
+        {
+          "internalType": "uint24",
+          "name": "",
+          "type": "uint24"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32",
+          "name": "streamId",
+          "type": "uint32"
+        }
+      ],
+      "name": "streamScoringInfo",
+      "outputs": [
+        {
+          "internalType": "uint24",
+          "name": "",
+          "type": "uint24"
+        },
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "name": "streams",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "provider",
+          "type": "address"
+        },
+        {
+          "internalType": "uint8",
+          "name": "streamType",
+          "type": "uint8"
+        },
+        {
+          "internalType": "uint24",
+          "name": "minCadenceMinutes",
+          "type": "uint24"
+        },
+        {
+          "internalType": "uint16",
+          "name": "adapterId",
+          "type": "uint16"
+        },
+        {
+          "internalType": "bytes",
+          "name": "config",
+          "type": "bytes"
+        },
+        {
+          "internalType": "string",
+          "name": "name",
+          "type": "string"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "timeUnitSeconds",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32",
+          "name": "streamId",
+          "type": "uint32"
+        }
+      ],
+      "name": "updateValue",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32[]",
+          "name": "streamIds",
+          "type": "uint32[]"
+        }
+      ],
+      "name": "updateValues",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "updated",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "newImplementation",
+          "type": "address"
+        }
+      ],
+      "name": "upgradeTo",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "upgradesRenounced",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "r",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32",
+          "name": "streamId",
+          "type": "uint32"
+        }
+      ],
+      "name": "vstate",
+      "outputs": [
+        {
+          "components": [
+            {
+              "internalType": "int232[3]",
+              "name": "values",
+              "type": "int232[3]"
+            },
+            {
+              "internalType": "uint24[3]",
+              "name": "rounds",
+              "type": "uint24[3]"
+            },
+            {
+              "internalType": "uint8",
+              "name": "currentIdx",
+              "type": "uint8"
+            },
+            {
+              "internalType": "uint8",
+              "name": "count",
+              "type": "uint8"
+            },
+            {
+              "internalType": "uint64",
+              "name": "lastUpdateTimestamp",
+              "type": "uint64"
+            }
+          ],
+          "internalType": "struct SatoriTypes.ValueState",
+          "name": "",
+          "type": "tuple"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    }
+  ]
+}

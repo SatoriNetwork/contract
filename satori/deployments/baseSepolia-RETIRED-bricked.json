@@ -1,0 +1,74 @@
+{
+  "network": "baseSepolia",
+  "chainId": 84532,
+  "governor": "0x61a9E0Fe02068C4BCCea665D21e93ebE81d62f18",
+  "rewardsAdmin": "0x61a9E0Fe02068C4BCCea665D21e93ebE81d62f18",
+  "platformFeeRecipient": "0xcfB35ff791Ab9D7fFB70eD0e934F8298B9b94464",
+  "marketingFeeRecipient": "0x9f505692808622fc1F0fbb53324262162C788762",
+  "deploymentRound": 41373,
+  "deploymentBlock": 45772696,
+  "addresses": {
+    "token": "0x1A491e6E3573936C5a2c557aB12B72a916A2e183",
+    "engine": "0xAf3D4387c6136269CaAb53AD392A435351Bb0289",
+    "engineImpl": "0xE3a08Ab8a8E2Bf0ba5aA423D15a61d2dc0E99fF7",
+    "hub": "0xad69a60f3B43c033530F41ddCF1b5f54f9f01d91",
+    "voting": "0x02B2e298C394C384d3ed404Fb215062df8532475",
+    "rewards": "0x7a178Db9411e426Ee1A43EfD33889599C6325BC7",
+    "registry": "0x6Dc07Aaa76b2042618DC59E40F0a365fbcb77Ec3",
+    "games": "0xBd5657Ab47fA8A26eA22286d79710c9f7F39D171",
+    "bounties": "0x106316e1B6580F799EDfC299B37C91B87DDB917E",
+    "votingImpl": "0xC53a9E4059aC3F67bb6bb6F94aFE70D0013A400E",
+    "rewardsImpl": "0x2aCD100dae830fF8632e08B9c71dF83b36ec473E",
+    "registryImpl": "0x536307de5F6eD2b1FAb5901caC5157F884b06B2f",
+    "gamesImpl": "0xc9A4144723605802e4135Dc5eEcE4034Ea5AC2ca",
+    "bountiesImpl": "0x7CE8C2C1e23EB720Ba0A0519551492D34b0B2433",
+    "hubImpl": "0xF9508795d9B5c710f2812d6D32DE56530986BFa3",
+    "chainlinkAdapter": "0x63a0f8Cc19098DC39E94D68D4faC3692DB062234",
+    "uniswapAdapter": "0xeE49D05246111A4B81A3D6b667884176B954be20",
+    "customAdapter": "0xEcFC91FA29A1574D575379Bb18d76c77830745Cb",
+    "lens": "0x22A854a35AC4662c5A44D31C1F37eDabCACBD6Da"
+  },
+  "deployedBy": "0x36E39A7ebbb774268a179C192D79450b6627907F",
+  "note": "Redeployed 2026-08-21 after the off-chain removal changed SatoriRewards's storage layout, which ruled out upgrading the previous stack in place. Deployed from WALLET_02 rather than WALLET_00 because the token address is CREATE2-derived from (governor, PLATFORM_FEE_RECIPIENT, chainId) and the previous three inputs land on a token whose one-shot setController/setHook are already spent. governor/rewardsAdmin below are POST-D4 (the Safe); the deployer held them only during the deploy.",
+  "upgrades": [
+    {
+      "contract": "SatoriEngine",
+      "date": "2026-08-28",
+      "from": "0x0B96C19B76c571Ec24bb841011B23335Fa4Db263",
+      "to": "0x5D365B643141baFE938C26639d00A529Ad025bef",
+      "reason": "offchainReporter key + reportOffchainPredictions(uint64)",
+      "via": "governor Safe 0x61a9E0Fe02068C4BCCea665D21e93ebE81d62f18, block 46059401"
+    },
+    {
+      "contract": "SatoriEngine",
+      "date": "2026-08-29",
+      "from": "0x5D365B643141baFE938C26639d00A529Ad025bef",
+      "to": "0xE3a08Ab8a8E2Bf0ba5aA423D15a61d2dc0E99fF7",
+      "reason": "curveOperator key + onlyCurveTuner on the five curve dials",
+      "via": "governor Safe 0x61a9E0Fe02068C4BCCea665D21e93ebE81d62f18, block 46121417"
+    },
+    {
+      "contract": "SatoriRewards",
+      "date": "2026-08-30",
+      "from": "0xA0A772eC7653ABa4833e7E2a45E893c34d2Ea917",
+      "to": "0x2aCD100dae830fF8632e08B9c71dF83b36ec473E",
+      "reason": "governor can reset a compromised rewards admin",
+      "via": "governor Safe 0x61a9E0Fe02068C4BCCea665D21e93ebE81d62f18, block 46166662",
+      "OUTCOME": "BRICKED THIS PROXY. The candidate's storage layout had drifted two slots from the deployed one (satoriToken moved 35 -> 33), so _upgradeGovernor() now reads address(0) and upgradeTo reverts for everyone, governor included. Normal operation is unaffected. Every guard passed because they compare source against a committed BASELINE FILE, never against the chain \u2014 see scripts/check-upgrade-safety.js, added in response. This stack is retired; redeploy rather than attempting recovery."
+    }
+  ],
+  "roles": {
+    "offchainReporter": {
+      "address": "0xc0c06055f4Ddc55C81aeA0f86e7620f5a4C87594",
+      "setAt": "2026-08-29",
+      "via": "admin Safe, block 46121429"
+    },
+    "curveOperator": {
+      "address": "0xc0c06055f4Ddc55C81aeA0f86e7620f5a4C87594",
+      "setAt": "2026-08-29",
+      "via": "governor Safe, block 46122126",
+      "note": "same key as offchainReporter \u2014 one warm key holds both delegated roles"
+    }
+  },
+  "status": "RETIRED \u2014 SatoriRewards proxy can no longer be upgraded (see upgrades[]). Redeploy."
+}

@@ -1,0 +1,6 @@
+# The cursor, and anything a local run leaves behind.
+*.db
+*.db-wal
+*.db-shm
+__pycache__/
+.pytest_cache/

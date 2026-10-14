@@ -1,0 +1,69 @@
+name: verify
+
+# The full gate. The pre-push hook (scripts/preflight.sh) runs the fast subset so
+# it stays fast enough that nobody skips it; this runs everything, including the
+# ~8 minute Hardhat suite that does not belong in a hook.
+#
+# Both exist because guards that nobody is obliged to run are not guards. Twice
+# now a real one has been green-by-vacuum for days:
+#   docs/issues/closed/foundry-suite-silently-dead-since-burn-vote-migration.md
+#   docs/issues/closed/hardhat-guards-silently-fail-from-repo-root.md
+
+# Triggered by EXPLICIT actions only — opening a PR, or clicking Run workflow.
+# Deliberately not `push: branches: ["**"]`: that fires on every push to every
+# branch, which is noise nobody asked for. To broaden it later, add:
+#   push:
+#     branches: [main]
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - uses: foundry-rs/foundry-toolchain@v1
+
+      # Compiles contracts AND test/foundry. A parse error in any single test
+      # file disables the entire Foundry suite, so this is its own step —
+      # a failure here should read as "the suite is offline", not "a test failed".
+      - name: forge build
+        working-directory: satori
+        run: forge build
+
+      # satori/ is the only hardhat project, so this is the only place these can
+      # run at all. They used to pass while measuring nothing when invoked from
+      # the repo root, against a second config since deleted — the hardhat-guards
+      # issue above. They now resolve contract names from the live config, and
+      # test/ProjectLayout.test.js fails if a second config reappears.
+      - name: Size + storage-layout guards
+        working-directory: satori
+        run: npx hardhat test test/ContractSize.test.js test/StorageLayout.test.js
+
+      - name: Hardhat suite
+        working-directory: satori
+        run: npx hardhat test
+
+      # The WHOLE forge suite, and it is allowed to fail the build.
+      #
+      # This was two steps, and the second carried continue-on-error because
+      # AdapterSanity was a known failure. That is green-by-suppression: the
+      # failure stayed visible in a log nobody reads and blocked nothing. It is
+      # fixed (it was asserting a SATORI credit that only mint-eligible games can
+      # ever earn), so the suppression goes with it. If something here breaks
+      # again, this build must go red.
+      - name: Foundry suite (invariants + fuzz + sanity)
+        working-directory: satori
+        run: forge test --no-match-path "test/foundry/*.halmos.t.sol"

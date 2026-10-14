@@ -1,0 +1,114 @@
+# Satori dapp + indexer. `docker compose up -d` on any machine with Docker.
+#
+#   cp .env.deploy.example .env.deploy && edit it
+#   docker compose --env-file .env.deploy up -d --build
+#
+# Two containers, no database server, no orchestration: the dapp is a static
+# bundle behind nginx, and the indexer keeps its own sqlite file in a volume.
+#
+# TLS IS NOT HANDLED HERE, DELIBERATELY. Terminating it inside this stack would
+# mean owning ports 80 and 443, which is exactly what you cannot do on a machine
+# that already runs something else — and the first target for this happens to be
+# a box already serving another site. So both services publish plain HTTP on the
+# loopback interface and something in front does TLS. On a bare machine that can
+# be Caddy from docker-compose.standalone.yml; on a shared one it is whatever is
+# already there. See docs/DEPLOY.md.
+services:
+  ui:
+    build:
+      context: ./satori-ui
+      args:
+        # Compiled INTO the bundle by Create React App — changing these later
+        # means rebuilding the image, not restarting the container.
+        REACT_APP_CHAIN_ID: ${CHAIN_ID:?set CHAIN_ID in the env file}
+        REACT_APP_INDEXER_URL: ${INDEXER_URL:-}
+        REACT_APP_WALLETCONNECT_PROJECT_ID: ${WALLETCONNECT_PROJECT_ID:-}
+    image: satori-ui:${TAG:-latest}
+    restart: unless-stopped
+    # Loopback only: nothing reaches this except the proxy in front of it.
+    ports:
+      - "${UI_BIND:-127.0.0.1}:${UI_PORT:-3032}:80"
+
+  indexer:
+    build: ./satori-indexer
+    image: satori-indexer:${TAG:-latest}
+    restart: unless-stopped
+    ports:
+      - "${IDX_BIND:-127.0.0.1}:${IDX_PORT:-8787}:8787"
+    environment:
+      RPC_URL: ${RPC_URL:?set RPC_URL in the env file}
+      TOKEN_ADDRESS: ${TOKEN_ADDRESS:?}
+      ENGINE_ADDRESS: ${ENGINE_ADDRESS:?}
+      REWARDS_ADDRESS: ${REWARDS_ADDRESS:?}
+      BOUNTIES_ADDRESS: ${BOUNTIES_ADDRESS:?}
+      # Optional, and the only address here that is. Set it to index the stream
+      # registry, which is what /streams and /streams/:id/values serve and what
+      # the Nostr bridge reads. Left empty those routes answer 503 rather than
+      # an empty list, so a missing setting cannot read as "no streams exist".
+      REGISTRY_ADDRESS: ${REGISTRY_ADDRESS:-}
+      START_BLOCK: ${START_BLOCK:-}
+      # Base's public RPC caps eth_getLogs at 1,000 blocks (tightened from 2000
+      # around 2026-09; a 1900 chunk now fails every tick with -32614). The
+      # indexer's own default is 10000, higher still. See
+      # docs/issues/indexer-chunk-size-exceeds-base-rpc-limit.md.
+      CHUNK_SIZE: ${CHUNK_SIZE:-900}
+      POLL_MS: ${POLL_MS:-6000}
+    volumes:
+      - indexer-data:/data
+
+  # Gasless relayer (docs/design/gasless-relay.md). Pays Base gas for users who
+  # sign a RelayRequest and a SATORI fee. Built here so `docker compose build`
+  # picks it up; shipped as an image like the indexer. Its private key is a
+  # RUNTIME secret — injected from the env file, never baked into the image.
+  gasless-relayer:
+    build: ./relayer
+    image: satori-gasless-relayer:${TAG:-latest}
+    restart: unless-stopped
+    ports:
+      - "${RELAYER_BIND:-127.0.0.1}:${RELAYER_PORT:-8000}:8000"
+    environment:
+      RPC_URL: ${RPC_URL:?set RPC_URL in the env file}
+      CHAIN_ID: ${CHAIN_ID:?}
+      HUB_ADDRESS: ${HUB_ADDRESS:?set HUB_ADDRESS in the env file}
+      TOKEN_ADDRESS: ${TOKEN_ADDRESS:?}
+      RELAYER_PRIVATE_KEY: ${RELAYER_PRIVATE_KEY:?set RELAYER_PRIVATE_KEY in the env file}
+      MIN_RELAYER_ETH: ${MIN_RELAYER_ETH:-0.002}
+      QUOTE_TTL_SECONDS: ${QUOTE_TTL_SECONDS:-300}
+      RATE_LIMIT_PER_MINUTE: ${RELAYER_RATE_LIMIT:-30}
+      CORS_ORIGINS: ${RELAYER_CORS_ORIGINS:-*}
+      # Editable at runtime for repricing — mount a host file over it, no rebuild.
+      FEE_FILE: /fees/fees.json
+    volumes:
+      - ${RELAYER_FEE_FILE:-./relayer/fees.json}:/fees/fees.json:ro
+
+  # Holder-voting proof pipeline. OFF unless the "governance" profile is named,
+  # because it needs a deployed governor and the other two services do not:
+  #
+  #   docker compose --env-file .env.deploy --profile governance up -d --build
+  #
+  # RPC_URL note: this one calls eth_getProof, which the free public endpoint
+  # serves only for the last ~512-1000 blocks — enough, that is the whole point
+  # of reacting quickly, but a paid archive endpoint widens every margin.
+  proof-pipeline:
+    build: ./satori-proof-pipeline
+    image: satori-proof-pipeline:${TAG:-latest}
+    restart: unless-stopped
+    profiles: ["governance"]
+    ports:
+      - "${PROOFS_BIND:-127.0.0.1}:${PROOFS_PORT:-8788}:8788"
+    environment:
+      RPC_URL: ${RPC_URL:?set RPC_URL in the env file}
+      # Soft default rather than :? — compose interpolates even profile-disabled
+      # services, and a missing governor must not break a plain ui+indexer deploy.
+      # The daemon itself fails fast at boot if this is empty.
+      GOVERNOR_ADDRESS: ${GOVERNOR_ADDRESS:-}
+      ACTIVATOR_PRIVATE_KEY: ${ACTIVATOR_PRIVATE_KEY:-}
+      START_BLOCK: ${START_BLOCK:-0}
+      LOG_CHUNK: ${CHUNK_SIZE:-900}
+      POLL_MS: ${PROOFS_POLL_MS:-3000}
+    volumes:
+      - proofs-data:/data
+
+volumes:
+  indexer-data:
+  proofs-data:

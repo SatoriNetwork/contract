@@ -1,0 +1,22 @@
+# Foundry
+out/
+cache/
+lib/forge-std/
+broadcast/
+
+# Hardhat
+artifacts/
+cache/
+
+# Deployment records. The local ones are regenerated from scratch on every run and
+# say nothing -- addresses on an in-memory chain are deterministic and meaningless.
+# A record of what went to a REAL network is the opposite: it is the only durable
+# answer to "what is actually deployed, and what was it pointed at". Keep those.
+deployments/hardhat.json
+deployments/localhost.json
+deployments/splitters-hardhat.json
+deployments/splitters-localhost.json
+
+# understand-anything plugin cache/scratch
+.ua/
+cache_forge/

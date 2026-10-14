@@ -1,0 +1,164 @@
+[
+  {
+    "label": "_initialized",
+    "slot": "0",
+    "offset": 0,
+    "type": "t_bool"
+  },
+  {
+    "label": "_reentrancyGuard",
+    "slot": "1",
+    "offset": 0,
+    "type": "t_uint256"
+  },
+  {
+    "label": "token",
+    "slot": "2",
+    "offset": 0,
+    "type": "t_contract(IEngineToken)"
+  },
+  {
+    "label": "hub",
+    "slot": "3",
+    "offset": 0,
+    "type": "t_contract(IEngineGateway)"
+  },
+  {
+    "label": "satoriVoting",
+    "slot": "4",
+    "offset": 0,
+    "type": "t_contract(ISatoriVoting)"
+  },
+  {
+    "label": "satoriRewards",
+    "slot": "5",
+    "offset": 0,
+    "type": "t_contract(ISatoriRewards)"
+  },
+  {
+    "label": "satoriRegistry",
+    "slot": "6",
+    "offset": 0,
+    "type": "t_contract(ISatoriRegistry)"
+  },
+  {
+    "label": "satoriGames",
+    "slot": "7",
+    "offset": 0,
+    "type": "t_contract(ISatoriGames)"
+  },
+  {
+    "label": "satoriBounties",
+    "slot": "8",
+    "offset": 0,
+    "type": "t_contract(ISatoriBounties)"
+  },
+  {
+    "label": "deploymentRound",
+    "slot": "9",
+    "offset": 0,
+    "type": "t_uint256"
+  },
+  {
+    "label": "__retiredRenounceFlag",
+    "slot": "10",
+    "offset": 0,
+    "type": "t_bool"
+  },
+  {
+    "label": "_roundState",
+    "slot": "11",
+    "offset": 0,
+    "type": "t_mapping(t_uint256,t_struct(RoundState)_storage)"
+  },
+  {
+    "label": "userPredictions",
+    "slot": "12",
+    "offset": 0,
+    "type": "t_mapping(t_address,t_mapping(t_uint32,t_uint256))"
+  },
+  {
+    "label": "predictedStreamsCount",
+    "slot": "13",
+    "offset": 0,
+    "type": "t_mapping(t_address,t_mapping(t_uint256,t_uint256))"
+  },
+  {
+    "label": "defaultStreamInitialized",
+    "slot": "14",
+    "offset": 0,
+    "type": "t_bool"
+  },
+  {
+    "label": "defaultStreamLastFlushedRound",
+    "slot": "15",
+    "offset": 0,
+    "type": "t_uint256"
+  },
+  {
+    "label": "gameStreakState",
+    "slot": "16",
+    "offset": 0,
+    "type": "t_mapping(t_uint32,t_struct(GameStreakState)_storage)"
+  },
+  {
+    "label": "_dustSignal",
+    "slot": "17",
+    "offset": 0,
+    "type": "t_mapping(t_uint32,t_mapping(t_uint256,t_int256))"
+  },
+  {
+    "label": "dustFloor",
+    "slot": "18",
+    "offset": 0,
+    "type": "t_uint16"
+  },
+  {
+    "label": "topGradient",
+    "slot": "18",
+    "offset": 2,
+    "type": "t_uint16"
+  },
+  {
+    "label": "bottomGradient",
+    "slot": "18",
+    "offset": 4,
+    "type": "t_uint16"
+  },
+  {
+    "label": "topShift",
+    "slot": "18",
+    "offset": 6,
+    "type": "t_uint16"
+  },
+  {
+    "label": "dustTarget",
+    "slot": "18",
+    "offset": 8,
+    "type": "t_uint16"
+  },
+  {
+    "label": "dustTargetSet",
+    "slot": "18",
+    "offset": 10,
+    "type": "t_bool"
+  },
+  {
+    "label": "offchainReporter",
+    "slot": "18",
+    "offset": 11,
+    "type": "t_address"
+  },
+  {
+    "label": "curveOperator",
+    "slot": "19",
+    "offset": 0,
+    "type": "t_address"
+  },
+  {
+    "label": "namedCounter",
+    "slot": "20",
+    "offset": 0,
+    "type": "t_mapping(t_uint32,t_int232)"
+  }
+]

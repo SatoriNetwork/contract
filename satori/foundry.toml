@@ -1,0 +1,44 @@
+[profile.default]
+src = "contracts"
+test = "test/foundry"
+out = "out"
+# SEPARATE cache dir. Hardhat also defaults to ./cache and writes a
+# solidity-files-cache.json in ITS OWN incompatible format, so the two
+# toolchains were silently clobbering each other: every `hardhat test` forced
+# the next `forge build` into a full ~19-minute via_ir rebuild (and vice
+# versa). Symptom was `foundry_compilers::cache ERROR: invalid type: sequence,
+# expected a map` on startup, which forge treats as a cache miss.
+cache_path = "cache_forge"
+libs = ["lib", "../node_modules"]
+solc_version = "0.8.20"
+optimizer = true
+optimizer_runs = 1
+via_ir = true
+remappings = [
+    "forge-std/=lib/forge-std/src/",
+    "@openzeppelin/=../node_modules/@openzeppelin/",
+]
+fs_permissions = [{ access = "read", path = "./" }]
+
+[profile.default.invariant]
+# Number of random call sequences to run per invariant.
+runs = 64
+# Calls per sequence.
+depth = 25
+# Shrink failure cases on counterexample.
+fail_on_revert = false
+# Use a wider sender pool so multi-actor invariants get exercised.
+dictionary_weight = 80
+
+[profile.deep.invariant]
+# Heavier profile for CI / nightly. Run via `forge test --profile deep`.
+runs = 512
+depth = 50
+
+[profile.marathon.invariant]
+# Unattended multi-hour soak. FOUNDRY_PROFILE=marathon (npm run invariant:marathon).
+# ~10k sequences x 150 calls per invariant => ~1.5M call-steps each, deep enough
+# to surface multi-round state-accumulation bugs that shorter runs miss. Inherits
+# everything else (src/solc/remappings + fail_on_revert) from default.
+runs = 10000
+depth = 150

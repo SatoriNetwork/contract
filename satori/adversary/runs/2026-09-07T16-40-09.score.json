@@ -1,0 +1,15 @@
+{
+  "isFinding": true,
+  "why": "clairvoyance",
+  "attackerGainWei": "3205034047494078956100",
+  "predictionsScored": 9,
+  "predictionsCorrect": 9,
+  "predictionsVoided": 60,
+  "winRate": 1,
+  "clairvoyant": true,
+  "freeLunch": false,
+  "tripwires": [],
+  "emittedInWindowWei": "13824000000000000000000",
+  "capitalSharePct": 51.23,
+  "extractionVsCapitalPct": 45.25
+}

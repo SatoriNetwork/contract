@@ -1,0 +1,178 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* App-matched defaults: Nunito body font + true-black backdrop so there's no
+     navy/white flash before React paints and overscroll stays on-theme. The
+     header wordmark overrides its own font inline, so it's unaffected. */
+  html {
+    font-family: 'Nunito', ui-sans-serif, system-ui, -apple-system, 'Segoe UI',
+      Roboto, 'Helvetica Neue', Arial, sans-serif;
+  }
+  body {
+    background-color: #121212;
+    font-family: 'Nunito', ui-sans-serif, system-ui, -apple-system, 'Segoe UI',
+      Roboto, 'Helvetica Neue', Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+@layer components {
+  /* Light mode card — matches v1: white, rounded-xl, shadow-lg, very subtle border */
+  .card-themed {
+    @apply bg-white rounded-xl shadow-lg p-6 border border-gray-100;
+    color: #121212;
+  }
+  .card-themed .text-white {
+    color: #121212;
+  }
+  .card-themed .text-gray-400 {
+    color: #9A9A9A;
+  }
+  .card-themed .text-gray-500 {
+    color: #6E6E6E;
+  }
+  .card-themed .bg-gray-700\/50 {
+    background-color: #F9FAFB;
+  }
+  .card-themed .bg-gray-700 {
+    background-color: #F9FAFB;
+  }
+  .card-themed .border-gray-600 {
+    border-color: #E5E7EB;
+  }
+  .card-themed .border-gray-600\/30 {
+    border-color: #E5E7EB;
+  }
+  .card-themed input,
+  .card-themed select {
+    background-color: #F9FAFB;
+    border-color: #E5E7EB;
+    color: #121212;
+  }
+  /* Light mode buttons inside cards */
+  .card-themed .bg-gray-700\/50 {
+    background-color: #F9FAFB;
+  }
+  .card-themed .bg-blue-900\/30 {
+    background-color: #EAF3FC;
+  }
+  .card-themed .text-blue-300 {
+    color: #2F5E99;
+  }
+  .card-themed .bg-green-900\/30 {
+    background-color: #ECFDF5;
+  }
+  .card-themed .text-green-300 {
+    color: #059669;
+  }
+  .card-themed .text-green-400 {
+    color: #059669;
+  }
+  .card-themed .bg-red-900\/30 {
+    background-color: #FEF2F2;
+  }
+  .card-themed .text-red-300 {
+    color: #DC2626;
+  }
+  .card-themed .border-red-700 {
+    border-color: #FECACA;
+  }
+  .card-themed .border-green-700 {
+    border-color: #A7F3D0;
+  }
+
+  /* On true-black surfaces, gray-500 (#6E6E6E) text falls below readable
+     contrast (~3.6:1). Lift de-emphasized text in dark mode to the app's
+     white60 tone (#9A9A9A, ~5:1) everywhere — matches the app's subtitle
+     color. Light mode keeps #6E6E6E (fine on white). Card-scoped override
+     below carries the same value at higher specificity. */
+  .dark .text-gray-500 {
+    color: #9A9A9A;
+  }
+
+  /* Dark mode overrides */
+  .dark .card-themed {
+    @apply bg-gray-800 shadow-none;
+    color: #F3F4F6;
+    /* Crisper edge than gray-700 so cards read on true-black (shadow is off in
+       dark). Set directly — @apply border-gray-600 would self-reference the
+       .dark .card-themed .border-gray-600 override below. */
+    border-color: #454545;
+  }
+  .dark .card-themed .text-white {
+    color: #ffffff;
+  }
+  .dark .card-themed .text-gray-400 {
+    color: #9A9A9A;
+  }
+  .dark .card-themed .text-gray-500 {
+    color: #9A9A9A;
+  }
+  .dark .card-themed .bg-gray-700\/50 {
+    background-color: rgb(46 46 46 / 0.5);
+  }
+  .dark .card-themed .bg-gray-700 {
+    background-color: #2E2E2E;
+  }
+  .dark .card-themed .border-gray-600 {
+    border-color: #454545;
+  }
+  .dark .card-themed .border-gray-600\/30 {
+    border-color: rgba(69, 69, 69, 0.3);
+  }
+  .dark .card-themed input,
+  .dark .card-themed select {
+    background-color: #2E2E2E;
+    border-color: #454545;
+    color: #F1F1F1;
+  }
+  .dark .card-themed .bg-blue-900\/30 {
+    background-color: rgb(36 70 111 / 0.3);
+  }
+  .dark .card-themed .text-blue-300 {
+    color: #85B6EA;
+  }
+  .dark .card-themed .bg-green-900\/30 {
+    background-color: rgb(6 78 59 / 0.3);
+  }
+  .dark .card-themed .text-green-300 {
+    color: #6EE7B7;
+  }
+  .dark .card-themed .text-green-400 {
+    color: #34D399;
+  }
+  .dark .card-themed .bg-red-900\/30 {
+    background-color: rgb(127 29 29 / 0.3);
+  }
+  .dark .card-themed .text-red-300 {
+    color: #FCA5A5;
+  }
+  .dark .card-themed .border-red-700 {
+    border-color: #B91C1C;
+  }
+  .dark .card-themed .border-green-700 {
+    border-color: #047857;
+  }
+
+  /* Action buttons inside card-themed must keep white text on their colored
+     background — both light and dark mode. The card-themed .text-white rule
+     above (which translates white text to dark for typography in light mode)
+     gets a Tailwind-generated `.card-themed .\!text-white` counterpart with
+     higher specificity than the standalone `.\!text-white` utility, so we
+     reach in at the same specificity and explicitly say white wins on
+     colored buttons. */
+  .card-themed button.bg-green-400,
+  .card-themed button.bg-green-500,
+  .card-themed button.bg-green-600,
+  .card-themed button.bg-green-700,
+  .card-themed button.bg-red-600,
+  .card-themed button.bg-red-700,
+  .card-themed button.bg-blue-400,
+  .card-themed button.bg-blue-500,
+  .card-themed button.bg-blue-600,
+  .card-themed button.bg-blue-700 {
+    color: #ffffff !important;
+  }
+}

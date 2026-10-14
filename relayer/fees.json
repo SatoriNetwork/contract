@@ -1,0 +1,6 @@
+{
+  "default": "0.25",
+  "per_action": {
+    "Claim": "0"
+  }
+}

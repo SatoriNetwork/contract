@@ -1,0 +1,137 @@
+# Satori dapp stack on Satori Central (network.satorinet.io host, 157.180.104.175).
+#
+# Serves app.satorinet.io: the dapp at /, the indexer at /api, the Nostr relay at
+# /relay. All three sit behind the EXISTING nginx-proxy container (/root/nginx),
+# which owns 80/443 and already terminates TLS for network.satorinet.io — that is
+# why nothing here publishes a port. Everything joins `central-lite_default` so
+# nginx-proxy can reach it by container name.
+#
+# Images are BUILT LOCALLY and shipped with `docker save | ssh docker load`, never
+# built here: this box also runs central-lite, the scheduler, the relay watcher and
+# the Satori database, and a CRA build is the kind of thing that wakes the OOM
+# killer. See DEPLOY-central.md.
+services:
+  satori-ui:
+    image: satori-ui:latest
+    container_name: satori-ui
+    restart: unless-stopped
+    networks: [central-lite_default]
+
+  satori-indexer:
+    image: satori-indexer:latest
+    container_name: satori-indexer
+    restart: unless-stopped
+    environment:
+      RPC_URL: ${RPC_URL:?set RPC_URL in .env.deploy}
+      TOKEN_ADDRESS: ${TOKEN_ADDRESS:?}
+      ENGINE_ADDRESS: ${ENGINE_ADDRESS:?}
+      REWARDS_ADDRESS: ${REWARDS_ADDRESS:?}
+      BOUNTIES_ADDRESS: ${BOUNTIES_ADDRESS:?}
+      REGISTRY_ADDRESS: ${REGISTRY_ADDRESS:-}
+      START_BLOCK: ${START_BLOCK:-}
+      CHUNK_SIZE: ${CHUNK_SIZE:-900}
+      POLL_MS: ${POLL_MS:-6000}
+    volumes:
+      - indexer-data:/data
+    networks: [central-lite_default]
+
+  # Gasless relayer (docs/design/gasless-relay.md) — pays Base gas for users who
+  # sign a RelayRequest + a SATORI fee. Served at app.satorinet.io/relayer (nginx
+  # strips the prefix; the service keeps its own /gasless/* routes). No published
+  # port; reached by container name over central-lite_default. Its private key is
+  # a runtime secret from .env.deploy, never in the image. fees.json is bind-
+  # mounted from /root/satori-dapp so repricing is a file edit, no rebuild.
+  satori-gasless-relayer:
+    image: satori-gasless-relayer:latest
+    container_name: satori-gasless-relayer
+    restart: unless-stopped
+    environment:
+      RPC_URL: ${RPC_URL:?set RPC_URL in .env.deploy}
+      CHAIN_ID: ${CHAIN_ID:?}
+      HUB_ADDRESS: ${HUB_ADDRESS:?set HUB_ADDRESS in .env.deploy}
+      TOKEN_ADDRESS: ${TOKEN_ADDRESS:?}
+      RELAYER_PRIVATE_KEY: ${RELAYER_PRIVATE_KEY:?set RELAYER_PRIVATE_KEY in .env.deploy}
+      MIN_RELAYER_ETH: ${MIN_RELAYER_ETH:-0.002}
+      QUOTE_TTL_SECONDS: ${QUOTE_TTL_SECONDS:-300}
+      RATE_LIMIT_PER_MINUTE: ${RELAYER_RATE_LIMIT:-30}
+      CORS_ORIGINS: ${RELAYER_CORS_ORIGINS:-*}
+      FEE_FILE: /fees/fees.json
+    volumes:
+      - ./fees.json:/fees/fees.json:ro
+    networks: [central-lite_default]
+
+  # The relay's own nginx resolves its upstream as the literal host `strfry`
+  # (satori-relay/nginx.conf line 2), so the container keeps that network alias
+  # even though it is named satori-relay-strfry here.
+  satori-relay-strfry:
+    image: satori-relay-strfry:latest
+    container_name: satori-relay-strfry
+    restart: unless-stopped
+    volumes:
+      - strfry-db:/app/strfry-db
+    networks:
+      central-lite_default:
+        aliases: [strfry]
+
+  # Writes the NIP-11 document the relay serves. Runs to completion on every `up`
+  # and exits; the relay's nginx waits on it.
+  satori-relay-init:
+    image: alpine:latest
+    container_name: satori-relay-init
+    environment:
+      RELAY_NAME: ${RELAY_NAME:-Satori Public Relay}
+      RELAY_DESCRIPTION: ${RELAY_DESCRIPTION:-A Satori Network relay managed by Satori Lite (public mode)}
+      RELAY_CONTACT: ${RELAY_CONTACT:-}
+      RELAY_PUBKEY: ${RELAY_PUBKEY:?set RELAY_PUBKEY in .env.deploy}
+    volumes:
+      - nip11-data:/out
+    networks: [central-lite_default]
+    entrypoint:
+      - sh
+      - -exc
+      - |
+        RELAY_PUBKEY=$$(echo "$$RELAY_PUBKEY" | tr '[:upper:]' '[:lower:]')
+        echo "$$RELAY_PUBKEY" | grep -qE '^[0-9a-f]{64}$$' || {
+          echo "ERROR: RELAY_PUBKEY must be exactly 64 lowercase hex characters."
+          exit 1
+        }
+        # PUBLIC MODE: `pubkey` (an admin contact) but deliberately NO `self`.
+        # `self` is the reward-eligibility binding — it claims this relay belongs
+        # to a specific neuron. Satori's own relays are infrastructure, not
+        # operators earning rewards, so they omit it; satorian.satorinet.io:7777
+        # serves exactly this shape. The operator-facing satori-relay repo writes
+        # `self` because an operator DOES want that binding. Do not add it here.
+        cat > /out/nip11.json <<EOF
+        {
+          "name": "$${RELAY_NAME}",
+          "description": "$${RELAY_DESCRIPTION}",
+          "pubkey": "$${RELAY_PUBKEY}",
+          "contact": "$${RELAY_CONTACT}",
+          "supported_nips": [1, 2, 4, 9, 11, 22, 28, 40, 70],
+          "software": "https://github.com/hoytech/strfry",
+          "version": "strfry"
+        }
+        EOF
+        cat /out/nip11.json
+
+  satori-relay-nginx:
+    image: satori-relay-nginx:latest
+    container_name: satori-relay-nginx
+    restart: unless-stopped
+    volumes:
+      - nip11-data:/usr/share/nginx/nip11:ro
+    networks: [central-lite_default]
+    depends_on:
+      satori-relay-init:
+        condition: service_completed_successfully
+      satori-relay-strfry:
+        condition: service_started
+
+volumes:
+  indexer-data:
+  strfry-db:
+  nip11-data:
+
+networks:
+  central-lite_default:
+    external: true

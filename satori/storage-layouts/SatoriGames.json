@@ -1,0 +1,80 @@
+[
+  {
+    "label": "deployer",
+    "slot": "0",
+    "offset": 0,
+    "type": "t_address"
+  },
+  {
+    "label": "satoriCore",
+    "slot": "1",
+    "offset": 0,
+    "type": "t_address"
+  },
+  {
+    "label": "satoriRegistry",
+    "slot": "2",
+    "offset": 0,
+    "type": "t_address"
+  },
+  {
+    "label": "games",
+    "slot": "3",
+    "offset": 0,
+    "type": "t_array(t_struct(GameMeta)_storage)dyn_storage"
+  },
+  {
+    "label": "gameAdapter",
+    "slot": "4",
+    "offset": 0,
+    "type": "t_mapping(t_uint16,t_address)"
+  },
+  {
+    "label": "nextGameTypeId",
+    "slot": "5",
+    "offset": 0,
+    "type": "t_uint16"
+  },
+  {
+    "label": "gameAdapterName",
+    "slot": "6",
+    "offset": 0,
+    "type": "t_mapping(t_uint16,t_string_storage)"
+  },
+  {
+    "label": "isCommunityGameAdapter",
+    "slot": "7",
+    "offset": 0,
+    "type": "t_mapping(t_uint16,t_bool)"
+  },
+  {
+    "label": "isRegisteredGameAdapter",
+    "slot": "8",
+    "offset": 0,
+    "type": "t_mapping(t_address,t_bool)"
+  },
+  {
+    "label": "_gamesByStream",
+    "slot": "9",
+    "offset": 0,
+    "type": "t_mapping(t_uint32,t_array(t_uint32)dyn_storage)"
+  },
+  {
+    "label": "binaryGameByStream",
+    "slot": "10",
+    "offset": 0,
+    "type": "t_mapping(t_uint32,t_uint32)"
+  },
+  {
+    "label": "satoriToken",
+    "slot": "11",
+    "offset": 0,
+    "type": "t_address"
+  },
+  {
+    "label": "_initialized",
+    "slot": "11",
+    "offset": 20,
+    "type": "t_bool"
+  }
+]

@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Versioned pre-push hook. Activate the hook path once with: npm run hooks:install
+#
+# OFF BY DEFAULT. A plain `git push` runs nothing and costs nothing. The checks
+# only run when you ask for them:
+#
+#   VERIFY=1 git push        # forge build + guards + 32 invariants (~85s)
+#   npm run preflight        # the same checks, without pushing
+#
+# Opt-in on purpose. An 85-second wait on every push is the kind of tax that gets
+# --no-verify'd within a week, and a guard everyone routes around is worse than
+# no guard because it still looks like cover. CI (.github/workflows/verify.yml)
+# is the always-on net; this is the local fast-feedback loop for when you want it
+# before pushing rather than after.
+set -euo pipefail
+
+if [[ "${VERIFY:-0}" != "1" ]]; then
+  exit 0
+fi
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+exec bash "$ROOT/scripts/preflight.sh"

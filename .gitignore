@@ -1,0 +1,59 @@
+node_modules
+.env
+*.env
+*.env*
+# Deployment config. Named .env.deploy, which the *.env rule above does NOT match
+# (that matches names ENDING in .env). It holds a WalletConnect id and whatever
+# RPC endpoint you use, so it is listed explicitly rather than relying on a
+# pattern that looks like it covers it and does not.
+.env.deploy
+
+# Cloudflare API token, for the DNS records in docs/issues/hosting-and-domains.md.
+# Listed explicitly for exactly the same reason as .env.deploy above: `*.env`
+# matches names ENDING in .env, so `.env.cloudflare` would sail straight past it.
+# This one is a live credential for the whole satorinet.io zone, so the miss
+# would be worse.
+.env.cloudflare
+
+# Base.dev API key, for the notifications API (docs/issues/base-app-notifications.md).
+# Same `*.env` trap as the two above — `.env.basedev` does not END in `.env`.
+#
+# ⚠ This key must NEVER become a REACT_APP_* build arg. Create React App compiles
+# those INTO the public bundle, so doing that would publish it to every visitor.
+# It belongs to the notifier service, which is server-side and has no bundle.
+.env.basedev
+# ── Build / test artifacts (Hardhat + Foundry) — regenerable, never commit ──
+artifacts/
+cache/
+out/
+build-info/
+coverage/
+coverage.json
+coverage-final.json
+lcov.info
+typechain/
+typechain-types/
+broadcast/
+crytic-export/
+.ua/
+
+# Demo media artifacts — heavy and regenerable; keep local, never commit.
+satori-ui/demo/*.flac
+satori-ui/demo/*.wav
+satori-ui/demo/*.mp4
+satori-ui/demo/recording/
+
+# Claude Code local worktrees / scratch + local settings
+.claude/
+
+# Hook / scratch output
+timestamp.txt
+
+# Build output and run logs that were committed by accident and removed
+# 2026-08-21. Listed so they cannot drift back in.
+satori/crytic-export/
+satori/coverage.json
+satori/test_*.log
+satori/test_output.txt
+test-results/
+.playwright-mcp/

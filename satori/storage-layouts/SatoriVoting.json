@@ -1,0 +1,92 @@
+[
+  {
+    "label": "deployer",
+    "slot": "0",
+    "offset": 0,
+    "type": "t_address"
+  },
+  {
+    "label": "satoriCore",
+    "slot": "1",
+    "offset": 0,
+    "type": "t_address"
+  },
+  {
+    "label": "satoriGames",
+    "slot": "2",
+    "offset": 0,
+    "type": "t_address"
+  },
+  {
+    "label": "satoriEngine",
+    "slot": "3",
+    "offset": 0,
+    "type": "t_address"
+  },
+  {
+    "label": "satoriToken",
+    "slot": "4",
+    "offset": 0,
+    "type": "t_address"
+  },
+  {
+    "label": "_initialized",
+    "slot": "4",
+    "offset": 20,
+    "type": "t_bool"
+  },
+  {
+    "label": "gameWeight",
+    "slot": "5",
+    "offset": 0,
+    "type": "t_mapping(t_uint32,t_uint256)"
+  },
+  {
+    "label": "totalBurnedWeight",
+    "slot": "6",
+    "offset": 0,
+    "type": "t_uint256"
+  },
+  {
+    "label": "gameApproved",
+    "slot": "7",
+    "offset": 0,
+    "type": "t_mapping(t_uint32,t_bool)"
+  },
+  {
+    "label": "gameBurnAtRound",
+    "slot": "8",
+    "offset": 0,
+    "type": "t_mapping(t_uint32,t_mapping(t_uint256,t_uint256))"
+  },
+  {
+    "label": "totalBurnAtRound",
+    "slot": "9",
+    "offset": 0,
+    "type": "t_mapping(t_uint256,t_uint256)"
+  },
+  {
+    "label": "gameVotesAtRound",
+    "slot": "10",
+    "offset": 0,
+    "type": "t_mapping(t_uint32,t_mapping(t_uint256,t_uint256))"
+  },
+  {
+    "label": "roundVoteTotal",
+    "slot": "11",
+    "offset": 0,
+    "type": "t_mapping(t_uint256,t_uint256)"
+  },
+  {
+    "label": "_eligibleGamesAtRound",
+    "slot": "12",
+    "offset": 0,
+    "type": "t_mapping(t_uint256,t_array(t_uint32)dyn_storage)"
+  },
+  {
+    "label": "voterGameWeight",
+    "slot": "13",
+    "offset": 0,
+    "type": "t_mapping(t_address,t_mapping(t_uint32,t_uint256))"
+  }
+]

@@ -1,0 +1,176 @@
+{
+  "SatoriEngine": {
+    "PredictionMade": {
+      "signature": "event PredictionMade(address indexed predictor, uint32 indexed gameId, uint256 indexed round, uint8 direction, uint256 streak, uint256 predictionPower)",
+      "topic": "0xbb5e1eb5e83ea7df6ea8182f046da073ff73f62a4ad268abc2f1ef9942a9d226"
+    },
+    "PredictionScored": {
+      "signature": "event PredictionScored(address indexed user, uint32 indexed gameId, uint256 indexed round, bool correct, uint256 streak, uint256 scaledWeight)",
+      "topic": "0x73c5a5410ad445fa3a99b3897068220c202a17a0c87622644af802d1f09203a8"
+    },
+    "PredictionVoided": {
+      "signature": "event PredictionVoided(address indexed user, uint32 indexed gameId, uint256 indexed round, uint8 direction, int232 stagnantValue)",
+      "topic": "0x9aa6687cd684f024c4298bf0d57cb685a2e01328000749ec1386220ed0ed1d57"
+    },
+    "PredictionUnrecoverable": {
+      "signature": "event PredictionUnrecoverable(address indexed user, uint32 indexed gameId, uint256 indexed round, bool anchorEvicted)",
+      "topic": "0x37227144a2c52edc7ffbb3d28912aa8a548a14c8eee4ff94fb53114fbb63ea26"
+    },
+    "PredictionDisplaced": {
+      "signature": "event PredictionDisplaced(address indexed user, uint32 indexed gameId, uint256 indexed round)",
+      "topic": "0x66fe5f74cda48b1b305873ab7b28cb47b103b25b67b1c727d5bd8834a65ed158"
+    },
+    "StreakThresholdSet": {
+      "signature": "event StreakThresholdSet(uint32 indexed gameId, uint256 round, uint16 threshold)",
+      "topic": "0x995da2d1ae15d238a114353a795b1d99941aeb7c8090097504eae2ad59fba7b3"
+    },
+    "CurveConfigSet": {
+      "signature": "event CurveConfigSet(uint16 dustFloor, uint16 topGradient, uint16 bottomGradient, uint16 topShift)",
+      "topic": "0xe9013ff5888919dd45de0d871b7ce61cd5ae4c48e385f10fe4ee82f96d8c29a9"
+    }
+  },
+  "SatoriBounties": {
+    "BountyFunded": {
+      "signature": "event BountyFunded(address indexed funder, uint32 indexed gameId, address indexed token, uint256 received, uint256 proposedRate, uint256 newRate, uint256 newPool)",
+      "topic": "0x60049f30775d4c7925545a87cb0a3806067c3df44f751c694a14cfa4bf8b9e1c"
+    },
+    "BountyDripped": {
+      "signature": "event BountyDripped(uint32 indexed gameId, uint32 indexed round, address indexed token, uint256 amount, uint256 newPool, uint256 newRate)",
+      "topic": "0xc2440bb864a57311535ba9b08f30afe7e8ca586e7b0836357b0cf6f3980b8546"
+    },
+    "StrandedPotReclaimed": {
+      "signature": "event StrandedPotReclaimed(uint32 indexed gameId, uint32 indexed round, address indexed token, uint256 amount, uint256 newPool, uint256 newRate)",
+      "topic": "0xd3c1a211f28bf446e5eec7b5fd287905e930896151904ee39f066af2d886125a"
+    },
+    "BountyTokenCleaned": {
+      "signature": "event BountyTokenCleaned(uint32 indexed gameId, address indexed token, address caller)",
+      "topic": "0xb1637ef5a4d374f1285729028fa1716b220f1980b70cce0fdce84eb9a2433a7d"
+    },
+    "BountyPaid": {
+      "signature": "event BountyPaid(address indexed user, uint32 indexed gameId, address indexed token, uint32 round, uint256 share, uint256 newStake)",
+      "topic": "0x9d425f088f2743fedfe417e98959710fe5dfa266ffc7f461bfcbb8ccb5589bf4"
+    },
+    "BountyTokenStaked": {
+      "signature": "event BountyTokenStaked(address indexed user, address indexed token, uint256 amount, uint256 newStake)",
+      "topic": "0x9603dbaa696b0ca1dc21b1ca283b5f1cc7a1e198ef9d72dbcad2bf1d28f8d8b1"
+    },
+    "BountyTokenUnstaked": {
+      "signature": "event BountyTokenUnstaked(address indexed user, address indexed token, address indexed recipient, uint256 amount, uint256 newStake)",
+      "topic": "0x1277fa8a392e5efb37bb0e3899b9aa93d5da477c18f1cc4d60f34043ef58e46b"
+    }
+  },
+  "SatoriRewards": {
+    "ReferralPaid": {
+      "signature": "event ReferralPaid(address indexed owner, address indexed referral, uint256 amount, uint256 round, uint256 newUnclaimed)",
+      "topic": "0x02ed85443f0661a84c4e0306728875b8e1dab887acb3f834fc8d74fa8cea6385"
+    },
+    "ReferralSet": {
+      "signature": "event ReferralSet(address indexed user, address indexed referral)",
+      "topic": "0xdf63218877cb126f6c003f2b7f77327674cd6a0b53ad51deac392548ec12b0ed"
+    },
+    "RewardSplit": {
+      "signature": "event RewardSplit(address indexed predictor, uint32 indexed gameId, uint256 indexed round, uint256 predictorAmount, uint256 delegatorAmount, uint256 newUnclaimed)",
+      "topic": "0x05085b94fa1d9a2fda8e8a9214e198f15dcce49a54ddca158f836be992c4eb94"
+    },
+    "DelegatorRewardsAccrued": {
+      "signature": "event DelegatorRewardsAccrued(address indexed delegator, uint256 amount, uint256 newUnclaimed)",
+      "topic": "0xe42bca045cd3fa8e790f4ec4e568844b816f700f60bfddc8d011d5bd88e310d6"
+    },
+    "RewardsClaimed": {
+      "signature": "event RewardsClaimed(address indexed owner, address indexed recipient, uint256 totalAmount, uint256 round)",
+      "topic": "0xd92c424393cb3ccdf7d5e36602e3bfa34f24490579ba47978f4bcfad496995f2"
+    },
+    "RoundBudgetFrozen": {
+      "signature": "event RoundBudgetFrozen(uint256 indexed round, uint256 budget)",
+      "topic": "0x521a5145f4c05a3d926f0c002d21f5a5f33c225dc9f341efd3837b7e80228c0a"
+    },
+    "PredictionDelegated": {
+      "signature": "event PredictionDelegated(address indexed delegator, address indexed delegate, uint256 predictionPower, uint24 activationRound, uint256 newDelegatePower)",
+      "topic": "0x69dde73fe6b4a26c09c1a4f12073f8b77881cbc1817814753bdc497ea30539d3"
+    },
+    "PredictionUndelegated": {
+      "signature": "event PredictionUndelegated(address indexed delegator, address indexed delegate, uint256 predictionPower, uint256 newDelegatePower)",
+      "topic": "0x00fc4027ff5a264df0d3bc36b60f46b416af0940fb44ab24b9279e9eb74286ab"
+    },
+    "DelegatePowerSynced": {
+      "signature": "event DelegatePowerSynced(address indexed delegate, address indexed delegator, uint256 value, uint24 activationRound, uint256 newDelegatePower)",
+      "topic": "0x74c00065dc3fb89568a4f00e35aa85d9e19a42f9f2581e005eb3ef73f1a6b61a"
+    },
+    "ClaimDelegated": {
+      "signature": "event ClaimDelegated(address indexed delegator, address indexed delegate)",
+      "topic": "0x318cecbd1021b42118cd1f1f28c9a3a97f1044a42184931a078a90aac1465678"
+    },
+    "ClaimUndelegated": {
+      "signature": "event ClaimUndelegated(address indexed delegator)",
+      "topic": "0x819163f94693dd691e2295d9180610ee441a2394b6a5314edfe6043eb8bfb3d7"
+    }
+  },
+  "SatoriVoting": {
+    "Voted": {
+      "signature": "event Voted(address indexed voter, uint32 indexed gameId, uint256 indexed round, uint256 amountBurned, uint256 weightAdded, uint256 newGameWeight)",
+      "topic": "0x66a909853b33357ebbe1799b8afaa0fe48a7c97c2ae365c00d3f9de2da01b9b4"
+    },
+    "GameApprovedSet": {
+      "signature": "event GameApprovedSet(uint32 indexed gameId, bool approved)",
+      "topic": "0xe9793af35802791235152df8e2e2cfb0f4c7e6ef8de75eb1c005961609f66ce0"
+    },
+    "VotesMoved": {
+      "signature": "event VotesMoved(address indexed voter, uint32 indexed fromGame, uint32 indexed toGame, uint256 round, uint256 amount, uint256 newFromWeight, uint256 newToWeight)",
+      "topic": "0x8b929a4cc23e3fa8308c13be4a73ea931a9645e0836014cdad707f6393f0fc06"
+    }
+  },
+  "SatoriRegistry": {
+    "DataStreamCreated": {
+      "signature": "event DataStreamCreated(uint32 indexed streamId, address indexed creator, address indexed provider, uint16 adapterId, uint24 minCadenceMinutes, bytes config, string name)",
+      "topic": "0xb82d9c40771dcc7c2958c09fd5b1d3d907a889a7da6d97c08f9e420b35859d0e"
+    },
+    "NamedAdapterSet": {
+      "signature": "event NamedAdapterSet(uint16 indexed adapterId)",
+      "topic": "0xdb890e912615cb9d8f09c053828b62a9622e000149c9b5b9cbbeafaa22218ee9"
+    },
+    "NamedStreamCreated": {
+      "signature": "event NamedStreamCreated(uint32 indexed streamId, bytes32 indexed nameKey)",
+      "topic": "0x6e8f7dbbf8dd8a6aaa44f26f81a73532b6649269a2cfeddca31dcd981e61e5bf"
+    },
+    "StreamValueUpdated": {
+      "signature": "event StreamValueUpdated(uint32 indexed streamId, int256 oldValue, int256 newValue, uint256 hour)",
+      "topic": "0x09d410a82e6ddc314b4bf4ed968975972c9b631052894890892db1ec019a5598"
+    },
+    "NameUpdated": {
+      "signature": "event NameUpdated(uint32 indexed streamId, string newName)",
+      "topic": "0xefb19f079c1b4dd5f579cf3bd607d563109850e51baeee584f8dd74e2bc6faba"
+    },
+    "ProviderChanged": {
+      "signature": "event ProviderChanged(uint32 indexed streamId, address indexed oldProvider, address indexed newProvider)",
+      "topic": "0xe94d564c12396dcf4cec0562444b00f8d5860d3318008fe8b4b3e05a9db84481"
+    }
+  },
+  "SatoriGames": {
+    "GameCreated": {
+      "signature": "event GameCreated(uint32 indexed gameId, uint32 indexed dataStreamId, address indexed authority, uint16 gameTypeId, uint24 targetMinutes, string name, bytes gameConfig)",
+      "topic": "0x54bd9998e1f21142b261f52ae976d8f99630ec5e12f1e4f74a7c7e9eccb58cd3"
+    },
+    "GameNameUpdated": {
+      "signature": "event GameNameUpdated(uint32 indexed gameId, string newName)",
+      "topic": "0x71c1dcb6846ea1ddffa2c5d12cfdf39b18e36a518c7154b68024cbf161fb918b"
+    },
+    "GameAuthorityTransferred": {
+      "signature": "event GameAuthorityTransferred(uint32 indexed gameId, address indexed oldAuthority, address indexed newAuthority)",
+      "topic": "0x0684d389cfd70b302eb9a064363d00320b613e30b114d51833e009be28a4de66"
+    }
+  },
+  "SatoriAirdrop": {
+    "AirdropAllocated": {
+      "signature": "event AirdropAllocated(address indexed recipient, uint256 amount)",
+      "topic": "0x0fb642b9c05c7f9e19c01da01128cea994c9a0b51f55badfc4a7694c39b28b4c"
+    },
+    "AirdropClaimed": {
+      "signature": "event AirdropClaimed(address indexed user, uint256 amount, uint256 vestedToDate)",
+      "topic": "0xd0755a9ef5a74f50d34b3503bb5b65ad71a112c001b76dfa6412c9aa4a1f43b0"
+    },
+    "AirdropClaimedEarly": {
+      "signature": "event AirdropClaimedEarly(address indexed user, uint256 paid, uint256 forfeited, uint256 newAllocation)",
+      "topic": "0x487828810f6a20dc34f5aa091a80cea87e1151be8fcc59967ab26ada0373a5f9"
+    }
+  }
+}

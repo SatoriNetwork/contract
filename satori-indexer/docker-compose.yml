@@ -1,0 +1,22 @@
+# One-service deployment: `docker compose up -d` on any VPS.
+# Set the environment in a `.env` file next to this compose file.
+services:
+  indexer:
+    build: .
+    image: satori-indexer
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8787}:8787"
+    environment:
+      RPC_URL: ${RPC_URL:?set RPC_URL in .env}
+      TOKEN_ADDRESS: ${TOKEN_ADDRESS:?}
+      ENGINE_ADDRESS: ${ENGINE_ADDRESS:?}
+      REWARDS_ADDRESS: ${REWARDS_ADDRESS:?}
+      BOUNTIES_ADDRESS: ${BOUNTIES_ADDRESS:?}
+      # Optional tuning — see README:
+      # START_BLOCK, POLL_MS, CHUNK_SIZE, REORG_DEPTH
+    volumes:
+      - indexer-data:/data
+
+volumes:
+  indexer-data:

@@ -1,0 +1,23 @@
+# Deliberately its OWN compose file rather than a service in the root one.
+#
+# The root stack is the dapp plus the indexer: two public, keyless, read-only
+# things that are deployed together because they are one product surface. The
+# bridge is none of those. It holds a signing key, it publishes outward, and its
+# lifecycle is independent of a dapp release. Folding it in would mean every
+# `docker compose up` of the dapp needed the Nostr key present in the environment.
+#
+#   cp .env.example .env && edit it
+#   docker compose up -d --build
+services:
+  bridge:
+    build: .
+    image: satori-nostr-bridge:${TAG:-latest}
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - bridge-data:/data
+    # No ports. It talks OUT to the indexer and the relays and listens for
+    # nothing, so it needs no name, no certificate and no open port.
+
+volumes:
+  bridge-data:

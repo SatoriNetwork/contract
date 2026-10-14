@@ -1,0 +1,4 @@
+.env
+__pycache__/
+tests/e2e-target.json
+tests/ui-e2e-target.json
