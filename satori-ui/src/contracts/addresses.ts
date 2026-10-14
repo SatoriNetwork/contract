@@ -192,25 +192,23 @@ const CHAINS: Record<number, ChainConfig> = {
   // admin are still the deployer EOA.
   [TESTNET_CHAIN_ID]: {
     chainName: 'Base Sepolia',
-    deploymentRound: 20721, // pinned to satori/deployments/baseSepolia.json (2026-09-25 redeploy, block 47300964)
-    // Rehearsal holder-voting governor: 256-block activation window, 30-MINUTE
-    // voting period — short on purpose, this is the chain drills run on. Mainnet
-    // gets its own deployment with a real period. Redeployed 2026-09-25.
-    holderGovernor: '0xa000c56B7516EA6593d3487e638a627F32A7a3cb',
-    token: '0xf15dd44ba17bcdF8055d0cc8ea808467dfC8cAE8',
-    // The 2026-09-25 stack predates SatoriAirdrop (its airdrop lane still lives
-    // in SatoriRewards, unreachable from this dapp). ZERO until the redeploy
-    // that ships the contract; the airdrop panel and admin row stay hidden.
-    airdrop: '0x0000000000000000000000000000000000000000',
-    engine: '0x026cf9437557698990A0da8f6a9FDe112c368342',
-    hub: '0x39CddD42108e9d9F7e9400a41F295D2392f9dDB9',
-    registry: '0x7424D69d2aB79e533DE2918bC2862Ad2fe19D4f7',
-    voting: '0x83eAaC1e75aab28fec478277081050755b369e8A',
-    rewards: '0xD167dbbe7ca390eEF03C00457b885a0d0e6D2B46',
-    games: '0x65e601f38A77c81b312ffC25a460aA4aA802e3ED',
-    bounties: '0xA641c3aCdb8E9f62Dd6cD269c2E8e5f776F0A856',
-    lens: '0x03F86549D33Ce429064682FCab8706f907091FCB',
-    // The 2026-09-08 stack DOES deploy a merkle proxy (0xbA81c904b533C1B0e006c35A46bee74F75239AFA),
+    deploymentRound: 20740, // pinned to satori/deployments/baseSepolia.json (2026-10-14 redeploy from humble, block 48094944)
+    // Rehearsal holder-voting governor: 256-block activation window. The
+    // VOTING_PERIOD is 604800s (7 days), read off chain; the 2026-09-25 governor
+    // was 7 days too, despite an older note here saying 30 minutes. Redeployed 2026-10-14.
+    holderGovernor: '0x931105bFe293d46298F5bC91A8D863a3d816e408',
+    token: '0x4dee947383d5C9c8E421F55Fe3518a29324aE469',
+    // SatoriAirdrop ships with the 2026-10-14 stack; nonzero shows the airdrop panel.
+    airdrop: '0xF15CEAec0e29A0B6551180F8617850bc5356938C',
+    engine: '0xE8fA688ea29850305216121C0bddfFb9096A1093',
+    hub: '0x1eec7E1443C1065ab78180A14326e5Ac8284f143',
+    registry: '0x1ED75AB0a66Ba7d23C3E5c84798e90205E76743a',
+    voting: '0x5A56279215684A8088234799FfD56f806AcFBb6e',
+    rewards: '0xde5d2B4b92c1231EC19cd3877D7C3eb6b44982Ac',
+    games: '0xB06e419D24cCbA967c6193e9e374117171B400C3',
+    bounties: '0x7FEaA67a4d4D8c9462A0d8d643984227C7710dCF',
+    lens: '0x9BF5266F60092F1bFbd5F16d21d0bE9673c0F91F',
+    // The 2026-10-14 stack DOES deploy a merkle proxy (0x78C83AE275e9659Bc8490fa33943e22ec7c5A7e7),
     // but the airdrop lane has never been wired or exercised on a rehearsal
     // stack. Left at the ZERO address deliberately, exactly as before: a dapp
     // that reverts is better than one silently reading a root nobody published.

@@ -17,11 +17,11 @@ import fs from 'fs';
 //                    docker volume).
 //   PORT             HTTP port (default 8787).
 //   POLL_MS          follow-loop cadence (default 6000ms; Base blocks are 2s).
-//   CHUNK_SIZE       blocks per eth_getLogs request (default 1900). Both Base
-//                    networks reject eth_getLogs spanning more than 2000 blocks
-//                    (-32602 "query exceeds max block range 2000"), and Base is
-//                    what this project deploys to, so the default sits just
-//                    under that cap. Raise it on an archive node with no range
+//   CHUNK_SIZE       blocks per eth_getLogs request (default 190). Base's public
+//                    RPC rejects eth_getLogs spanning more than 200 blocks
+//                    (-32614 "eth_getLogs is limited to a 200 range", seen
+//                    2026-10-14), and Base is what this project deploys to, so
+//                    the default sits just under that cap. Raise it on an archive node with no range
 //                    limit; other providers cap differently, so check theirs
 //                    before raising it.
 //   REORG_DEPTH      overlap window re-scanned every tick so reorged-out logs
@@ -136,7 +136,7 @@ export function loadConfig(): Config {
     dbPath: process.env.DB_PATH ?? '/data/indexer.db',
     port: Number(process.env.PORT ?? 8787),
     pollMs: Number(process.env.POLL_MS ?? 6000),
-    chunkSize: Number(process.env.CHUNK_SIZE ?? 1_900),
+    chunkSize: Number(process.env.CHUNK_SIZE ?? 190),
     reorgDepth: Number(process.env.REORG_DEPTH ?? 128),
   };
 }

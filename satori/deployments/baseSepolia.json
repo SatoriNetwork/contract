@@ -5,33 +5,36 @@
   "rewardsAdmin": "0x9d3109b8A045D63056Aa5C1d2c883F3F9fA18817",
   "platformFeeRecipient": "0xcfB35ff791Ab9D7fFB70eD0e934F8298B9b94464",
   "marketingFeeRecipient": "0x9f505692808622fc1F0fbb53324262162C788762",
-  "deploymentRound": 20721,
-  "deploymentBlock": 47300964,
+  "deploymentRound": 20740,
+  "deploymentBlock": 48094944,
   "addresses": {
-    "token": "0xf15dd44ba17bcdF8055d0cc8ea808467dfC8cAE8",
-    "engine": "0x026cf9437557698990A0da8f6a9FDe112c368342",
-    "engineImpl": "0x814C499f777D3E8d59096a9c9C84ec505625632C",
-    "hub": "0x39CddD42108e9d9F7e9400a41F295D2392f9dDB9",
-    "voting": "0x83eAaC1e75aab28fec478277081050755b369e8A",
-    "rewards": "0xD167dbbe7ca390eEF03C00457b885a0d0e6D2B46",
-    "registry": "0x7424D69d2aB79e533DE2918bC2862Ad2fe19D4f7",
-    "games": "0x65e601f38A77c81b312ffC25a460aA4aA802e3ED",
-    "bounties": "0xA641c3aCdb8E9f62Dd6cD269c2E8e5f776F0A856",
-    "votingImpl": "0xAb31a6bcAdd73Ba95abE6Be88Fc9bC8B4c91c8D1",
-    "rewardsImpl": "0xEDBa778b3a6c6F1681a3Cf7C8D27B1df02687d31",
-    "registryImpl": "0x2c7Edf4b1CF6670E0118Cf4F6C840D056d3530FD",
-    "gamesImpl": "0x8e7d6dd5549acdBd6c157EbF6B81B1E555E35f9f",
-    "bountiesImpl": "0x350DD484557163b656f68734F62cd5a75336a356",
-    "hubImpl": "0x9098B5A8B96e1deD4cfEaAA1dE2B76C73aA6fFfe",
-    "chainlinkAdapter": "0xF636A1B7B1cDC32F557F09ce565b7156ea1E9fBF",
-    "uniswapAdapter": "0x67cd9f0E30A57921C62be22207cEbc1585904c4D",
-    "customAdapter": "0x54c2835261B0Eafc49F3C193Aa70E1bFD023df9E",
-    "coinedAdapter": "0x641A7AC58Fb7D4AdBe3226A424f63398322BbBed",
-    "lens": "0x03F86549D33Ce429064682FCab8706f907091FCB",
-    "merkle": "0x9fF35eEa968Ff84962714087922Ff4bA77161dE7",
-    "merkleImpl": "0x5E5F5aF9CFB93FA71321126c257bbE2BB980a0f3",
-    "holderGovernor": "0xa000c56B7516EA6593d3487e638a627F32A7a3cb",
-    "lockVoteGovernor": "0x614Cd190DAeA3b31fAC571DC36CD66AfeaC34fb3"
+    "token": "0x4dee947383d5C9c8E421F55Fe3518a29324aE469",
+    "airdrop": "0xF15CEAec0e29A0B6551180F8617850bc5356938C",
+    "engine": "0xE8fA688ea29850305216121C0bddfFb9096A1093",
+    "engineImpl": "0x9c35423653Faa3A4109830d80f04fc50902d6d96",
+    "hub": "0x1eec7E1443C1065ab78180A14326e5Ac8284f143",
+    "voting": "0x5A56279215684A8088234799FfD56f806AcFBb6e",
+    "rewards": "0xde5d2B4b92c1231EC19cd3877D7C3eb6b44982Ac",
+    "registry": "0x1ED75AB0a66Ba7d23C3E5c84798e90205E76743a",
+    "games": "0xB06e419D24cCbA967c6193e9e374117171B400C3",
+    "bounties": "0x7FEaA67a4d4D8c9462A0d8d643984227C7710dCF",
+    "votingImpl": "0x9dDB945Fa72f5b000ea115C9Bf9CF78C99518DB1",
+    "rewardsImpl": "0xBCe8302275abba675f8877FC0509e2AaAf9a75d2",
+    "registryImpl": "0x0841826Af5bBf61d5E351Cb8EcC6316B725Ce34d",
+    "gamesImpl": "0x587D6A1d2f6D2Dc239F5F3a4F80b71669FCd72bd",
+    "bountiesImpl": "0x236A1876fb39FF492C5EA148f31345db28459eBb",
+    "hubImpl": "0x8e8bE6Db184e4DfF25EdFFB8EAcf7959bfFa1Db1",
+    "coined": "0xE6110E71b748b799AE7Ac7a24E8098AcbBD71B1b",
+    "chainlinkAdapter": "0xc8C451A4c2DcE92696b596B1982a025c48E23609",
+    "uniswapAdapter": "0xda8Ab39C292339cA0d57fDf490cD29169b4d27cA",
+    "customAdapter": "0xE5044addC72E1D541beA8C16bb6883EE4b66F019",
+    "coinedAdapter": "0xd675567b3E023c745FcD843C29AD57D3697a1e28",
+    "namedAdapter": "0x862A4279B4594C2DF02C3af1463C48e206e943f9",
+    "lens": "0x9BF5266F60092F1bFbd5F16d21d0bE9673c0F91F",
+    "merkle": "0x78C83AE275e9659Bc8490fa33943e22ec7c5A7e7",
+    "merkleImpl": "0x76890a567561dD580dBdB2347875992EE1a0c1a7",
+    "holderGovernor": "0x931105bFe293d46298F5bC91A8D863a3d816e408",
+    "lockVoteGovernor": "0xb528f163f0F23c0BEdB0173103268596163de183"
   },
   "layouts": {
     "SatoriVoting": [
@@ -176,12 +179,6 @@
         "type": "t_address"
       },
       {
-        "label": "airdropStart",
-        "slot": "7",
-        "offset": 20,
-        "type": "t_uint64"
-      },
-      {
         "label": "satoriToken",
         "slot": "8",
         "offset": 0,
@@ -302,122 +299,86 @@
         "type": "t_mapping(t_address,t_address)"
       },
       {
-        "label": "airdropAllocation",
-        "slot": "27",
-        "offset": 0,
-        "type": "t_mapping(t_address,t_uint256)"
-      },
-      {
-        "label": "airdropClaimed",
-        "slot": "28",
-        "offset": 0,
-        "type": "t_mapping(t_address,t_uint256)"
-      },
-      {
-        "label": "airdropLoadedTotal",
-        "slot": "29",
-        "offset": 0,
-        "type": "t_uint256"
-      },
-      {
-        "label": "airdropClaimedTotal",
-        "slot": "30",
-        "offset": 0,
-        "type": "t_uint256"
-      },
-      {
         "label": "marketingFeeRecipient",
-        "slot": "31",
+        "slot": "27",
         "offset": 0,
         "type": "t_address"
       },
       {
         "label": "pendingMarketingFeeRecipient",
-        "slot": "32",
+        "slot": "28",
         "offset": 0,
         "type": "t_address"
       },
       {
         "label": "_frozenQ",
-        "slot": "33",
+        "slot": "29",
         "offset": 0,
         "type": "t_mapping(t_address,t_mapping(t_uint256,t_uint256))"
       },
       {
         "label": "_roundPredictions",
-        "slot": "34",
+        "slot": "30",
         "offset": 0,
         "type": "t_mapping(t_address,t_mapping(t_uint256,t_uint256))"
       },
       {
         "label": "_roundWins",
-        "slot": "35",
+        "slot": "31",
         "offset": 0,
         "type": "t_mapping(t_address,t_mapping(t_uint256,t_uint256))"
       },
       {
         "label": "_accumA",
-        "slot": "36",
+        "slot": "32",
         "offset": 0,
         "type": "t_mapping(t_address,t_uint256)"
       },
       {
         "label": "_accumB",
-        "slot": "37",
+        "slot": "33",
         "offset": 0,
         "type": "t_mapping(t_address,t_uint256)"
       },
       {
         "label": "_accumK",
-        "slot": "38",
+        "slot": "34",
         "offset": 0,
         "type": "t_mapping(t_address,t_uint256)"
       },
       {
         "label": "_accumRound",
-        "slot": "39",
+        "slot": "35",
         "offset": 0,
         "type": "t_mapping(t_address,t_uint256)"
       },
       {
         "label": "_accumEpoch",
-        "slot": "40",
+        "slot": "36",
         "offset": 0,
         "type": "t_mapping(t_address,t_uint32)"
       },
       {
         "label": "_lastPredictedRound",
-        "slot": "41",
+        "slot": "37",
         "offset": 0,
         "type": "t_mapping(t_address,t_uint256)"
       },
       {
         "label": "_delegatePoolPendingK",
-        "slot": "42",
+        "slot": "38",
         "offset": 0,
         "type": "t_mapping(t_address,t_uint256)"
       },
       {
         "label": "_roundWeightSnapshot",
-        "slot": "43",
+        "slot": "39",
         "offset": 0,
         "type": "t_mapping(t_address,t_mapping(t_uint256,t_uint256))"
       },
       {
-        "label": "airdropLoadingFinalized",
-        "slot": "44",
-        "offset": 0,
-        "type": "t_bool"
-      },
-      {
         "label": "emissionSplitAuthority",
-        "slot": "44",
-        "offset": 1,
-        "type": "t_address"
-      },
-      {
-        "label": "airdropAuthority",
-        "slot": "45",
+        "slot": "40",
         "offset": 0,
         "type": "t_address"
       }
@@ -506,6 +467,18 @@
         "slot": "10",
         "offset": 20,
         "type": "t_bool"
+      },
+      {
+        "label": "namedAdapterId",
+        "slot": "10",
+        "offset": 21,
+        "type": "t_uint16"
+      },
+      {
+        "label": "namedNameTaken",
+        "slot": "11",
+        "offset": 0,
+        "type": "t_mapping(t_bytes32,t_bool)"
       }
     ],
     "SatoriGames": [
@@ -842,6 +815,24 @@
         "slot": "16",
         "offset": 0,
         "type": "t_mapping(t_address,t_uint256)"
+      },
+      {
+        "label": "lastPredictionDelegation",
+        "slot": "17",
+        "offset": 0,
+        "type": "t_mapping(t_address,t_struct(LastDelegation)_storage)"
+      },
+      {
+        "label": "emission",
+        "slot": "18",
+        "offset": 0,
+        "type": "t_struct(EmissionSchedule)_storage"
+      },
+      {
+        "label": "emissionAuthority",
+        "slot": "22",
+        "offset": 0,
+        "type": "t_address"
       }
     ],
     "SatoriEngine": [
@@ -1000,6 +991,12 @@
         "slot": "19",
         "offset": 0,
         "type": "t_address"
+      },
+      {
+        "label": "namedCounter",
+        "slot": "20",
+        "offset": 0,
+        "type": "t_mapping(t_uint32,t_int232)"
       }
     ],
     "SatoriMerkle": [

@@ -1,3 +1,54 @@
+# D6 — redeploy, 2026-10-14 (supersedes the live addresses below)
+
+The stack was redeployed from this tree (the issuance-indexed emission schedule).
+Everything in this section was read back off Base Sepolia. The D4 text below is kept
+as history; its addresses are no longer live.
+
+- Book: `satori/deployments/baseSepolia.json`. The D5 book is kept as `baseSepolia-PRE-humble-20261014.json`.
+- deploymentBlock **48094944**, deploymentRound **20740**. deploy.js passed all 60 post-conditions and verify-deployment.js reported 79/79 invariants.
+- Coined `0xE6110E71b748b799AE7Ac7a24E8098AcbBD71B1b` was deployed from the coined repo, master `70d934b` (tx `0x9627c14b…0175`). It is the named-stream adapter's immutable Coined.
+- Governance stays on the deployer `0x9d31…8817`, following the D5 precedent: governor, rewards admin, airdrop loader, root publisher and lockVote proposer. handoff.js was NOT run.
+- Fee recipients: platform = splitter A `0xcfB3…4464`; marketing = `0x9f50…8762`.
+- After the deploy, as deployer:
+  - capabilities set to 163 (createStream, authorGame, delegatePrediction, vote). Tx `0x6834d241aa2b9ffb199201b72bbee02915606a56eef01cd2cdf13e518ca1ad3a`.
+  - offchainBudget set to 359814308518774397927, which is (emissionRateNow − devRateNow)/2, a 50/50 split that applies from the next round. Tx `0x4178c7ac4b6f5631b6d81ef406a5d33c87628eaddb6dd9990496802e28640a16`.
+  - 50 SATORI each sent to `0x03AbFED741a344C578304040D6CACAc86960e97d` (tx `0xc73346d7abbebe179e7af21f65d2a029e5cc9fc77bd68a0b9b885e882766b190`) and `0xc0c06055f4Ddc55C81aeA0f86e7620f5a4C87594` (tx `0xcc68b6f3233803c5d581c42ad09e43f943e00ffdd9adac4e8c9dc57683fe4bd8`).
+  - engine.offchainReporter and curveOperator are left at 0x0, as on D5.
+- Base's public RPC now caps eth_getLogs at 200 blocks, so the indexer runs with CHUNK_SIZE=190.
+- The Central indexer compose now passes `GAMES_ADDRESS` and `VOTING_ADDRESS`. Without them, /games and the vote tables answer 503.
+
+| | |
+|---|---|
+| token | `0x4dee947383d5C9c8E421F55Fe3518a29324aE469` |
+| airdrop | `0xF15CEAec0e29A0B6551180F8617850bc5356938C` |
+| engine | `0xE8fA688ea29850305216121C0bddfFb9096A1093` |
+| engineImpl | `0x9c35423653Faa3A4109830d80f04fc50902d6d96` |
+| hub | `0x1eec7E1443C1065ab78180A14326e5Ac8284f143` |
+| voting | `0x5A56279215684A8088234799FfD56f806AcFBb6e` |
+| rewards | `0xde5d2B4b92c1231EC19cd3877D7C3eb6b44982Ac` |
+| registry | `0x1ED75AB0a66Ba7d23C3E5c84798e90205E76743a` |
+| games | `0xB06e419D24cCbA967c6193e9e374117171B400C3` |
+| bounties | `0x7FEaA67a4d4D8c9462A0d8d643984227C7710dCF` |
+| votingImpl | `0x9dDB945Fa72f5b000ea115C9Bf9CF78C99518DB1` |
+| rewardsImpl | `0xBCe8302275abba675f8877FC0509e2AaAf9a75d2` |
+| registryImpl | `0x0841826Af5bBf61d5E351Cb8EcC6316B725Ce34d` |
+| gamesImpl | `0x587D6A1d2f6D2Dc239F5F3a4F80b71669FCd72bd` |
+| bountiesImpl | `0x236A1876fb39FF492C5EA148f31345db28459eBb` |
+| hubImpl | `0x8e8bE6Db184e4DfF25EdFFB8EAcf7959bfFa1Db1` |
+| coined | `0xE6110E71b748b799AE7Ac7a24E8098AcbBD71B1b` |
+| chainlinkAdapter | `0xc8C451A4c2DcE92696b596B1982a025c48E23609` |
+| uniswapAdapter | `0xda8Ab39C292339cA0d57fDf490cD29169b4d27cA` |
+| customAdapter | `0xE5044addC72E1D541beA8C16bb6883EE4b66F019` |
+| coinedAdapter | `0xd675567b3E023c745FcD843C29AD57D3697a1e28` |
+| namedAdapter | `0x862A4279B4594C2DF02C3af1463C48e206e943f9` |
+| lens | `0x9BF5266F60092F1bFbd5F16d21d0bE9673c0F91F` |
+| merkle | `0x78C83AE275e9659Bc8490fa33943e22ec7c5A7e7` |
+| merkleImpl | `0x76890a567561dD580dBdB2347875992EE1a0c1a7` |
+| holderGovernor | `0x931105bFe293d46298F5bC91A8D863a3d816e408` |
+| lockVoteGovernor | `0xb528f163f0F23c0BEdB0173103268596163de183` |
+
+---
+
 # HANDOFF — D4, the rolling-scoring stack on Base Sepolia
 
 Written 2026-09-09, covering the D4 deploy of 2026-09-08 and replacing the

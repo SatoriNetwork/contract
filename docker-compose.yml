@@ -51,7 +51,7 @@ services:
       # around 2026-09; a 1900 chunk now fails every tick with -32614). The
       # indexer's own default is 10000, higher still. See
       # docs/issues/indexer-chunk-size-exceeds-base-rpc-limit.md.
-      CHUNK_SIZE: ${CHUNK_SIZE:-900}
+      CHUNK_SIZE: ${CHUNK_SIZE:-190}
       POLL_MS: ${POLL_MS:-6000}
     volumes:
       - indexer-data:/data
@@ -104,7 +104,7 @@ services:
       GOVERNOR_ADDRESS: ${GOVERNOR_ADDRESS:-}
       ACTIVATOR_PRIVATE_KEY: ${ACTIVATOR_PRIVATE_KEY:-}
       START_BLOCK: ${START_BLOCK:-0}
-      LOG_CHUNK: ${CHUNK_SIZE:-900}
+      LOG_CHUNK: ${CHUNK_SIZE:-190}
       POLL_MS: ${PROOFS_POLL_MS:-3000}
     volumes:
       - proofs-data:/data
