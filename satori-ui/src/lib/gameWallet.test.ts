@@ -70,6 +70,28 @@ describe('gameWallet keystore', () => {
     expect(imported.address).toBe(source.address);
   });
 
+  // Vectors from Evrmore's own library: str(CEvrmoreSecret.from_secret_bytes(KEY)).
+  const EVR_KEY = '0x0c28fca386c7a227600b2fe50b7cae11ec86d3bf1fbe471be89827e19d72aa1d';
+
+  it.each([
+    ['compressed', 'KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98617'],
+    ['uncompressed', '5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ'],
+  ])('imports an Evrmore/Ravencoin WIF key (%s) as the same secret', async (_, wif) => {
+    const imported = await importGameWallet(`  ${wif}\n`, PASS);
+    expect(imported.privateKey).toBe(EVR_KEY);
+    expect((await unlockGameWallet(PASS)).privateKey).toBe(EVR_KEY);
+  });
+
+  it('rejects a WIF with a bad checksum or a testnet version byte', async () => {
+    await expect(
+      importGameWallet('KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98618', PASS)
+    ).rejects.toThrow(/not a valid/i);
+    await expect(
+      importGameWallet('cMzLdeGd5vEqxB8B6VFQoRopQ3sLAAvEzDAoQgvX54xwofSWj1fx', PASS)
+    ).rejects.toThrow(/not a valid/i);
+    expect(hasGameWallet()).toBe(false);
+  });
+
   it('rejects garbage secrets with a plain message', async () => {
     await expect(importGameWallet('0xnotakey', PASS)).rejects.toThrow(/not a valid/i);
     await expect(importGameWallet('some random words but not twelve', PASS)).rejects.toThrow(/not a valid/i);

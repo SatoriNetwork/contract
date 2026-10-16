@@ -267,7 +267,7 @@ export function GameWalletPanel() {
               type="password"
               value={secret}
               onChange={(e) => setSecret(e.target.value)}
-              placeholder="Private key (0x…) or recovery phrase"
+              placeholder="Private key or recovery phrase"
               className="w-full bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded px-3 py-2 text-sm font-mono"
               data-testid="gw-import-secret"
             />

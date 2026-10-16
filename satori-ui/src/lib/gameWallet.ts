@@ -110,8 +110,25 @@ export async function createGameWallet(
   return wallet;
 }
 
-/// Import an existing secret — a 0x private key or a mnemonic phrase — and
-/// store it encrypted. Same no-overwrite rule as create.
+/// An Evrmore/Ravencoin mainnet WIF key as 0x hex, or null if `s` is not one.
+/// The neuron's Base account is these same 32 bytes (satorilib
+/// EthereumWallet.generateAccount), so the import lands on that address.
+function wifToHex(s: string): string | null {
+  let bytes: Uint8Array;
+  try {
+    bytes = ethers.getBytes(ethers.toBeHex(ethers.decodeBase58(s)));
+  } catch {
+    return null;
+  }
+  const compressed = bytes.length === 38 && bytes[33] === 0x01;
+  if (bytes[0] !== 0x80 || !(bytes.length === 37 || compressed)) return null;
+  const checksum = ethers.dataSlice(ethers.sha256(ethers.sha256(bytes.slice(0, -4))), 0, 4);
+  if (checksum !== ethers.hexlify(bytes.slice(-4))) return null;
+  return ethers.hexlify(bytes.slice(1, 33));
+}
+
+/// Import an existing secret — a 0x private key, an Evrmore/Ravencoin WIF key
+/// or a mnemonic phrase — and store it encrypted. Same no-overwrite rule as create.
 export async function importGameWallet(
   secret: string,
   passphrase: string,
@@ -124,7 +141,7 @@ export async function importGameWallet(
   try {
     wallet = trimmed.includes(' ')
       ? ethers.HDNodeWallet.fromPhrase(trimmed)
-      : new ethers.Wallet(trimmed);
+      : new ethers.Wallet(wifToHex(trimmed) ?? trimmed);
   } catch {
     throw new Error('That is not a valid private key or recovery phrase.');
   }
