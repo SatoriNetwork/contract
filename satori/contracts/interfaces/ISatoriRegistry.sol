@@ -88,7 +88,7 @@ interface ISatoriRegistry {
     function vstate(uint32 streamId) external view returns (SatoriTypes.ValueState memory);
     function getValueState(uint32 streamId) external view returns (SatoriTypes.ValueState memory);
     function getHistoryPage(uint32 streamId, uint256 offset, uint256 limit) external view returns (int232[] memory values, uint24[] memory entryHours, uint16 total);
-    function getLatestUpdateInfo(uint32 streamId) external view returns (uint16 count, uint64 latestHour, uint64 lastUpdateTimestamp, uint24 minCadenceMinutes);
+    function getLatestUpdateInfo(uint32 streamId) external view returns (uint16 count, uint64 latestHour, uint64 lastUpdateTimestamp, uint24 minCadenceMinutes, bool named);
 
     /// A stream's minimum cadence in minutes and whether it is a named stream.
     /// Both immutable after creation, which is why the engine may read them at

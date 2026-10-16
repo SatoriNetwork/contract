@@ -352,6 +352,7 @@ contract SatoriRegistry is SatoriUUPS {
             streamType: uint8(SatoriTypes.DataStreamType.Simple),
             minCadenceMinutes: minCadenceMinutes,
             adapterId: 0,
+            named: false,
             config: "",
             name: name
         }));
@@ -414,6 +415,7 @@ contract SatoriRegistry is SatoriUUPS {
             streamType: uint8(SatoriTypes.DataStreamType.Adapter),
             minCadenceMinutes: minCadenceMinutes,
             adapterId: adapterId,
+            named: named,
             config: config,
             name: name
         }));
@@ -742,9 +744,7 @@ contract SatoriRegistry is SatoriUUPS {
         RingMeta storage sm = ringMeta[streamId];
         uint16 count = sm.count;
         int232 oldValue = count > 0 ? historyData[streamId][_newestSlot(streamId)].value : int232(0);
-        // adapterId >= 1 here (Simple streams returned above), so a zero
-        // namedAdapterId never matches.
-        bool named = meta.adapterId == namedAdapterId;
+        bool named = meta.named;
 
         if (count > 0 && named) {
             // Due iff the CLOCK HOUR advanced. An hour-H entry may only ever be
@@ -881,8 +881,7 @@ contract SatoriRegistry is SatoriUUPS {
     function streamScoringInfo(uint32 streamId) external view returns (uint24, bool) {
         if (streamId == 0 || streamId > streams.length) revert InvalidStreamId();
         SatoriTypes.StreamMeta storage meta = streams[streamId - 1];
-        uint16 id = namedAdapterId;
-        return (meta.minCadenceMinutes, id != 0 && meta.adapterId == id);
+        return (meta.minCadenceMinutes, meta.named);
     }
 
     // Streams are permanent — no `deleteStream`, no `StreamDeleted` event. A
@@ -940,13 +939,13 @@ contract SatoriRegistry is SatoriUUPS {
     ///      round + last-update timestamp + minCadenceMinutes) without
     ///      populating the 3-entry values/rounds arrays. Saves ~3K gas of
     ///      return-data encoding and ~4 internal SLOADs vs `getValueState`
-    ///      for the common case. `minCadenceMinutes` is folded into the same
-    ///      call so cadence-aware staleness checks don't need a second
-    ///      external read per predict. NOTE (7.1): `lastUpdateTimestamp`
+    ///      for the common case. `minCadenceMinutes` and `named` share the
+    ///      stream record's first slot and are folded into the same call, so
+    ///      neither costs the engine a second external read per predict. NOTE (7.1): `lastUpdateTimestamp`
     ///      means "last CHECKED" — an unchanged adapter pull advances it
     ///      without writing; `latestRound` is the last WRITTEN round.
     function getLatestUpdateInfo(uint32 streamId) external view returns (
-        uint16 count, uint64 latestHour, uint64 lastUpdateTimestamp, uint24 minCadenceMinutes
+        uint16 count, uint64 latestHour, uint64 lastUpdateTimestamp, uint24 minCadenceMinutes, bool named
     ) {
         RingMeta storage sm = ringMeta[streamId];
         count = sm.count;
@@ -955,7 +954,9 @@ contract SatoriRegistry is SatoriUUPS {
             latestHour = uint64(historyData[streamId][_newestSlot(streamId)].round);
         }
         if (streamId > 0 && streamId <= streams.length) {
-            minCadenceMinutes = streams[streamId - 1].minCadenceMinutes;
+            SatoriTypes.StreamMeta storage meta = streams[streamId - 1];
+            minCadenceMinutes = meta.minCadenceMinutes;
+            named = meta.named;
         }
     }
 
@@ -1419,9 +1420,10 @@ contract SatoriRegistry is SatoriUUPS {
         emit NamedAdapterSet(id);
     }
 
+    /// @notice Set once, at creation: a later change of `namedAdapterId` cannot
+    ///         turn an existing named stream into an ordinary one mid-game.
     function isNamedStream(uint32 streamId) external view returns (bool) {
-        uint16 id = namedAdapterId;
-        return id != 0 && streams[streamId - 1].adapterId == id;
+        return streamId != 0 && streamId <= streams.length && streams[streamId - 1].named;
     }
 
     /// Upgrade authority = the token's `upgradeAuthority` (same key as the engine).

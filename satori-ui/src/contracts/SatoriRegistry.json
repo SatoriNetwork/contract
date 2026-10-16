@@ -856,6 +856,11 @@
           "internalType": "uint24",
           "name": "minCadenceMinutes",
           "type": "uint24"
+        },
+        {
+          "internalType": "bool",
+          "name": "named",
+          "type": "bool"
         }
       ],
       "stateMutability": "view",
@@ -1433,6 +1438,11 @@
           "internalType": "uint16",
           "name": "adapterId",
           "type": "uint16"
+        },
+        {
+          "internalType": "bool",
+          "name": "named",
+          "type": "bool"
         },
         {
           "internalType": "bytes",

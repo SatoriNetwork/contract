@@ -93,7 +93,8 @@ library SatoriTypes {
                                     //     a round and above stays bound to the
                                     //     round + the 30-min early allowance.
         uint16  adapterId;          //  2: Adapter registry index; 0 for Simple
-        // 26/32 bytes used in slot 0; 6 bytes slack. This repack (2026-09-06,
+        bool    named;              //  1: Named stream (A_named_streams), set once at creation
+        // 27/32 bytes used in slot 0; 5 bytes slack. This repack (2026-09-06,
         // phase 4) deleted the dead derivedBase field and BREAKS the storage
         // lineage: from here the branch is redeploy-only. Authority field removed; the
         // provider's address absorbs both the data-source role (adapter streams)

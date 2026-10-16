@@ -418,6 +418,22 @@ describe("Named streams (prediction-flow counter, hourly snapshot, daily game)",
       expect(cad).to.equal(60);
       expect(named).to.equal(true);
     });
+
+    it("isNamedStream is false for id 0 and ids not created yet", async function () {
+      expect(await registry.isNamedStream(0)).to.equal(false);
+      expect(await registry.isNamedStream(9999)).to.equal(false);
+    });
+
+    // The engine's predict reads the flag from getLatestUpdateInfo, the call it
+    // already makes, instead of a separate isNamedStream call.
+    it("the stream record and getLatestUpdateInfo carry the named flag", async function () {
+      const sid = await namedStream();
+      expect((await registry.streams(sid - 1n)).named).to.equal(true);
+      expect((await registry.streams(0)).named).to.equal(false);
+      expect((await registry.getLatestUpdateInfo(sid))[4]).to.equal(true);
+      expect((await registry.getLatestUpdateInfo(1))[4]).to.equal(false);
+      expect((await registry.getLatestUpdateInfo(9999))[4]).to.equal(false);
+    });
   });
 
   // ---- names are Coined terms ---------------------------------------------

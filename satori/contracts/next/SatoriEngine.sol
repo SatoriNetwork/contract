@@ -785,10 +785,10 @@ contract SatoriEngine is SatoriUUPS {
         bool[] memory named = new bool[](requests.length);
         for (uint256 i = 0; i < requests.length; i++) {
             uint32 gameId = requests[i].gameId;
-            (uint16 vCount, uint64 streamLastHour, , )
+            (uint16 vCount, uint64 streamLastHour, , , bool streamNamed)
                 = satoriRegistry.getLatestUpdateInfo(streamIds[i]);
             if (vCount == 0) revert EmptyStream();
-            named[i] = impls[i] == address(0) && satoriRegistry.isNamedStream(streamIds[i]);
+            named[i] = impls[i] == address(0) && streamNamed;
 
             // Moment-anchored game clock (phase 6). Once per round for every
             // game — at a daily target that IS "once a day", today's rule —
