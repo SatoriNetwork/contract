@@ -61,6 +61,37 @@ do with this stack.
 
 ---
 
+## Dapp only: `deploy/central/deploy-dapp.sh`
+
+Run it from the checkout whose code should go live:
+
+```bash
+deploy/central/deploy-dapp.sh --check   # every guard plus the build; Central untouched
+deploy/central/deploy-dapp.sh           # build, ship, recreate satori-ui only, verify
+```
+
+It stops before shipping when:
+
+- `satori-ui/` has uncommitted changes, or the branch is not in sync with its remote.
+- This checkout's `.env.deploy` is not the live config: its `CHAIN_ID` or
+  `TOKEN_ADDRESS` differs from `/api/status`.
+- **The dapp's contract ABIs differ from the live dapp's.** Central keeps the live
+  dapp's function, event and error signatures in `/root/satori-dapp/ui-abi.txt`. A
+  dapp with different ABIs only works against contracts deployed to match it.
+  Pass `--new-contracts` only once the chain, and the indexer, run them.
+- The built bundle lacks the live indexer URL or the live contract addresses.
+
+Only `satori-ui` is recreated (`up -d --no-deps`). The indexer, relayer and relay
+keep running, and the server's compose file is not replaced. The previous image
+is tagged `satori-ui:pre-<UTC time>`, the script prints the rollback command, and
+each deploy appends a line to `/root/satori-dapp/ui-deploys.log`.
+
+SSH uses the host key pinned in `deploy/central/central.known_hosts`, not
+`~/.ssh/known_hosts`. If Central's host key ever changes, verify the new key out
+of band before you update that file.
+
+The sections below are the manual path, which the indexer and relayer images still use.
+
 ## Build locally, ship the images
 
 Central runs central-lite, the scheduler, the relay watcher and the Satori
