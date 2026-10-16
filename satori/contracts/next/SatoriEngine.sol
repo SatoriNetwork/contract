@@ -1255,7 +1255,7 @@ contract SatoriEngine is SatoriUUPS {
 
             uint256 rawPower = _predRaw(pred);
             scaledWeight = _deriveWeight(rawPower, _predMult(pred));
-            satoriRewards.scoreCorrectPrediction(user, gameId, uint256(predRound), dir, scaledWeight, wasBoosted);
+            satoriRewards.scoreCorrectPrediction(user, gameId, uint256(predRound), dir, scaledWeight, wasBoosted, named);
         } else {
             slot = _withStreak(slot, 0);
             userPredictions[user][gameId] = slot;

@@ -1512,6 +1512,11 @@
           "internalType": "bool",
           "name": "wasBoosted",
           "type": "bool"
+        },
+        {
+          "internalType": "bool",
+          "name": "named",
+          "type": "bool"
         }
       ],
       "name": "scoreCorrectPrediction",

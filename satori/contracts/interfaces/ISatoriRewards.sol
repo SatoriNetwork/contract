@@ -51,6 +51,8 @@ interface ISatoriRewards {
      *      the delegators' share feeds the per-round delegator-rate
      *      accumulator), and credits the predictor's share through the
      *      referral-skimming credit path. No deferred-walk machinery.
+     *      `named` is the engine's settle-time `streamScoringInfo` read: a named
+     *      game pays pari-mutuel.
      */
     function scoreCorrectPrediction(
         address user,
@@ -58,7 +60,8 @@ interface ISatoriRewards {
         uint256 round,
         uint8 direction,
         uint256 weight,
-        bool wasBoosted
+        bool wasBoosted,
+        bool named
     ) external;
 
     /**

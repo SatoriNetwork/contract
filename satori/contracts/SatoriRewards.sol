@@ -1050,7 +1050,8 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
         uint256 round,
         uint8 direction,
         uint256 weight,
-        bool wasBoosted
+        bool wasBoosted,
+        bool named
     ) external override onlyCore {
         // Bounty pass runs FIRST, regardless of weight. Gated per-prediction on
         // `wasBoosted` (the slot bit the core set when applyBoost snapshotted),
@@ -1080,7 +1081,7 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
         // Eager SATORI credit. Allocation and delegation split are per-game
         // (different games on the same stream have different vote weights
         // and predictor pools), so this path keys on gameId.
-        uint256 reward = _computeReward(gameId, round, weight, direction);
+        uint256 reward = _computeReward(gameId, round, weight, direction, named);
         if (reward > 0) {
             (uint256 u, uint256 delegatorsShare, uint256 d) = _splitReward(user, gameId, round, reward);
             _creditReward(user, u); // predictor's own share pays the referral skim
@@ -1740,7 +1741,8 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
         uint32 gameId,
         uint256 round,
         uint256 userWeight,
-        uint8 direction
+        uint8 direction,
+        bool named
     ) internal view returns (uint256) {
         if (userWeight == 0) return 0;
 
@@ -1764,7 +1766,7 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
         // what the OTHER side committed, so a crowd that merely agrees with
         // itself (the counter is self-referential) draws nothing. UP pool +
         // DOWN pool still == streamPool.
-        if (ISatoriRegistry(satoriRegistry).isNamedStream(ISatoriGames(satoriGames).dataStreamId(gameId))) {
+        if (named) {
             uint256 other = direction == 1 ? (_packedW & DIR_HALF_MASK) : (_packedW >> 128);
             streamPool = (streamPool * other) / (totalWeight + other);
         }
