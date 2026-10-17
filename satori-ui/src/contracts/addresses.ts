@@ -209,7 +209,7 @@ const CHAINS: Record<number, ChainConfig> = {
     bounties: '0x7FEaA67a4d4D8c9462A0d8d643984227C7710dCF',
     lens: '0x9BF5266F60092F1bFbd5F16d21d0bE9673c0F91F',
     // The 2026-10-14 stack DOES deploy a merkle proxy (0x78C83AE275e9659Bc8490fa33943e22ec7c5A7e7),
-    // but the airdrop lane has never been wired or exercised on a rehearsal
+    // but the merkle lane has never been wired or exercised on a rehearsal
     // stack. Left at the ZERO address deliberately, exactly as before: a dapp
     // that reverts is better than one silently reading a root nobody published.
     // Put the proxy address here if and when that lane is actually used.

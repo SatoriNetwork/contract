@@ -112,12 +112,13 @@ export type OwnerRoles = {
   isOwner: boolean; isGovernor: boolean;
   isOffchainReporter: boolean; isRootPublisher: boolean;
   isEmissionHolder: boolean;
+  isAirdropHolder: boolean; isFreezeAuthority: boolean;
   checked: boolean;
 };
 
 const NO_ROLES: OwnerRoles = {
   isOwner: false, isGovernor: false, isOffchainReporter: false, isRootPublisher: false,
-  isEmissionHolder: false, checked: false,
+  isEmissionHolder: false, isAirdropHolder: false, isFreezeAuthority: false, checked: false,
 };
 
 export function useOwnerRoles(): OwnerRoles {
@@ -132,18 +133,25 @@ export function useOwnerRoles(): OwnerRoles {
       isOwner: hit.includes('o'), isGovernor: hit.includes('g'),
       isOffchainReporter: hit.includes('r'), isRootPublisher: hit.includes('m'),
       isEmissionHolder: hit.includes('e'),
+      isAirdropHolder: hit.includes('l'), isFreezeAuthority: hit.includes('f'),
       checked: false,
     });
   }, [address, chainId]);
 
   useProbe([contracts, address, chainId], !!(contracts && address), async () => {
     if (!contracts || !address) return;
+    // A stack that predates SatoriAirdrop has it at zero. Asking the zero
+    // address "succeeds" with empty data that cannot be decoded, which would
+    // sink the whole batch, so that read is left off rather than allowed to fail.
+    const hasAirdrop = String(contracts.reads.airdrop.target) !== ZERO;
     const res = await multicallRead(contracts.multicall, [
       { contract: contracts.reads.rewards, fn: 'admin', args: [], allowFailure: true },
       { contract: contracts.reads.token, fn: 'rootAuthority', args: [], allowFailure: true },
       { contract: contracts.reads.engine, fn: 'offchainReporter', args: [], allowFailure: true },
       { contract: contracts.reads.hub, fn: 'merkle', args: [], allowFailure: true },
       { contract: contracts.reads.hub, fn: 'emissionHolder', args: [], allowFailure: true },
+      { contract: contracts.reads.token, fn: 'freezeAuthority', args: [], allowFailure: true },
+      ...(hasAirdrop ? [{ contract: contracts.reads.airdrop, fn: 'airdropAuthority', args: [], allowFailure: true }] : []),
     ]);
     if (res.every((r: any) => r === null || r === undefined)) throw new Error('probe unreachable');
     const me = address.toLowerCase();
@@ -162,10 +170,11 @@ export function useOwnerRoles(): OwnerRoles {
       isOwner: is(res[0]), isGovernor: is(res[1]),
       isOffchainReporter: is(res[2]), isRootPublisher,
       isEmissionHolder: is(res[4]),
+      isFreezeAuthority: is(res[5]), isAirdropHolder: is(res[6]),
       checked: true,
     };
     writeCache('roles', chainId, address,
-      `${roles.isOwner ? 'o' : ''}${roles.isGovernor ? 'g' : ''}${roles.isOffchainReporter ? 'r' : ''}${roles.isRootPublisher ? 'm' : ''}${roles.isEmissionHolder ? 'e' : ''}`);
+      `${roles.isOwner ? 'o' : ''}${roles.isGovernor ? 'g' : ''}${roles.isOffchainReporter ? 'r' : ''}${roles.isRootPublisher ? 'm' : ''}${roles.isEmissionHolder ? 'e' : ''}${roles.isAirdropHolder ? 'l' : ''}${roles.isFreezeAuthority ? 'f' : ''}`);
     setState(roles);
   });
 

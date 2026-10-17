@@ -125,7 +125,7 @@ describe("ADV precision / long-horizon accumulation drift", function () {
   // ==========================================================================
   it("120 rounds, all lanes active: supply identity + lane split hold to the wei every round; no cap breach", async function () {
     const fx = await deploySatoriFixture();
-    const { satori, rewards, airdrop, registry, owner, signers, games: gamesC } = fx;
+    const { satori, token, rewards, airdrop, registry, owner, signers, games: gamesC } = fx;
     await loadRates(satori);
     const publisher = signers[15];
     const merkle = await wireMerkle(fx, publisher);
@@ -156,7 +156,7 @@ describe("ADV precision / long-horizon accumulation drift", function () {
     await rewards.connect(users[4]).setPredictorFee(700);
 
     // airdrop allocations — odd tails, down to a single wei. Finalized now, so
-    // the nextRound() below also outlasts the one-day claim delay.
+    // the loop below can claim from its first round.
     const dropRecipients = [users[5], users[6], signers[9], signers[10]];
     const dropAmts = [
       123456789012345678n,
@@ -167,6 +167,7 @@ describe("ADV precision / long-horizon accumulation drift", function () {
     await airdrop.connect(owner).loadAirdropBatch(
       dropRecipients.map((r) => r.address), dropAmts
     );
+    await token.connect(owner).freezeAirdrop();
     await airdrop.connect(owner).finalizeAirdropLoading();
 
     // bootstrap eligibility — every game gets burnt weight
@@ -506,7 +507,7 @@ describe("ADV precision / long-horizon accumulation drift", function () {
   // ==========================================================================
   it("airdrop pays EXACTLY Σ alloc across all recipients with zero dust; nothing accrues across years", async function () {
     const fx = await deploySatoriFixture();
-    const { satori, airdrop, owner, signers } = fx;
+    const { satori, token, airdrop, owner, signers } = fx;
     await loadRates(satori);
 
     // 10 recipients with deliberately awkward allocations.
@@ -525,12 +526,12 @@ describe("ADV precision / long-horizon accumulation drift", function () {
 
     await airdrop.connect(owner).loadAirdropBatch(recips.map((r) => r.address), amts);
     expect(await airdrop.airdropLoadedTotal()).to.equal(sumAlloc);
-    await airdrop.connect(owner).finalizeAirdropLoading();
     const supplyBefore = await satori.totalSupply();
     for (let i = 0; i < recips.length; i++) {
       expect(await airdrop.claimableAirdrop(recips[i].address), `shut r${i}`).to.equal(0n);
     }
-    await nextRound(); // CLAIM_DELAY
+    await token.connect(owner).freezeAirdrop();
+    await airdrop.connect(owner).finalizeAirdropLoading();
 
     // 40 checkpoints across ~5 years with jitter. At each, a random subset of
     // the unclaimed recipients claims; everyone else's view must be unchanged:

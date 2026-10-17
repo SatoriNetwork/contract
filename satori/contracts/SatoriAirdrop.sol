@@ -11,17 +11,19 @@ interface ISatoriAirdropToken {
     function airdropMinted() external view returns (uint256);
     function AIRDROP_TOTAL_SUPPLY() external view returns (uint256);
     function appointAuthority() external view returns (address);
+    function airdrop() external view returns (address);
+    function airdropFrozen() external view returns (bool);
 }
 
 /**
  * @title SatoriAirdrop
  * @notice The one-time airdrop, in its own contract with no proxy and no
- *         upgrade path. The loader writes a table of allocations in batches and
- *         finalizes it; `CLAIM_DELAY` after finalizing, every recipient can claim
- *         their whole allocation at once. Each claim mints through the token's
- *         separate `airdropMint` door, so the airdrop never touches the
- *         per-round reward cap and the supply identity is
- *         `totalSupply == totalRewardsMinted + airdropMinted`.
+ *         upgrade path. The loader writes a table of allocations in batches;
+ *         the token's `freezeAirdrop` closes the table and pins the token's
+ *         airdrop door here for good; `finalizeAirdropLoading` then opens
+ *         claims, and every recipient can claim their whole allocation at once.
+ *         Each claim mints through the token's separate `airdropMint` door, so
+ *         the airdrop never touches the per-round reward cap.
  *
  *         Nothing here copies a number the token already holds: the ceiling,
  *         the per-recipient cursor and the running total are all read from the
@@ -29,11 +31,6 @@ interface ISatoriAirdropToken {
  */
 contract SatoriAirdrop {
     ISatoriAirdropToken public immutable token;
-
-    /// Between finalizing and the first claim. Nothing is minted in it and,
-    /// until `token.freezeAirdrop`, the token can still be re-pointed, so a
-    /// wrong table found in this day is replaced rather than paid.
-    uint256 public constant CLAIM_DELAY = 1 days;
 
     /// Per-recipient allocation. Written once per recipient, never edited,
     /// never removed.
@@ -43,8 +40,8 @@ contract SatoriAirdrop {
     /// off-chain as it loads, because an over-loaded table does not over-mint
     /// (the token cap holds) but it does lock out the last claimers.
     uint256 public airdropLoadedTotal;
-    /// Zero until `finalizeAirdropLoading`; then the moment claims open.
-    uint64 public claimsOpenAt;
+    /// Set once by `finalizeAirdropLoading`: claims open.
+    bool public airdropLoadingFinalized;
     /// Who may load and finalize. Seeded at construction; rotated by its holder
     /// or recalled by the token's appoint authority. There is no admin behind
     /// it to fall back to, so zero is rejected.
@@ -52,7 +49,7 @@ contract SatoriAirdrop {
 
     event AirdropClaimed(address indexed user, uint256 amount);
     event AirdropAllocated(address indexed recipient, uint256 amount);
-    event AirdropLoadingFinalized(uint256 totalLoaded, uint64 claimsOpenAt);
+    event AirdropLoadingFinalized(uint256 totalLoaded);
     event AirdropAuthorityChanged(address indexed oldHolder, address indexed newHolder);
 
     error Unauthorized();
@@ -63,6 +60,7 @@ contract SatoriAirdrop {
     error AirdropLoadingClosed();
     error AlreadySet();
     error ClaimsNotOpen();
+    error AirdropNotFrozen();
 
     constructor(address token_, address authority_) {
         if (token_ == address(0) || authority_ == address(0)) revert BadInput();
@@ -77,7 +75,9 @@ contract SatoriAirdrop {
 
     function loadAirdropBatch(address[] calldata recipients, uint256[] calldata amounts) external {
         if (msg.sender != airdropAuthority) revert Unauthorized();
-        if (claimsOpenAt != 0) revert AirdropLoadingClosed();
+        // The freeze closes the table: what was checked before it is exactly
+        // what pays.
+        if (airdropLoadingFinalized || token.airdropFrozen()) revert AirdropLoadingClosed();
         if (recipients.length != amounts.length) revert LengthMismatch();
         uint256 added;
         for (uint256 i = 0; i < recipients.length; i++) {
@@ -93,18 +93,19 @@ contract SatoriAirdrop {
         airdropLoadedTotal += added;
     }
 
-    /// One-shot: closes loading forever and opens claims `CLAIM_DELAY` later.
-    /// Nothing is claimable until this is called.
+    /// One-shot: opens claims at once. Nothing is claimable before it. It
+    /// refuses until the token's airdrop door is frozen to this contract
+    /// (`freezeAirdrop`), which also closes loading, so by the time anyone can
+    /// claim, no key and no redeploy can add claimable airdrop. An emptied
+    /// wiring slot does not count: root can refill it. Check the table BEFORE
+    /// the freeze: until then a wrong table is fixed by pointing the token at a
+    /// corrected contract.
     function finalizeAirdropLoading() external {
         if (msg.sender != airdropAuthority) revert Unauthorized();
-        if (claimsOpenAt != 0) revert AlreadySet();
-        uint64 opens = uint64(block.timestamp + CLAIM_DELAY);
-        claimsOpenAt = opens;
-        emit AirdropLoadingFinalized(airdropLoadedTotal, opens);
-    }
-
-    function airdropLoadingFinalized() external view returns (bool) {
-        return claimsOpenAt != 0;
+        if (airdropLoadingFinalized) revert AlreadySet();
+        if (!token.airdropFrozen() || token.airdrop() != address(this)) revert AirdropNotFrozen();
+        airdropLoadingFinalized = true;
+        emit AirdropLoadingFinalized(airdropLoadedTotal);
     }
 
     function setAirdropAuthority(address who) external {
@@ -121,7 +122,7 @@ contract SatoriAirdrop {
     // ------------------------------------------------------------------
 
     function claimAirdrop() external {
-        _requireOpen();
+        if (!airdropLoadingFinalized) revert ClaimsNotOpen();
         if (_claimAirdrop(msg.sender) == 0) revert NothingToClaim();
     }
 
@@ -129,7 +130,7 @@ contract SatoriAirdrop {
     /// is pinned to `user`: a caller can only move tokens TOWARD the allocated
     /// recipient, never redirect them.
     function claimAirdropFor(address user) external {
-        _requireOpen();
+        if (!airdropLoadingFinalized) revert ClaimsNotOpen();
         if (_claimAirdrop(user) == 0) revert NothingToClaim();
     }
 
@@ -138,15 +139,10 @@ contract SatoriAirdrop {
     /// re-run is harmless. Returns what it minted so a `staticCall` can price
     /// the run first.
     function claimAirdropForMany(address[] calldata users) external returns (uint256 total) {
-        _requireOpen();
+        if (!airdropLoadingFinalized) revert ClaimsNotOpen();
         for (uint256 i = 0; i < users.length; i++) {
             total += _claimAirdrop(users[i]);
         }
-    }
-
-    function _requireOpen() private view {
-        uint256 opens = claimsOpenAt;
-        if (opens == 0 || block.timestamp < opens) revert ClaimsNotOpen();
     }
 
     function _claimAirdrop(address user) private returns (uint256 claimable) {
@@ -163,8 +159,7 @@ contract SatoriAirdrop {
     // ------------------------------------------------------------------
 
     function claimableAirdrop(address user) external view returns (uint256) {
-        uint256 opens = claimsOpenAt;
-        if (opens == 0 || block.timestamp < opens) return 0;
+        if (!airdropLoadingFinalized) return 0;
         uint256 alloc = airdropAllocation[user];
         uint256 already = token.airdropMintedTo(user);
         return alloc > already ? alloc - already : 0;

@@ -37,6 +37,7 @@ const ABI: Record<string, Set<string>> = {
   games: abiNames('SatoriGames'),
   bounties: abiNames('SatoriBounties'),
   merkle: abiNames('SatoriMerkle'),
+  airdrop: abiNames('SatoriAirdrop'),
   multicall: abiNames('Multicall'),
 };
 // `satori` is the split-stack facade: it routes across these four, so a name is

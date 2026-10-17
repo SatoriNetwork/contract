@@ -205,17 +205,29 @@ async function main() {
     // if the pointer is wrong — which is exactly what it is here to catch.
     ["airdrop AIRDROP_TOTAL_SUPPLY reads the token's", async () =>
       (await airdrop.AIRDROP_TOTAL_SUPPLY()) === (await token.AIRDROP_TOTAL_SUPPLY())],
-    ["airdrop CLAIM_DELAY == 1 day", async () => (await airdrop.CLAIM_DELAY()) === 86400n],
+    // Claims open at finalize, and finalize refuses until the token's door is
+    // frozen on this airdrop (docs/issues/airdrop-claim-at-finalize.md). Not
+    // airdropLocked: an emptied wiring slot does not count, root can refill it.
+    // Holds by construction on current code; it catches a book whose airdrop
+    // predates the freeze gate.
+    ["airdrop finalized only behind a frozen door", async () =>
+      !(await airdrop.airdropLoadingFinalized()) ||
+      ((await token.airdropFrozen()) && eq(await token.airdrop(), A.airdrop))],
     ["HOME_CHAIN_ID == this chain", async () =>
       Number(await token.HOME_CHAIN_ID()) === chainId],
     ["deploymentRound is set", async () => (await token.deploymentRound()) > 0n],
 
-    // Supply conservation. The one arithmetic identity that must hold at every
-    // instant of the protocol's life: everything minted came from one of the
-    // two lanes, and nothing else can mint.
-    ["totalSupply == rewards + airdrop minted", async () =>
-      (await token.totalSupply()) ===
-      (await token.totalRewardsMinted()) + (await token.airdropMinted())],
+    // Supply conservation. Every mint is counted (totalRewardsMinted,
+    // airdropMinted, crosschainMinted) but the only counted burn is the
+    // bridge's (crosschainBurned): a plain ERC20Burnable burn, which is what a
+    // vote is, lowers totalSupply and no counter. So supply sits BELOW the
+    // counted net by exactly what was burned that way, and never above it. Do
+    // not tighten this back to an equality: it fails on any stack that has
+    // seen a vote.
+    ["totalSupply <= counted mints - bridge burns", async () =>
+      (await token.totalSupply()) + (await token.crosschainBurned()) <=
+      (await token.totalRewardsMinted()) + (await token.airdropMinted()) +
+      (await token.crosschainMinted())],
     ["airdropMinted <= AIRDROP_TOTAL_SUPPLY", async () =>
       (await token.airdropMinted()) <= (await token.AIRDROP_TOTAL_SUPPLY())],
     // ONE WEI OF SLACK, deliberately. The genesis split floors the GENERAL
@@ -261,6 +273,12 @@ async function main() {
     await safe("totalSupply", () => token.totalSupply(), eth),
     await safe("totalRewardsMinted", () => token.totalRewardsMinted(), eth),
     await safe("airdropMinted", () => token.airdropMinted(), eth),
+    // The gap the supply invariant allows: plain burns (votes, or anyone
+    // burning their own), which no counter records.
+    await safe("burned (uncounted)", async () =>
+      (await token.totalRewardsMinted()) + (await token.airdropMinted()) +
+      (await token.crosschainMinted()) - (await token.crosschainBurned()) -
+      (await token.totalSupply()), eth),
     await safe("devFeeMinted", () => token.devFeeMinted(), eth),
     await safe("PLATFORM_FEE_RECIPIENT", () => token.PLATFORM_FEE_RECIPIENT()),
     await safe("token.rootAuthority", () => token.rootAuthority()),
@@ -271,10 +289,19 @@ async function main() {
     await safe("token.freezeAuthority", () => token.freezeAuthority()),
     await safe("rewards.admin", () => rewards.admin()),
     await safe("airdrop.loader", () => airdrop.airdropAuthority()),
-    await safe("airdrop.loadedTotal", () => airdrop.airdropLoadedTotal(), eth),
+    await safe("airdrop.loadedTotal", async () => {
+      const t = await airdrop.airdropLoadedTotal();
+      // The freeze closes every table on this token, and the door can never be
+      // re-pointed after it.
+      return eth(t) + (t === 0n && (await token.airdropFrozen())
+        ? `  ${YEL}<- door frozen with nothing loaded: this airdrop is empty forever${OFF}` : "");
+    }),
     await safe("airdrop.loadingFinalized", () => airdrop.airdropLoadingFinalized()),
-    await safe("airdrop.claimsOpenAt", () => airdrop.claimsOpenAt()),
     await safe("token.airdropFrozen", () => token.airdropFrozen()),
+    // What finalizeAirdropLoading waits for: the token's pointer is this
+    // airdrop and frozen there.
+    await safe("airdrop door pinned here", async () =>
+      eq(await token.airdrop(), A.airdrop) && (await token.airdropFrozen())),
     await safe("bridgeAuthority", () => token.bridgeAuthority()),
     await safe("streams", () => registry.getDataStreamCount()),
     await safe("emissionHolder", () => hub.emissionHolder()),

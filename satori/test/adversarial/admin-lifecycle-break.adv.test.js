@@ -58,7 +58,6 @@ let RESERVE_MAX;
 async function loadReserveMax(satori) {
   RESERVE_MAX = (await satori.emissionRateNow()) - (await satori.devRateNow());
 }
-const DAY = 24n * 3600n; // SatoriAirdrop.CLAIM_DELAY
 
 async function advanceRounds(n) {
   const t = await time.latest();
@@ -463,36 +462,35 @@ describe("[adv] ADMIN / AUTH / LIFECYCLE / EMERGENCY — full privileged surface
 
   // ================================================================
   // AIRDROP LIFECYCLE ORDERING — claims only after finalize, loading never
-  // after it; the airdrop lane is walled off from the reward cap.
+  // after the freeze; the airdrop lane is walled off from the reward cap.
   // ================================================================
   describe("airdrop loading ordering + lane isolation", function () {
-    it("no claim before finalize; no load, top-up or re-timing after it; claimed cursors untouched", async function () {
-      const { satori, airdrop } = await deployStack(owner, publisher);
+    it("no claim before finalize, no finalize before the door is frozen, no load after the freeze; no top-up or re-point after; claimed cursors untouched", async function () {
+      const { satori, airdrop, token } = await deployStack(owner, publisher);
       await airdrop.connect(owner).loadAirdropBatch([alice.address], [E(100000)]);
       await expect(airdrop.connect(alice).claimAirdrop())
         .to.be.revertedWithCustomError(airdrop, "ClaimsNotOpen");
+      await expect(airdrop.connect(owner).finalizeAirdropLoading())
+        .to.be.revertedWithCustomError(airdrop, "AirdropNotFrozen");
 
-      await airdrop.connect(owner).finalizeAirdropLoading();
-      const opens = await airdrop.claimsOpenAt();
-      // During the day: the table is closed, and claims are still shut.
+      await token.connect(owner).freezeAirdrop();
       await expect(airdrop.connect(owner).loadAirdropBatch([bob.address], [E(100000)]))
         .to.be.revertedWithCustomError(airdrop, "AirdropLoadingClosed");
-      await expect(airdrop.connect(alice).claimAirdrop())
-        .to.be.revertedWithCustomError(airdrop, "ClaimsNotOpen");
-
-      await time.increase(DAY);
+      await airdrop.connect(owner).finalizeAirdropLoading();
+      // No wait: the whole allocation is claimable right after finalize.
       await airdrop.connect(alice).claimAirdrop();
       expect(await airdrop.airdropClaimed(alice.address)).to.equal(E(100000));
 
       // After claims started the admin can neither add bob, RETROACTIVELY bump
-      // alice, nor re-finalize to move the opening.
+      // alice, re-finalize, nor point the token at a fresh table.
       await expect(airdrop.connect(owner).loadAirdropBatch([bob.address], [E(100000)]))
         .to.be.revertedWithCustomError(airdrop, "AirdropLoadingClosed");
       await expect(airdrop.connect(owner).loadAirdropBatch([alice.address], [E(999999)]))
         .to.be.revertedWithCustomError(airdrop, "AirdropLoadingClosed");
       await expect(airdrop.connect(owner).finalizeAirdropLoading())
         .to.be.revertedWithCustomError(airdrop, "AlreadySet");
-      expect(await airdrop.claimsOpenAt()).to.equal(opens);
+      await expect(token.connect(owner).setAirdrop(bob.address))
+        .to.be.revertedWithCustomError(token, "Frozen");
       expect(await airdrop.airdropAllocation(alice.address)).to.equal(E(100000));
       expect(await airdrop.airdropAllocation(bob.address)).to.equal(0n);
       expect(await airdrop.airdropClaimed(alice.address)).to.equal(E(100000));
@@ -500,10 +498,10 @@ describe("[adv] ADMIN / AUTH / LIFECYCLE / EMERGENCY — full privileged surface
     });
 
     it("an airdrop claim NEVER touches the reward cap counters (separate lane)", async function () {
-      const { satori, airdrop } = await deployStack(owner, publisher);
+      const { satori, airdrop, token } = await deployStack(owner, publisher);
       await airdrop.connect(owner).loadAirdropBatch([alice.address], [E(500000)]);
+      await token.connect(owner).freezeAirdrop();
       await airdrop.connect(owner).finalizeAirdropLoading();
-      await time.increase(DAY);
 
       const rmintBefore = await satori.totalRewardsMinted();
       const onBefore = await satori.onChainMinted();

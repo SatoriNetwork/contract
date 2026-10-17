@@ -28,9 +28,10 @@
 // and an interrupted run is resumed by simply running it again.
 //
 // ── WHEN IT CAN RUN ────────────────────────────────────────────────────────
-// Claims open CLAIM_DELAY (one day) after `finalizeAirdropLoading`, and each
-// claim then pays the whole allocation (docs/issues/airdrop-claim-after-a-day.md).
-// Before that every claim reverts ClaimsNotOpen, so the plan stops early.
+// Claims open the moment the loader calls `finalizeAirdropLoading` (which needs
+// the token's `freezeAirdrop` first), and each claim then pays the whole
+// allocation (docs/issues/airdrop-claim-at-finalize.md). Before that every
+// claim reverts ClaimsNotOpen, so the plan stops early.
 const fs = require('fs');
 const path = require('path');
 
@@ -49,7 +50,7 @@ const AIRDROP_ABI = [
   'function claimableAirdrop(address) view returns (uint256)',
   'function airdropAllocation(address) view returns (uint256)',
   'function airdropClaimedTotal() view returns (uint256)',
-  'function claimsOpenAt() view returns (uint64)',
+  'function airdropLoadingFinalized() view returns (bool)',
   'function AIRDROP_TOTAL_SUPPLY() view returns (uint256)',
   'event AirdropAllocated(address indexed recipient, uint256 amount)',
 ];
@@ -128,24 +129,18 @@ async function main() {
     console.log('');
   }
 
-  const [opensAt, cap, claimedTotal, block] = await Promise.all([
-    retry(() => airdrop.claimsOpenAt()),
+  const [finalized, cap, claimedTotal] = await Promise.all([
+    retry(() => airdrop.airdropLoadingFinalized()),
     retry(() => airdrop.AIRDROP_TOTAL_SUPPLY()),
     retry(() => airdrop.airdropClaimedTotal()),
-    retry(() => provider.getBlock('latest')),
   ]);
 
   console.log(`\n  airdrop        ${airdropAddr}`);
   console.log(`  recipients     ${addresses.length} unique, from ${files.length ? `${files.length} file(s)` : 'AirdropAllocated logs'}`);
   console.log(`  cap            ${ethers.formatEther(cap)} SATORI`);
-  console.log(`  claimed so far ${ethers.formatEther(claimedTotal)} SATORI`);
-  if (opensAt === 0n) {
-    console.log('\n  loading is not finalized, so nothing is claimable yet.\n');
-    return;
-  }
-  console.log(`  claims open    ${new Date(Number(opensAt) * 1000).toISOString()}\n`);
-  if (BigInt(block.timestamp) < opensAt) {
-    console.log('  claims are not open yet; run this again after that moment.\n');
+  console.log(`  claimed so far ${ethers.formatEther(claimedTotal)} SATORI\n`);
+  if (!finalized) {
+    console.log('  loading is not finalized, so nothing is claimable yet.\n');
     return;
   }
 

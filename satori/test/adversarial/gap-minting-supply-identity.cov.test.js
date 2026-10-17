@@ -232,7 +232,7 @@ describe("[gap] minting — absolute supply==minted conservation identity", func
   // cap counter is untouched throughout.
   // ---------------------------------------------------------------------
   it("absolute identity extends to + airdropMinted after airdrop claims", async function () {
-    const { satori, airdrop, owner, signers } = await deploySatoriFixture();
+    const { satori, token, airdrop, owner, signers } = await deploySatoriFixture();
     const [, alice, bob] = signers;
     const TOTAL = await airdrop.AIRDROP_TOTAL_SUPPLY();
 
@@ -244,9 +244,9 @@ describe("[gap] minting — absolute supply==minted conservation identity", func
       [TOTAL / 3n, TOTAL - TOTAL / 3n]
     );
 
-    // Claims open one day after finalize; each claim pays the whole allocation.
+    // Claims open at finalize; each claim pays the whole allocation.
+    await token.connect(owner).freezeAirdrop();
     await airdrop.connect(owner).finalizeAirdropLoading();
-    await time.increase(24 * 3600);
     await airdrop.connect(alice).claimAirdrop();
     await airdrop.connect(bob).claimAirdrop();
 

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ethers } from 'ethers';
 import { useContracts } from '../hooks/useContracts';
 import { useWallet } from '../hooks/useWallet';
@@ -6,8 +6,8 @@ import { InfoTip } from './InfoTip';
 import { explainError } from '../utils/errors';
 import { afterTx } from '../lib/afterTx';
 
-/// Claim an airdrop allocation: the whole of it, once claims open one day after
-/// the table is finalized (docs/issues/airdrop-claim-after-a-day.md).
+/// Claim an airdrop allocation: the whole of it, from the moment the table is
+/// finalized (docs/issues/airdrop-claim-at-finalize.md).
 ///
 /// Here rather than on the dashboard, and separate from the ordinary Claim
 /// button, for the same reason MerkleClaimPanel is: `claimAirdrop` lives on
@@ -29,40 +29,49 @@ export function AirdropClaimPanel() {
   const [alloc, setAlloc] = useState<bigint | null>(null);
   const [claimable, setClaimable] = useState<bigint>(ZERO);
   const [claimed, setClaimed] = useState<bigint>(ZERO);
-  const [opensAt, setOpensAt] = useState<bigint>(ZERO);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  const [failed, setFailed] = useState(false);
+  // Whether any read has succeeded for this wallet and chain. After one has, a
+  // failed re-read keeps the last answer on screen rather than hiding the panel.
+  const readOnce = useRef(false);
 
   const load = useCallback(async () => {
-    if (!contracts || !address) { setAlloc(null); return; }
+    // A chain with no airdrop contract has it at zero: every read would fail,
+    // and the retry below would then poll it forever.
+    if (!contracts || !address || String(contracts.reads.airdrop.target) === ethers.ZeroAddress) {
+      setAlloc(null); setFailed(false); return;
+    }
     try {
-      const [a, c, m, o] = await Promise.all([
+      const [a, c, m] = await Promise.all([
         contracts.cached.live.airdrop.airdropAllocation(address),
         contracts.cached.live.airdrop.claimableAirdrop(address),
         contracts.cached.live.satori.airdropMintedTo(address),
-        contracts.cached.live.airdrop.claimsOpenAt(),
       ]);
       setAlloc(BigInt(a));
       setClaimable(BigInt(c));
       setClaimed(BigInt(m));
-      setOpensAt(BigInt(o));
+      readOnce.current = true;
+      setFailed(false);
     } catch {
-      // No allocation, or the read failed. Either way there is nothing to show,
-      // and an error banner for "you are not in the airdrop" would be noise.
-      setAlloc(null);
+      // No error banner: for most people "you are not in the airdrop" would be
+      // noise. The poll below retries.
+      if (!readOnce.current) setAlloc(null);
+      setFailed(true);
     }
   }, [contracts, address]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { readOnce.current = false; load(); }, [load]);
 
-  // Claims open on a clock, not on an event this page sees, so re-read while
-  // waiting; otherwise the button stays shut until a reload.
+  // Claims open on the loader's finalize transaction, which this page does not
+  // see, so re-read while waiting; otherwise the button stays shut until a reload.
+  // A failed read is retried on the same clock.
   const waiting = alloc !== null && alloc > ZERO && claimed < alloc && claimable === ZERO;
   useEffect(() => {
-    if (!waiting) return;
+    if (!waiting && !failed) return;
     const id = setInterval(load, 30000);
     return () => clearInterval(id);
-  }, [waiting, load]);
+  }, [waiting, failed, load]);
 
   const claim = async () => {
     if (!contracts) return;
@@ -84,19 +93,16 @@ export function AirdropClaimPanel() {
     minimumFractionDigits: 2, maximumFractionDigits: 6,
   });
   const done = claimed >= alloc;
-  // `claimableAirdrop` already answers on chain time, so a zero here while
-  // something is still owed means the opening moment has not arrived.
+  // `claimableAirdrop` is zero until finalize, so a zero while something is
+  // still owed means claims are not open.
   const notOpen = !done && claimable === ZERO;
-  const opensText = opensAt > ZERO
-    ? new Date(Number(opensAt) * 1000).toLocaleString()
-    : null;
 
   return (
     <div className="card-themed p-4 space-y-3" data-testid="airdrop-claim-panel">
       <h3 className="font-semibold flex items-center justify-between gap-1.5">
         <span>Airdrop</span>
         <InfoTip>
-          Your whole allocation becomes claimable one day after the airdrop list is
+          Your whole allocation becomes claimable the moment the airdrop list is
           finalized. Claim it in one go, any time after that. Nothing expires.
         </InfoTip>
       </h3>
@@ -115,8 +121,7 @@ export function AirdropClaimPanel() {
       <div className="text-xs text-gray-500" data-testid="airdrop-status">
         {done ? 'Your airdrop is claimed.'
           : !notOpen ? 'Ready to claim.'
-          : opensText ? `Claims open ${opensText}.`
-          : 'The airdrop list is still being loaded. Claims open one day after it is finalized.'}
+          : 'Claims open when the airdrop is finalized.'}
       </div>
 
       {msg && (

@@ -111,7 +111,7 @@ async function streamIdFrom(tx, satori) {
 describe("CROSS-FEATURE break hunt — all new features live at once", function () {
   this.timeout(600000);
 
-  let satori, voting, rewards, airdrop, registry, bounties, merkle, lens;
+  let satori, token, voting, rewards, airdrop, registry, bounties, merkle, lens;
   let owner, publisher;
   // actor signers
   let alice, bob, carol, dave, eve, frank, grace, heidi;
@@ -206,6 +206,7 @@ describe("CROSS-FEATURE break hunt — all new features live at once", function 
     // deploy the base stack (zero platform fee -> clean reward math)
     const f = await deploySatoriFixtureNoFee();
     satori = f.satori;
+    token = f.token;
     voting = f.voting;
     rewards = f.rewards;
     airdrop = f.airdrop;
@@ -276,16 +277,17 @@ describe("CROSS-FEATURE break hunt — all new features live at once", function 
     await rewards.connect(owner).setOffchainBudget(E(200));
     await INV("after-dial-set");
 
-    // ---- AIRDROP table loaded and finalized mid-setup. Claims open a day
-    // later, well before step 4; until then nothing mints.
+    // ---- AIRDROP table loaded, door frozen and finalized mid-setup. Nothing
+    // mints before finalize; claims open at it, and are taken in step 4.
     await airdrop.connect(owner).loadAirdropBatch(
       [grace.address, heidi.address],
       [E(1000), E(500)]
     );
     expect(await airdrop.airdropLoadedTotal()).to.equal(E(1500));
-    await airdrop.connect(owner).finalizeAirdropLoading();
     await expect(airdrop.connect(grace).claimAirdrop())
       .to.be.revertedWithCustomError(airdrop, "ClaimsNotOpen");
+    await token.connect(owner).freezeAirdrop();
+    await airdrop.connect(owner).finalizeAirdropLoading();
     await INV("after-airdrop-load");
 
     // ---- BOUNTY (external ERC20) funded + staked so the bounty path is live
@@ -443,10 +445,7 @@ describe("CROSS-FEATURE break hunt — all new features live at once", function 
 
   it("step 4 — airdrop claim MID-RUN interleaved with reward + referral claims", async function () {
     // Claim the airdrop in the SAME window that dave/eve claim delegator/predictor
-    // rewards (which fire dave's frank referral skim). Steps 2-3 ran for days,
-    // so claims opened during unrelated rounds.
-    expect(BigInt(await time.latest()), "claims open").to.be.gte(await airdrop.claimsOpenAt());
-
+    // rewards (which fire dave's frank referral skim).
     const airBefore = await airdrop.airdropClaimedTotal();
     await airdrop.connect(grace).claimAirdrop();
     expect(await airdrop.airdropClaimedTotal(), "grace's whole allocation").to.equal(airBefore + E(1000));
@@ -805,16 +804,17 @@ describe("CROSS-FEATURE targeted attacks — sharp-edge boundaries", function ()
   // reward headroom. Neither may happen.
   // -------------------------------------------------------------------------
   it("ATTACK 4: airdrop mint is fully independent of the reward-lane cap under a maxed dial", async function () {
-    const { satori, rewards, airdrop, owner, signers } = await freshStack();
+    const { satori, token, rewards, airdrop, owner, signers } = await freshStack();
     const [, alice] = signers;
 
     // Max the dial so the on-chain lane is squeezed hard. The senior dev fee caps
     // the reserve rate at the tier-1 residual general lane (720 - 144 = 576),
     // so dial to just under that new ceiling.
     await rewards.connect(owner).setOffchainBudget(E("575.5"));
-    // Load + finalize an airdrop, then run the maxed dial for years (well past
-    // the claim delay) so the reserve squeezes the on-chain lane hard.
+    // Load, freeze and finalize an airdrop, then run the maxed dial for years
+    // so the reserve squeezes the on-chain lane hard.
     await airdrop.connect(owner).loadAirdropBatch([alice.address], [E(5000)]);
+    await token.connect(owner).freezeAirdrop();
     await airdrop.connect(owner).finalizeAirdropLoading();
     await time.increase(Number(1825n * 24n * 3600n * 2n));
 

@@ -179,6 +179,10 @@ function App() {
   // inside the tab bodies, which mount on open — these probes are one deferred
   // batched request each, silent on failure (see useTabProbes).
   const ownerHook = useOwnerRoles();
+  // The Admin tab holds the rewards admin's and emission holder's rows and the
+  // airdrop's load / freeze / finalize rows, so any of those keys opens it.
+  const hasAdminTab = ownerHook.isOwner || ownerHook.isEmissionHolder
+    || ownerHook.isAirdropHolder || ownerHook.isFreezeAuthority;
   // Gates the dev-fee tab. Presentational only: the splitter is public and
   // anyone can call withdraw on it directly. This keeps a page that means
   // nothing to most visitors out of their way, and guards nobody's money.
@@ -314,13 +318,13 @@ function App() {
     // before confirmation the flags may be a restored last-known answer —
     // bouncing on those would flicker a real admin's tab away at every load.
     if (activeTab === 'governor' && ownerHook.checked && !ownerHook.isGovernor) setActiveTab('dashboard');
-    if (activeTab === 'admin' && ownerHook.checked && !(ownerHook.isOwner || ownerHook.isEmissionHolder)) setActiveTab('dashboard');
+    if (activeTab === 'admin' && ownerHook.checked && !hasAdminTab) setActiveTab('dashboard');
     // The reporter key is rotatable, so this tab can vanish under a connected
     // wallet mid-session exactly as the admin one can.
     if (activeTab === 'off-chain' && ownerHook.checked && !(ownerHook.isOffchainReporter || ownerHook.isRootPublisher)) setActiveTab('dashboard');
     if (activeTab === 'dev fee' && devFee.checked && !devFee.isPayee) setActiveTab('dashboard');
     if (activeTab === 'dev fee admin' && devFee.checked && !devFee.isAuthority) setActiveTab('dashboard');
-  }, [activeTab, ownerHook.checked, ownerHook.isGovernor, ownerHook.isOwner, ownerHook.isEmissionHolder, ownerHook.isOffchainReporter, ownerHook.isRootPublisher, devFee.checked, devFee.isPayee, devFee.isAuthority]);
+  }, [activeTab, ownerHook.checked, ownerHook.isGovernor, hasAdminTab, ownerHook.isOffchainReporter, ownerHook.isRootPublisher, devFee.checked, devFee.isPayee, devFee.isAuthority]);
 
   // Derive balance from dashboard data (single source of truth)
   const balance = dashboard.data?.balance ?? null;
@@ -1088,7 +1092,7 @@ function App() {
                   ...(devFee.isAuthority ? ['dev fee admin'] : []),
                   ...(ownerHook.isOffchainReporter || ownerHook.isRootPublisher ? ['off-chain'] : []),
                   ...(ownerHook.isGovernor ? ['governor'] : []),
-                  ...(ownerHook.isOwner || ownerHook.isEmissionHolder ? ['admin'] : []),
+                  ...(hasAdminTab ? ['admin'] : []),
                 ] as Tab[]).map((tab) => (
                   <button
                     key={tab}
@@ -1240,7 +1244,7 @@ function App() {
               {activeTab === 'leaderboard' && <LeaderboardTab streams={streamList.streams} />}
 
               {activeTab === 'governor' && ownerHook.isGovernor && <GovernorTab />}
-              {activeTab === 'admin' && (ownerHook.isOwner || ownerHook.isEmissionHolder) && <AdminTab />}
+              {activeTab === 'admin' && hasAdminTab && <AdminTab />}
               {activeTab === 'off-chain' && (ownerHook.isOffchainReporter || ownerHook.isRootPublisher) && <OffchainTab />}
             </div>
           </div>

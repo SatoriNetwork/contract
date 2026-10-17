@@ -10,18 +10,21 @@
 //   { "0xabc…": "1000", "0xdef…": "250.5" }        amounts in SATORI, not wei
 //
 // Standalone node rather than a hardhat task, matching publish-root.js: this
-// mints real supply and should not need a dev toolchain to run or to audit.
+// writes allocations that become real supply once claimed, and should not need
+// a dev toolchain to run or to audit.
 //
 // ── WHY THIS IS NOT A ONE-WAY DOOR, AND WHERE IT IS ────────────────────────
 // `loadAirdropBatch` REVERTS on a duplicate recipient (`DuplicateRecipient`), so
 // an address can be allocated exactly once, ever. A wrong AMOUNT cannot be
 // corrected and a wrong ADDRESS cannot be reclaimed in this contract — the
 // allocation simply exists and pays whoever holds that key. The only way back is
-// a corrected SatoriAirdrop and `token.setAirdrop`, before anyone claims and
-// before `freezeAirdrop`. So the plan step below prints every entry and refuses
-// to proceed on anything it can check: bad addresses, zero amounts, duplicates
-// within the file, addresses already allocated on chain, a total that would
-// take the loaded table past the cap, and a table that is already finalized.
+// a corrected SatoriAirdrop and `token.setAirdrop`, which works until
+// `freezeAirdrop`; the abandoned contract cannot finalize while the token points
+// elsewhere, and never can once the door is frozen on the corrected one. So the
+// plan step prints every entry and refuses to proceed on anything it can check:
+// bad addresses, zero amounts, duplicates within the file, addresses already
+// allocated on chain, a total that would take the loaded table past the cap, a
+// table the freeze has closed, and a contract the token does not point at.
 //
 // ── HOW IT GETS SENT ──────────────────────────────────────────────────────
 // `loadAirdropBatch` is loader-only and after handoff the loader is a Safe. Two
@@ -34,9 +37,18 @@
 //     UI, and stops.
 //
 // ── WHEN IT PAYS ───────────────────────────────────────────────────────────
-// Loading mints nothing and opens nothing. Claims open CLAIM_DELAY (one day)
-// after the loader calls `finalizeAirdropLoading`, and then every recipient can
-// claim their whole allocation (docs/issues/airdrop-claim-after-a-day.md).
+// Loading mints nothing and opens nothing. The sequence is:
+//   1. load every batch (this script, as the loader);
+//   2. check the table on chain, for as long as that takes;
+//   3. `token.freezeAirdrop()` (the freeze authority) closes the table and pins
+//      the door here, both for good;
+//   4. `finalizeAirdropLoading()` (the loader) opens claims.
+// From that block every recipient can claim their whole allocation. Finalize
+// reverts AirdropNotFrozen until step 3 is done, so the order cannot be
+// swapped. Freeze only after the LAST batch is loaded and checked: from then
+// on no entry can be added or fixed, and since the door can never be re-pointed
+// after a freeze, a freeze before loading leaves this airdrop empty for good
+// (docs/issues/airdrop-claim-at-finalize.md).
 const fs = require('fs');
 const path = require('path');
 
@@ -54,9 +66,14 @@ const AIRDROP_ABI = [
   'function airdropAllocation(address) view returns (uint256)',
   'function claimableAirdrop(address) view returns (uint256)',
   'function airdropLoadedTotal() view returns (uint256)',
-  'function claimsOpenAt() view returns (uint64)',
   'function AIRDROP_TOTAL_SUPPLY() view returns (uint256)',
   'function airdropAuthority() view returns (address)',
+  'function token() view returns (address)',
+];
+const TOKEN_ABI = [
+  'function airdrop() view returns (address)',
+  'function airdropFrozen() view returns (bool)',
+  'function airdropMinted() view returns (uint256)',
 ];
 const SAFE_ABI = [
   'function nonce() view returns (uint256)',
@@ -116,15 +133,27 @@ async function main() {
     entries.push({ addr: ethers.getAddress(addr), wei });
   }
 
-  const [admin, opensAt, cap, loadedTotal] = await Promise.all([
+  const [admin, cap, loadedTotal, tokenAddr] = await Promise.all([
     retry(() => airdrop.airdropAuthority()),
-    retry(() => airdrop.claimsOpenAt()),
     retry(() => airdrop.AIRDROP_TOTAL_SUPPLY()),
     retry(() => airdrop.airdropLoadedTotal()),
+    retry(() => airdrop.token()),
   ]);
-  if (opensAt !== 0n) {
-    problems.push(`loading is finalized (claims open at ${new Date(Number(opensAt) * 1000).toISOString()}); ` +
-      `loadAirdropBatch would revert AirdropLoadingClosed`);
+  const token = new ethers.Contract(tokenAddr, TOKEN_ABI, provider);
+  const [door, frozen, minted] = await Promise.all([
+    retry(() => token.airdrop()), retry(() => token.airdropFrozen()), retry(() => token.airdropMinted()),
+  ]);
+  // Finalize implies the freeze, so this one check also covers a finalized table.
+  if (frozen) {
+    console.error(`\n  REFUSING: the token's airdrop door is frozen (on ${door}), which closed the ` +
+      'table for good. Nothing can be loaded into this or any other airdrop now; ' +
+      'loadAirdropBatch reverts AirdropLoadingClosed.\n');
+    process.exit(1);
+  }
+  // Finalize needs the token's door frozen on THIS contract, so a table loaded
+  // into any other (an abandoned one, say) can never be claimed.
+  if (door.toLowerCase() !== airdropAddr.toLowerCase()) {
+    problems.push(`token.airdrop is ${door}, not this contract; finalize refuses until the token points here`);
   }
 
   // Already allocated on chain? loadAirdropBatch reverts the WHOLE batch on the
@@ -141,16 +170,23 @@ async function main() {
   console.log(`\n  airdrop        ${airdropAddr}`);
   console.log(`  loader         ${admin}`);
   console.log(`  cap            ${ethers.formatEther(cap)} SATORI`);
-  console.log(`  loaded so far  ${ethers.formatEther(loadedTotal)} SATORI\n`);
+  console.log(`  loaded so far  ${ethers.formatEther(loadedTotal)} SATORI`);
+  console.log(`  minted so far  ${ethers.formatEther(minted)} SATORI\n`);
 
   console.log(`  batch: ${entries.length} recipient(s), ${ethers.formatEther(total)} SATORI total`);
   for (const e of entries) console.log(`    ${e.addr}  ${ethers.formatEther(e.wei)}`);
 
-  // Against what is LOADED, not what is claimed: nothing is claimed while the
-  // table is still being loaded, so a claimed-based check would never fire.
-  if (total + loadedTotal > cap) {
-    problems.push(`batch would take the loaded table past the cap ` +
-      `(${ethers.formatEther(total)} + ${ethers.formatEther(loadedTotal)} > ${ethers.formatEther(cap)})`);
+  // No SatoriAirdrop can mint before its finalize, and finalize needs the
+  // freeze, so anything minted now came through some other pointer the wiring
+  // key set. It eats the cap the table has to fit under.
+  if (minted > 0n) {
+    problems.push(`${ethers.formatEther(minted)} SATORI was already minted through the airdrop door, ` +
+      'outside any finalized airdrop; find out how before loading or freezing');
+  }
+  if (total + loadedTotal + minted > cap) {
+    problems.push(`batch would take the table past the cap ` +
+      `(${ethers.formatEther(total)} + ${ethers.formatEther(loadedTotal)} loaded + ` +
+      `${ethers.formatEther(minted)} minted > ${ethers.formatEther(cap)})`);
   }
 
   if (problems.length) {
@@ -158,7 +194,8 @@ async function main() {
     for (const p of problems) console.error(`    - ${p}`);
     process.exit(1);
   }
-  console.log('\n  checks passed: addresses valid, no duplicates, none already allocated, cap respected.');
+  console.log('\n  checks passed: addresses valid, no duplicates, none already allocated, cap respected, ' +
+    'token points here.');
 
   const iface = new ethers.Interface(AIRDROP_ABI);
   const data = iface.encodeFunctionData('loadAirdropBatch',
@@ -248,7 +285,8 @@ async function main() {
     console.log(`    ${ok ? 'ok  ' : 'FAIL'} ${e.addr}  ${ethers.formatEther(got)}`);
   }
   console.log(bad === 0
-    ? '\n  all allocations present.'
+    ? '\n  all allocations present. Once the LAST batch is in and the whole table checks out: ' +
+      'token.freezeAirdrop (closes the table for good), then finalizeAirdropLoading.'
     : `\n  ${bad} still absent after 90s — the inner call reverted (check the Safe's ExecutionSuccess vs the revert selector).`);
   if (bad) process.exit(1);
 }

@@ -10,9 +10,9 @@ import { parseRatioWad, formatRatio, RATIO_DEFAULT, RATIO_NEVER_CHANGE } from '.
 // Admin panel: the rewards-admin's operational levers (fee schedule read-out, the
 // off-chain budget dial, airdrop loading, admin rotation), the Merkle root-publisher
 // actions, and the permissionless housekeeping calls. Each action is gated on-chain to
-// its own role; the tab is shown to the rewards admin and the emission holder
-// (App.tsx, useTabProbes.ts). Governor-only curve
-// dials + Merkle wiring live on the Governor tab.
+// its own role; the tab is shown to the rewards admin, the emission holder, the
+// airdrop loader and the token's freeze authority (App.tsx, useTabProbes.ts).
+// Governor-only curve dials + Merkle wiring live on the Governor tab.
 export function AdminTab() {
   const owner = useOwner();
   const { data } = owner;
@@ -31,6 +31,7 @@ export function AdminTab() {
   const [reporterAction, setReporterAction] = useState<ActionState>(null);
   const [airdropInput, setAirdropInput] = useState('');
   const [airdropAction, setAirdropAction] = useState<ActionState>(null);
+  const [freezeAction, setFreezeAction] = useState<ActionState>(null);
   const [finalizeAction, setFinalizeAction] = useState<ActionState>(null);
 
   const [busy, setBusy] = useState<string | null>(null);
@@ -125,10 +126,29 @@ export function AdminTab() {
       return { address: address ?? '', amountSatori: amountSatori ?? '' };
     });
     if (entries.length === 0) return;
-    wrap('airdrop', setAirdropAction, () => owner.loadAirdropBatch(entries),
-      `Loaded ${entries.length} airdrop allocation${entries.length === 1 ? '' : 's'}`);
-    setAirdropInput('');
+    // Kept on a refusal (over the cap, table closed) so the batch is not lost.
+    wrap('airdrop', setAirdropAction, async () => {
+      const res = await owner.loadAirdropBatch(entries);
+      if (res.ok) setAirdropInput('');
+      return res;
+    }, `Loaded ${entries.length} airdrop allocation${entries.length === 1 ? '' : 's'}`);
   };
+  // finalizeAirdropLoading reverts AirdropNotFrozen unless the token's door is
+  // frozen AND points at this airdrop. loadAirdropBatch reverts once the door is
+  // frozen anywhere.
+  const frozenHere = data.airdropFrozen && data.airdropPointsHere;
+  const tableClosed = data.airdropFrozen || data.airdropLoadingFinalized;
+  const overCap = data.airdropLoadedTotal + (data.airdropLoadingFinalized ? BigInt(0) : data.airdropMinted) > data.airdropCap;
+  const amber = 'block mt-1 text-amber-600 dark:text-amber-400';
+  const loadedLine = (testId: string) => (
+    <span className="block mt-1" data-testid={testId}>
+      Loaded {fmtSatori(data.airdropLoadedTotal)} of {fmtSatori(data.airdropCap)} SATORI.
+      {overCap && <span className={amber} data-testid={`${testId}-over`}>
+        Over the ceiling: the token will not mint past it, so the last claimers could not claim.
+        {data.airdropFrozen ? ' The table is closed, so this can no longer be fixed.' : ' Rows cannot be edited: fix it by deploying a corrected airdrop and pointing the token at it (setAirdrop) before the freeze.'}
+      </span>}
+    </span>
+  );
 
   return (
     <div className="space-y-4" data-testid="admin-tab">
@@ -299,29 +319,53 @@ export function AdminTab() {
         />
         <Row
           title="Load Airdrop Batch"
-          subtitle={<>Seed airdrop allocations (loader-gated, on the SatoriAirdrop contract). One entry per line: <span className="font-mono">address, amount</span> (amount in SATORI). Nothing is claimable until the airdrop is finalized; a day after that, each recipient can claim their whole allocation. The total is hard-capped by the contract.</>}
-          summary={<span className="text-xs text-gray-500">admin only</span>}
-          input={<textarea value={airdropInput} onChange={(e) => setAirdropInput(e.target.value)} placeholder={'0xabc…, 1000\n0xdef…, 250.5'} rows={3} className="w-full bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded px-3 py-2 text-sm font-mono" disabled={busy !== null || !owner.isAirdropHolder} />}
-          action={airdropAction} onSave={onLoadAirdrop} saving={busy === 'airdrop'} disabled={!airdropInput.trim() || !owner.isAirdropHolder}
+          subtitle={<>Seed airdrop allocations (loader-gated, on the SatoriAirdrop contract). One entry per line: <span className="font-mono">address, amount</span> (amount in SATORI). Nothing is claimable until the airdrop is finalized; from then on, each recipient can claim their whole allocation at once. The contract does not cap the loaded total: keep it at or under 1,200,000 SATORI (this page refuses a batch that would go over), or the last claimers could not claim. Loading closes for good at the freeze.
+            {tableClosed && <span className={amber} data-testid="airdrop-load-closed">The table is closed ({data.airdropLoadingFinalized ? 'finalized' : 'the airdrop door is frozen'}): nothing more can be loaded.</span>}
+            {!tableClosed && !data.airdropPointsHere && <span className={amber} data-testid="airdrop-load-elsewhere">The token&apos;s airdrop door does not point at this airdrop, so rows loaded here would not pay. If it points at a corrected airdrop, update this page&apos;s address book.</span>}</>}
+          summary={<span className="text-xs text-gray-500">loader only</span>}
+          input={<textarea value={airdropInput} onChange={(e) => setAirdropInput(e.target.value)} placeholder={'0xabc…, 1000\n0xdef…, 250.5'} rows={3} className="w-full bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded px-3 py-2 text-sm font-mono" data-testid="input-load-airdrop" disabled={busy !== null || !owner.isAirdropHolder || tableClosed || !data.airdropPointsHere} />}
+          action={airdropAction} onSave={onLoadAirdrop} saving={busy === 'airdrop'} disabled={!airdropInput.trim() || !owner.isAirdropHolder || tableClosed || !data.airdropPointsHere}
           saveLabel="Load batch" saveTestId="btn-load-airdrop"
         />
-        {data.airdropHolder !== ethers.ZeroAddress && (
+        {data.airdropHolder !== ethers.ZeroAddress && (<>
+          <Row
+            title="Freeze Airdrop Door"
+            subtitle={<>Pins the token&apos;s airdrop door to this SatoriAirdrop and closes its table. <strong>Permanent.</strong> After the freeze nothing more can be loaded, and a wrong table can no longer be fixed by pointing the token at a corrected airdrop. So load every batch and check the table first: freezing too early leaves this airdrop short, or empty, for good. Finalizing needs this first. Freeze authority (on the token): <span className="font-mono">{shortAddress(data.freezeAuthority)}</span>.
+              {loadedLine('airdrop-freeze-loaded')}
+              {!data.airdropFrozen && !data.airdropPointsHere && <span className={amber}>The token&apos;s airdrop door does not point at this page&apos;s airdrop.</span>}
+              {!data.airdropFrozen && data.airdropLoadedTotal === BigInt(0) && <span className={amber} data-testid="airdrop-freeze-empty">Nothing is loaded yet: load the table before freezing.</span>}</>}
+            summary={<span className="text-xs font-medium text-gray-500" data-testid="airdrop-freeze-state">
+              {!data.airdropFrozen ? 'not frozen' : data.airdropPointsHere ? 'frozen' : 'frozen elsewhere'}
+            </span>}
+            input={null}
+            action={freezeAction}
+            onSave={() => wrap('freeze', setFreezeAction, () => owner.freezeAirdrop(),
+              'Airdrop door frozen and the table closed. The loader can now finalize.')}
+            saving={busy === 'freeze'} disabled={!owner.isFreezeAuthority || data.airdropFrozen || !data.airdropPointsHere || data.airdropLoadedTotal === BigInt(0) || overCap}
+            saveLabel="Freeze" saveTestId="btn-freeze-airdrop"
+            danger
+          />
           <Row
             title="Finalize Airdrop"
-            subtitle={<>Closes loading for good and opens claims one day later; nothing is claimable before. Check the loaded table first: once finalized, no allocation can be added or changed. Loaded so far: {fmtSatori(data.airdropLoadedTotal)} SATORI. Loader-gated.</>}
+            subtitle={<>Opens claims at once: from that block every recipient can claim their whole allocation. It comes after the freeze, which closes the table, so what was loaded by then is exactly what pays. Loader-gated.
+              {loadedLine('airdrop-finalize-loaded')}
+              {!data.airdropLoadingFinalized && !frozenHere && <span className={amber} data-testid="airdrop-finalize-blocked">
+                {data.airdropFrozen ? 'The airdrop door is frozen to a different contract, so this airdrop can never be finalized.'
+                  : !data.airdropPointsHere ? 'The airdrop door points at a different contract, or at none. If that is a corrected airdrop, update this page\'s address book; otherwise point the door here (setAirdrop) before freezing.'
+                  : 'Freeze the airdrop door first.'}
+              </span>}</>}
             summary={<span className="text-xs font-medium text-gray-500" data-testid="airdrop-finalize-state">
-              {data.airdropClaimsOpenAt === BigInt(0) ? 'loading open'
-                : `claims open ${new Date(Number(data.airdropClaimsOpenAt) * 1000).toLocaleString()}`}
+              {data.airdropLoadingFinalized ? 'claims open' : data.airdropFrozen ? 'table closed' : 'loading open'}
             </span>}
             input={null}
             action={finalizeAction}
             onSave={() => wrap('finalize', setFinalizeAction, () => owner.finalizeAirdropLoading(),
-              'Airdrop finalized. Claims open in one day.')}
-            saving={busy === 'finalize'} disabled={!owner.isAirdropHolder || data.airdropClaimsOpenAt !== BigInt(0)}
+              'Airdrop finalized. Claims are open.')}
+            saving={busy === 'finalize'} disabled={!owner.isAirdropHolder || !frozenHere || data.airdropLoadingFinalized}
             saveLabel="Finalize" saveTestId="btn-finalize-airdrop"
             danger
           />
-        )}
+        </>)}
         <Row
           title="Transfer Admin"
           subtitle={<>Hand the rewards-admin role to a different wallet. The admin sets the off-chain dial, toggles capabilities, and can rotate itself. The airdrop loader is a separate role on the SatoriAirdrop contract and does not move with it. it can NOT change the platform fee or its recipient. After transfer you lose these actions. Current admin: <span className="font-mono">{shortAddress(data.admin)}</span>.</>}
