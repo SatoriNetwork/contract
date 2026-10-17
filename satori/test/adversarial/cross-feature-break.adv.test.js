@@ -12,7 +12,7 @@
  *   - some users DELEGATE prediction power to a delegate who predicts for them,
  *   - the off-chain dial is set > 0 (setOffchainBudget) so a Merkle reserve
  *     accrues, AND a Merkle root is published and claimed,
- *   - the vesting airdrop table is loaded and claimed MID-RUN,
+ *   - the airdrop table is loaded, finalized and claimed MID-RUN,
  *   - a bounty is funded (external ERC20) + staked so the bounty path is live.
  *
  * After EVERY meaningful step it asserts the GLOBAL protocol invariants:
@@ -276,13 +276,16 @@ describe("CROSS-FEATURE break hunt — all new features live at once", function 
     await rewards.connect(owner).setOffchainBudget(E(200));
     await INV("after-dial-set");
 
-    // ---- AIRDROP table loaded mid-setup. Small allocations so the run can fully
-    // vest a chunk without blowing the airdrop cap.
+    // ---- AIRDROP table loaded and finalized mid-setup. Claims open a day
+    // later, well before step 4; until then nothing mints.
     await airdrop.connect(owner).loadAirdropBatch(
       [grace.address, heidi.address],
       [E(1000), E(500)]
     );
     expect(await airdrop.airdropLoadedTotal()).to.equal(E(1500));
+    await airdrop.connect(owner).finalizeAirdropLoading();
+    await expect(airdrop.connect(grace).claimAirdrop())
+      .to.be.revertedWithCustomError(airdrop, "ClaimsNotOpen");
     await INV("after-airdrop-load");
 
     // ---- BOUNTY (external ERC20) funded + staked so the bounty path is live
@@ -439,13 +442,14 @@ describe("CROSS-FEATURE break hunt — all new features live at once", function 
   });
 
   it("step 4 — airdrop claim MID-RUN interleaved with reward + referral claims", async function () {
-    // Vest a slice of the airdrop, then claim it in the SAME window that dave/eve
-    // claim delegator/predictor rewards (which fire dave's frank referral skim).
-    await time.increase(Number((1825n * 24n * 3600n) / 20n)); // ~5% vest
+    // Claim the airdrop in the SAME window that dave/eve claim delegator/predictor
+    // rewards (which fire dave's frank referral skim). Steps 2-3 ran for days,
+    // so claims opened during unrelated rounds.
+    expect(BigInt(await time.latest()), "claims open").to.be.gte(await airdrop.claimsOpenAt());
 
     const airBefore = await airdrop.airdropClaimedTotal();
     await airdrop.connect(grace).claimAirdrop();
-    expect(await airdrop.airdropClaimedTotal(), "airdrop advanced").to.be.gt(airBefore);
+    expect(await airdrop.airdropClaimedTotal(), "grace's whole allocation").to.equal(airBefore + E(1000));
     await INV("after-airdrop-claim-grace");
 
     // dave is a pure delegator: his share is credited (and frank's skim diverted)
@@ -475,6 +479,7 @@ describe("CROSS-FEATURE break hunt — all new features live at once", function 
     // heidi also claims her airdrop mid-run — supply identity must extend across
     // BOTH the reward lanes and the airdrop line simultaneously.
     await airdrop.connect(heidi).claimAirdrop();
+    expect(await airdrop.airdropClaimedTotal(), "heidi's whole allocation").to.equal(E(1500));
     await INV("after-airdrop-claim-heidi");
   });
 
@@ -543,12 +548,12 @@ describe("CROSS-FEATURE break hunt — all new features live at once", function 
     // (No platform fee in the no-fee fixture; assert it stayed zero -> no phantom.)
     expect(platformPending, "no-fee fixture accrues no platform fee").to.equal(0n);
 
-    // Airdrop: fully vest and drain both allocations.
-    await time.increase(Number(1825n * 24n * 3600n * 2n)); // way past the 5-yr window
-    const gPend = await airdrop.claimableAirdrop(grace.address);
-    if (gPend > 0n) await airdrop.connect(grace).claimAirdrop();
-    const hPend = await airdrop.claimableAirdrop(heidi.address);
-    if (hPend > 0n) await airdrop.connect(heidi).claimAirdrop();
+    // Airdrop: both paid in full in step 4; years later a sweep still pays nothing.
+    await time.increase(Number(10n * 365n * 24n * 3600n));
+    expect(await airdrop.claimableAirdrop(grace.address)).to.equal(0n);
+    expect(await airdrop.claimableAirdrop(heidi.address)).to.equal(0n);
+    await expect(airdrop.connect(owner).claimAirdropForMany([grace.address, heidi.address]))
+      .to.not.emit(airdrop, "AirdropClaimed");
     // both fully claimed == their exact allocations
     expect(await airdrop.airdropClaimed(grace.address)).to.equal(E(1000));
     expect(await airdrop.airdropClaimed(heidi.address)).to.equal(E(500));
@@ -796,8 +801,8 @@ describe("CROSS-FEATURE targeted attacks — sharp-edge boundaries", function ()
   // ATTACK 4 — AIRDROP lane independence: an airdrop mint (own 1M cap) must
   // NEVER consume reward-lane (720*rounds) headroom, even when the reward lanes
   // are near-saturated by a maxed dial. If the airdrop leaked into the reward
-  // cap, a fully-vested airdrop claim could either be blocked by the reward cap
-  // or steal reward headroom. Neither may happen.
+  // cap, an airdrop claim could either be blocked by the reward cap or steal
+  // reward headroom. Neither may happen.
   // -------------------------------------------------------------------------
   it("ATTACK 4: airdrop mint is fully independent of the reward-lane cap under a maxed dial", async function () {
     const { satori, rewards, airdrop, owner, signers } = await freshStack();
@@ -807,8 +812,10 @@ describe("CROSS-FEATURE targeted attacks — sharp-edge boundaries", function ()
     // the reserve rate at the tier-1 residual general lane (720 - 144 = 576),
     // so dial to just under that new ceiling.
     await rewards.connect(owner).setOffchainBudget(E("575.5"));
-    // Load + fully vest an airdrop.
+    // Load + finalize an airdrop, then run the maxed dial for years (well past
+    // the claim delay) so the reserve squeezes the on-chain lane hard.
     await airdrop.connect(owner).loadAirdropBatch([alice.address], [E(5000)]);
+    await airdrop.connect(owner).finalizeAirdropLoading();
     await time.increase(Number(1825n * 24n * 3600n * 2n));
 
     const mintedBefore = await satori.totalRewardsMinted();

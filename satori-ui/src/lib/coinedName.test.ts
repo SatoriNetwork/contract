@@ -66,6 +66,20 @@ describe('nameProblem', () => {
   });
 });
 
+describe('Coined d2a101d: every space but the plain one', () => {
+  it('folds space separators to a plain space before trimming', () => {
+    expect(trimName('free\u00a0speech')).toBe('free speech');
+    expect(trimName('\u00a0 bitcoin \u2009')).toBe('bitcoin');
+    expect(localIdOf('free\u00a0speech')).toBe(localIdOf('free speech'));
+  });
+  it('refuses C1 controls, line breaks and blanks that are not spaces', () => {
+    expect(nameProblem('bit\u0085coin')).toMatch(/control/);
+    expect(nameProblem('bit\u2028coin')).toMatch(/invisible/);
+    expect(nameProblem('bit\u3164coin')).toMatch(/invisible/); // hangul filler
+    expect(nameProblem('bit\u2800coin')).toMatch(/invisible/); // braille blank
+  });
+});
+
 describe('ethShort', () => {
   it('reads to two or three significant figures', () => {
     expect(ethShort(BigInt('420000000000000000'))).toBe('0.42');

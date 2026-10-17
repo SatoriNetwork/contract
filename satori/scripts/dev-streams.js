@@ -52,15 +52,15 @@ async function main() {
   console.log("created streams", a, b);
 
   // A named stream too (the deployer is the rewards admin, so the createStream
-  // capability gate does not apply): its config is its own id, its provider
-  // the engine, cadence exactly 60. Emits NamedStreamCreated beside
-  // DataStreamCreated, which is what /streams folds `named` and `nameKey` from.
+  // capability gate does not apply): its config is empty (the registry writes
+  // its own id), its provider the engine, cadence exactly 60. Emits
+  // NamedStreamCreated beside DataStreamCreated, which is what /streams folds
+  // `named` and `nameKey` from.
   const namedId = Number(await registry.namedAdapterId());
   if (namedId !== 0) {
     const sid = await registry.nextStreamId();
-    const cfg = ethers.AbiCoder.defaultAbiCoder().encode(["uint32"], [sid]);
     await (await hub["createAdapterDataStream(string,uint16,address,bytes,uint24)"](
-      "Bitcoin", namedId, book.engine, cfg, 60)).wait();
+      "Bitcoin", namedId, book.engine, "0x", 60)).wait();
     console.log("created named stream", Number(sid));
   }
 

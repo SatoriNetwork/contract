@@ -82,6 +82,18 @@ describe('gameWallet keystore', () => {
     expect((await unlockGameWallet(PASS)).privateKey).toBe(EVR_KEY);
   });
 
+  // EVR_KEY's 24 words as a neuron shows them (@scure/bip39 entropyToMnemonic).
+  const NEURON_WORDS =
+    'around elevator cigar assault kick beauty lens grass topic fossil clog cat ' +
+    'silent hawk wise water either tent champion exist border rich position radio';
+
+  it("imports a neuron's 24 words as the neuron's own key, whatever the spacing or case", async () => {
+    const pasted = ` ${NEURON_WORDS.toUpperCase().replace(/ (?=silent)/, '\n  ')}\n`;
+    const imported = await importGameWallet(pasted, PASS);
+    expect(imported.privateKey).toBe(EVR_KEY);
+    expect((await unlockGameWallet(PASS)).privateKey).toBe(EVR_KEY);
+  });
+
   it('rejects a WIF with a bad checksum or a testnet version byte', async () => {
     await expect(
       importGameWallet('KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98618', PASS)

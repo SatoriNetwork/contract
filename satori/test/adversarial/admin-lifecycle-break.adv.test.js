@@ -27,7 +27,7 @@
 //   Satori.setMerkleReserveRate   (only satoriRewards)
 //   SatoriRewards.setAdmin        (admin rotation)
 //   SatoriRewards.setOffchainBudget         (merkle-reserve dial)
-//   SatoriAirdrop.loadAirdropBatch (loader; ordering vs claims)
+//   SatoriAirdrop.loadAirdropBatch / finalizeAirdropLoading (loader; ordering vs claims)
 //   SatoriMerkle.setMerkleRoot / setRootPublisher (publisher; rotation)
 //   *.setSatoriCore / setSatoriRewards / setSatoriBounties (deployer wiring)
 //
@@ -58,7 +58,7 @@ let RESERVE_MAX;
 async function loadReserveMax(satori) {
   RESERVE_MAX = (await satori.emissionRateNow()) - (await satori.devRateNow());
 }
-const VEST = 1825n * 24n * 3600n;
+const DAY = 24n * 3600n; // SatoriAirdrop.CLAIM_DELAY
 
 async function advanceRounds(n) {
   const t = await time.latest();
@@ -462,34 +462,48 @@ describe("[adv] ADMIN / AUTH / LIFECYCLE / EMERGENCY — full privileged surface
   });
 
   // ================================================================
-  // AIRDROP LIFECYCLE ORDERING — loading after claims started; the airdrop
-  // lane is walled off from the reward cap.
+  // AIRDROP LIFECYCLE ORDERING — claims only after finalize, loading never
+  // after it; the airdrop lane is walled off from the reward cap.
   // ================================================================
   describe("airdrop loading ordering + lane isolation", function () {
-    it("loading a NEW recipient after claims started back-vests them to deploy; existing cursors untouched", async function () {
+    it("no claim before finalize; no load, top-up or re-timing after it; claimed cursors untouched", async function () {
       const { satori, airdrop } = await deployStack(owner, publisher);
       await airdrop.connect(owner).loadAirdropBatch([alice.address], [E(100000)]);
-      await time.increase(VEST / 4n);
+      await expect(airdrop.connect(alice).claimAirdrop())
+        .to.be.revertedWithCustomError(airdrop, "ClaimsNotOpen");
+
+      await airdrop.connect(owner).finalizeAirdropLoading();
+      const opens = await airdrop.claimsOpenAt();
+      // During the day: the table is closed, and claims are still shut.
+      await expect(airdrop.connect(owner).loadAirdropBatch([bob.address], [E(100000)]))
+        .to.be.revertedWithCustomError(airdrop, "AirdropLoadingClosed");
+      await expect(airdrop.connect(alice).claimAirdrop())
+        .to.be.revertedWithCustomError(airdrop, "ClaimsNotOpen");
+
+      await time.increase(DAY);
       await airdrop.connect(alice).claimAirdrop();
-      const aliceClaimed = await airdrop.airdropClaimed(alice.address);
-      expect(aliceClaimed).to.be.gt(0n);
+      expect(await airdrop.airdropClaimed(alice.address)).to.equal(E(100000));
 
-      // Load bob for the FIRST time mid-stream. He back-vests to the deploy anchor,
-      // so he is immediately ~25% vested — but alice's cursor is untouched.
-      await airdrop.connect(owner).loadAirdropBatch([bob.address], [E(100000)]);
-      expect(await airdrop.claimableAirdrop(bob.address)).to.be.gt(0n);
-      expect(await airdrop.airdropClaimed(alice.address)).to.equal(aliceClaimed);
-
-      // The admin cannot RETROACTIVELY bump alice's allocation (write-once).
+      // After claims started the admin can neither add bob, RETROACTIVELY bump
+      // alice, nor re-finalize to move the opening.
+      await expect(airdrop.connect(owner).loadAirdropBatch([bob.address], [E(100000)]))
+        .to.be.revertedWithCustomError(airdrop, "AirdropLoadingClosed");
       await expect(airdrop.connect(owner).loadAirdropBatch([alice.address], [E(999999)]))
-        .to.be.revertedWithCustomError(airdrop, "DuplicateRecipient");
+        .to.be.revertedWithCustomError(airdrop, "AirdropLoadingClosed");
+      await expect(airdrop.connect(owner).finalizeAirdropLoading())
+        .to.be.revertedWithCustomError(airdrop, "AlreadySet");
+      expect(await airdrop.claimsOpenAt()).to.equal(opens);
       expect(await airdrop.airdropAllocation(alice.address)).to.equal(E(100000));
+      expect(await airdrop.airdropAllocation(bob.address)).to.equal(0n);
+      expect(await airdrop.airdropClaimed(alice.address)).to.equal(E(100000));
+      expect(await satori.balanceOf(alice.address)).to.equal(E(100000));
     });
 
     it("an airdrop claim NEVER touches the reward cap counters (separate lane)", async function () {
       const { satori, airdrop } = await deployStack(owner, publisher);
       await airdrop.connect(owner).loadAirdropBatch([alice.address], [E(500000)]);
-      await time.increase(VEST); // fully vest
+      await airdrop.connect(owner).finalizeAirdropLoading();
+      await time.increase(DAY);
 
       const rmintBefore = await satori.totalRewardsMinted();
       const onBefore = await satori.onChainMinted();

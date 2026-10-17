@@ -205,6 +205,8 @@ contract SatoriRegistry is SatoriUUPS {
     error InvalidCadence();
     /// @notice A named stream with this exact name already exists.
     error NameTaken();
+    /// @notice A named stream's config is its own id, written by the registry.
+    error NamedStreamConfig();
     /// @notice `setValueForRound` was called with a round at or before the ring's
     ///         newest entry. The history ring must stay strictly round-ordered:
     ///         `getFirstTwoValuesAfter` walks it newest-to-oldest and takes the
@@ -399,6 +401,11 @@ contract SatoriRegistry is SatoriUUPS {
         bytes32 k;
         if (named) {
             if (minCadenceMinutes != 60) revert InvalidCadence();
+            // The config names the stream being created, so only the registry
+            // can know it race-free: a caller reading nextStreamId first loses
+            // to any create landing in between.
+            if (config.length != 0) revert NamedStreamConfig();
+            config = abi.encode(uint32(nextStreamId));
             k = INamedStreamAdapter(impl).nameKey(name);
             if (namedNameTaken[k]) revert NameTaken();
             namedNameTaken[k] = true;

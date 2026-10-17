@@ -69,7 +69,8 @@ export interface OwnerData {
   // job — so these are reported RESOLVED, as the address that can actually act.
   emissionSplitHolder: string;   // holds setOffchainBudget (the dial)
   airdropHolder: string;         // SatoriAirdrop.airdropAuthority — loadAirdropBatch / finalizeAirdropLoading
-  earlyClaimEnabled: boolean;    // SatoriAirdrop.earlyClaimEnabled — the buyout door, OFF at deploy
+  airdropLoadedTotal: bigint;    // SatoriAirdrop.airdropLoadedTotal — sum of every loaded allocation
+  airdropClaimsOpenAt: bigint;   // SatoriAirdrop.claimsOpenAt — 0 until finalize, then when claims open
   // THE GOVERNOR IS SPLIT (dao-governance.md v2). It used to be one address
   // gating the fee, every upgrade and all three token pointers; it is now one
   // slot per job, so each can be a different Safe. `root` assigns the others.
@@ -182,12 +183,16 @@ export function useOwner() {
       // The airdrop loader is its own role on SatoriAirdrop, with no admin
       // fallback. ZERO means the dapp has no airdrop contract for this chain
       // (a stack that predates it); the Admin row hides on zero.
-      let airdropHolder = ZERO, earlyClaimEnabled = false;
+      let airdropHolder = ZERO, airdropLoadedTotal = BigInt(0), airdropClaimsOpenAt = BigInt(0);
       try {
-        [airdropHolder, earlyClaimEnabled] = await Promise.all([
+        const [holder, loaded, opens] = await Promise.all([
           contracts.cached.round.airdrop.airdropAuthority(),
-          contracts.cached.live.airdrop.earlyClaimEnabled(),
+          contracts.cached.live.airdrop.airdropLoadedTotal(),
+          contracts.cached.live.airdrop.claimsOpenAt(),
         ]);
+        airdropHolder = holder;
+        airdropLoadedTotal = BigInt(loaded);
+        airdropClaimsOpenAt = BigInt(opens);
       } catch (e) { console.warn('airdrop reads failed:', e); }
 
       let emissionStatus: EmissionStatus | null = null;
@@ -239,7 +244,7 @@ export function useOwner() {
         merkleWired, merkleRoot, rootPublisher,
         offchainReporter,
         emissionSplitHolder,
-        airdropHolder, earlyClaimEnabled,
+        airdropHolder, airdropLoadedTotal, airdropClaimsOpenAt,
         governor, pendingGovernor,
         curveFloor, curveTopGrad, curveBotGrad, curveTopShift,
         dustTarget,
@@ -432,10 +437,10 @@ export function useOwner() {
     return run(() => contracts.airdrop.loadAirdropBatch(addrs, amounts));
   }, [contracts, run]);
 
-  /// The early-claim switch (loader-gated). Off at deploy; reversible.
-  const setEarlyClaimEnabled = useCallback(async (on: boolean) => {
+  /// Loader-gated, one-shot: closes loading for good and opens claims one day later.
+  const finalizeAirdropLoading = useCallback(async () => {
     if (!contracts) return { ok: false as const, error: 'Not connected' };
-    return run(() => contracts.airdrop.setEarlyClaimEnabled(on));
+    return run(() => contracts.airdrop.finalizeAirdropLoading());
   }, [contracts, run]);
 
   /// rootPublisher-gated (SatoriMerkle.rootPublisher). Publish/replace the
@@ -534,6 +539,6 @@ export function useOwner() {
     setOffchainReporter,
     reportOffchainPredictions,
     loadAirdropBatch,
-    setEarlyClaimEnabled,
+    finalizeAirdropLoading,
   };
 }

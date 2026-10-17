@@ -10,7 +10,7 @@ const { deployMerkleProxied } = require("../next/splitFixture");
  * Round 1 (dial-merkle-break, airdrop-break, ...) checked SINGLE-STEP
  * exactness of the reward/merkle/airdrop lanes. This file runs LONG (100-300
  * rounds) with reward mints, reserve accrual, merkle claims and airdrop
- * vesting ALL active at once, and hunts for CUMULATIVE, monotonic drift that a
+ * claims ALL active at once, and hunts for CUMULATIVE, monotonic drift that a
  * per-step test can't see:
  *
  *   INV-A  supply identity, to the wei, after every round:
@@ -33,9 +33,9 @@ const { deployMerkleProxied } = require("../next/splitFixture");
  *          onChainRewardCeiling) — including through repeated 0<->max dial
  *          toggling, which must NOT back-count dormant rounds or leak reserve.
  *
- *   INV-E  full-vest saturation: after >2yr, Σ over recipients of
- *          claimableAirdrop settles to EXACTLY Σ alloc with ZERO dust, and the
- *          per-round integer vest never over-mints even mid-drip.
+ *   INV-E  airdrop exactness over years: each recipient's first claim after
+ *          claims open mints EXACTLY its allocation, nothing ever accrues on
+ *          top, and Σ claimed settles to EXACTLY Σ alloc with ZERO dust.
  *
  * All simulations are deterministic (seeded LCG, no Math.random).
  */
@@ -70,7 +70,6 @@ const AIRDROP_TOTAL = E("1200000");
 // unclaimed) survives hundreds of rounds of churn.
 const SEED_BURN  = E("1");
 const CHURN_BURN = E("0.01");
-const VEST = 1825n * 24n * 3600n; // 5 years in seconds
 
 async function nextRound() { await time.increase(TIME_UNIT); }
 
@@ -156,17 +155,19 @@ describe("ADV precision / long-horizon accumulation drift", function () {
     await rewards.connect(users[1]).setPredictorFee(900);
     await rewards.connect(users[4]).setPredictorFee(700);
 
-    // airdrop allocations — odd numbers force per-round vest rounding
+    // airdrop allocations — odd tails, down to a single wei. Finalized now, so
+    // the nextRound() below also outlasts the one-day claim delay.
     const dropRecipients = [users[5], users[6], signers[9], signers[10]];
     const dropAmts = [
-      123456789012345678n, // ~0.123 SATORI, deliberately not divisible by VEST
+      123456789012345678n,
       E("50") + 7n,
       E("2000") + 999999n,
-      1n, // one-wei allocation: the nastiest rounding case
+      1n,
     ];
     await airdrop.connect(owner).loadAirdropBatch(
       dropRecipients.map((r) => r.address), dropAmts
     );
+    await airdrop.connect(owner).finalizeAirdropLoading();
 
     // bootstrap eligibility — every game gets burnt weight
     for (let i = 0; i < users.length; i++) {
@@ -309,7 +310,7 @@ describe("ADV precision / long-horizon accumulation drift", function () {
         }
       }
 
-      // AIRDROP claims — vest a slice for each recipient periodically
+      // AIRDROP claims — each recipient's whole allocation, on some rounds
       if (rng.int(2) === 0) {
         for (const r of dropRecipients) {
           let ca = 0n;
@@ -325,6 +326,9 @@ describe("ADV precision / long-horizon accumulation drift", function () {
     // smallest observed (globalCap - totalRewardsMinted) must never go negative
     // (INV-C already asserts >= 0). Record it for the report.
     expect(maxCapSlackSeen).to.be.gte(0n);
+    // The swallowed airdrop claims above must actually have paid.
+    expect(await airdrop.airdropClaimedTotal(), "airdrop lane exercised")
+      .to.equal(dropAmts.reduce((a, b) => a + b, 0n));
   });
 
   // ==========================================================================
@@ -495,16 +499,17 @@ describe("ADV precision / long-horizon accumulation drift", function () {
   });
 
   // ==========================================================================
-  // 4. AIRDROP FULL-VEST SATURATION — many recipients with odd allocations,
-  //    dripped over the 5-year window; after full vest Σ claimed == Σ alloc
-  //    with ZERO dust, and the drip never over-mints mid-window.
+  // 4. AIRDROP EXACTNESS OVER YEARS — many recipients with odd allocations,
+  //    claiming at scattered checkpoints across five years after claims open;
+  //    every first claim is EXACTLY the allocation, nothing ever accrues on
+  //    top, and Σ claimed == Σ alloc with ZERO dust.
   // ==========================================================================
-  it("airdrop vest saturates to EXACTLY Σ alloc across all recipients with zero dust; no mid-window over-mint", async function () {
+  it("airdrop pays EXACTLY Σ alloc across all recipients with zero dust; nothing accrues across years", async function () {
     const fx = await deploySatoriFixture();
     const { satori, airdrop, owner, signers } = fx;
     await loadRates(satori);
 
-    // 10 recipients with deliberately awkward (indivisible-by-VEST) allocations.
+    // 10 recipients with deliberately awkward allocations.
     const recips = signers.slice(1, 11);
     const rng = makeRng(0xA1D20D);
     const amts = [];
@@ -520,62 +525,53 @@ describe("ADV precision / long-horizon accumulation drift", function () {
 
     await airdrop.connect(owner).loadAirdropBatch(recips.map((r) => r.address), amts);
     expect(await airdrop.airdropLoadedTotal()).to.equal(sumAlloc);
-
-    const airdropStart = BigInt(await airdrop.airdropStart());
+    await airdrop.connect(owner).finalizeAirdropLoading();
     const supplyBefore = await satori.totalSupply();
+    for (let i = 0; i < recips.length; i++) {
+      expect(await airdrop.claimableAirdrop(recips[i].address), `shut r${i}`).to.equal(0n);
+    }
+    await nextRound(); // CLAIM_DELAY
 
-    // MID-WINDOW drip: 40 checkpoints across the 5-year window. At every
-    // checkpoint, each recipient's cumulative claimed must EXACTLY equal the
-    // vest formula alloc/6 + (alloc-alloc/6)*min(elapsed,VEST)/VEST, and can NEVER exceed
-    // its allocation.
+    // 40 checkpoints across ~5 years with jitter. At each, a random subset of
+    // the unclaimed recipients claims; everyone else's view must be unchanged:
+    // the whole allocation if unclaimed, zero once claimed.
+    const claimed = new Array(recips.length).fill(false);
     for (let step = 1; step <= 40; step++) {
-      // jump ~ 2yr/40 each step, plus jitter, so elapsed lands on non-round
-      // boundaries (worst case for the integer vest).
-      await time.increase(Number(VEST / 40n) + rng.int(3600));
-
+      await time.increase(Math.floor((5 * 365 * TIME_UNIT) / 40) + rng.int(3600));
       for (let i = 0; i < recips.length; i++) {
         const r = recips[i];
-        const alloc = amts[i];
-        // Each prior recipient's claimAirdrop() tx mined a block (+1s), so the
-        // on-chain block.timestamp has crept forward. Re-read it here so the
-        // vest formula is evaluated at EXACTLY the timestamp the view reads see
-        // (views don't mine a block; all reads in this iteration share it).
-        const nowTs = BigInt(await time.latest());
-        const elapsed = nowTs - airdropStart;
-        const upfront = alloc / 6n;
-        const expectVested = elapsed >= VEST ? alloc : upfront + ((alloc - upfront) * elapsed) / VEST;
-        const claimedBefore = await airdrop.airdropClaimed(r.address);
-        const claimable = await airdrop.claimableAirdrop(r.address);
-        // claimable == expectedVested - alreadyClaimed, to the wei
-        expect(claimedBefore + claimable, `vest formula r${i} step${step}`).to.equal(expectVested);
-        if (claimable > 0n) await airdrop.connect(r).claimAirdrop();
-        // never over-mints past allocation
-        expect(await airdrop.airdropClaimed(r.address), `no over-vest r${i}`).to.be.lte(alloc);
+        const view = await airdrop.claimableAirdrop(r.address);
+        expect(view, `view r${i} step${step}`).to.equal(claimed[i] ? 0n : amts[i]);
+        if (!claimed[i] && rng.int(8) === 0) {
+          const before = await satori.balanceOf(r.address);
+          await airdrop.connect(r).claimAirdrop();
+          expect((await satori.balanceOf(r.address)) - before, `whole alloc r${i}`).to.equal(amts[i]);
+          claimed[i] = true;
+        } else if (claimed[i]) {
+          await expect(airdrop.connect(r).claimAirdrop(), `re-claim r${i}`)
+            .to.be.revertedWithCustomError(airdrop, "NothingToClaim");
+        }
+        expect(await airdrop.airdropClaimed(r.address), `cursor r${i}`).to.equal(claimed[i] ? amts[i] : 0n);
       }
-      // supply identity holds mid-window too: all growth is airdrop here
+      // supply identity holds throughout: all growth is airdrop here
       expect(await satori.totalSupply()).to.equal(supplyBefore + (await airdrop.airdropClaimedTotal()));
     }
 
-    // Push WELL past the 5-year window and do a final claim sweep.
-    await time.increase(Number(VEST) + 10 * TIME_UNIT);
-    for (let i = 0; i < recips.length; i++) {
-      const r = recips[i];
-      const ca = await airdrop.claimableAirdrop(r.address);
-      if (ca > 0n) await airdrop.connect(r).claimAirdrop();
-    }
+    // Final sponsored sweep for whoever never claimed.
+    await airdrop.connect(owner).claimAirdropForMany(recips.map((r) => r.address));
 
-    // FULL SATURATION, ZERO DUST: every recipient claimed EXACTLY its alloc.
+    // ZERO DUST: every recipient claimed EXACTLY its alloc.
     let claimedSum = 0n;
     for (let i = 0; i < recips.length; i++) {
-      const claimed = await airdrop.airdropClaimed(recips[i].address);
-      expect(claimed, `full-vest exact r${i}`).to.equal(amts[i]);
+      const c = await airdrop.airdropClaimed(recips[i].address);
+      expect(c, `exact r${i}`).to.equal(amts[i]);
       expect(await airdrop.claimableAirdrop(recips[i].address), `no dust left r${i}`).to.equal(0n);
-      claimedSum += claimed;
+      claimedSum += c;
     }
-    // aggregate saturation is EXACT — no wei stranded, no wei over-minted
+    // aggregate is EXACT — no wei stranded, no wei over-minted
     expect(await airdrop.airdropClaimedTotal(), "Σ claimed == Σ alloc").to.equal(sumAlloc);
     expect(claimedSum).to.equal(sumAlloc);
-    // supply reflects exactly the airdrop total on top of the pre-vest supply
+    // supply reflects exactly the airdrop total on top of the pre-claim supply
     expect(await satori.totalSupply()).to.equal(supplyBefore + sumAlloc);
   });
 

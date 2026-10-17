@@ -34,12 +34,12 @@
     },
     {
       "inputs": [],
-      "name": "DuplicateRecipient",
+      "name": "ClaimsNotOpen",
       "type": "error"
     },
     {
       "inputs": [],
-      "name": "EarlyClaimDisabled",
+      "name": "DuplicateRecipient",
       "type": "error"
     },
     {
@@ -109,46 +109,9 @@
           "internalType": "uint256",
           "name": "amount",
           "type": "uint256"
-        },
-        {
-          "indexed": false,
-          "internalType": "uint256",
-          "name": "vestedToDate",
-          "type": "uint256"
         }
       ],
       "name": "AirdropClaimed",
-      "type": "event"
-    },
-    {
-      "anonymous": false,
-      "inputs": [
-        {
-          "indexed": true,
-          "internalType": "address",
-          "name": "user",
-          "type": "address"
-        },
-        {
-          "indexed": false,
-          "internalType": "uint256",
-          "name": "paid",
-          "type": "uint256"
-        },
-        {
-          "indexed": false,
-          "internalType": "uint256",
-          "name": "forfeited",
-          "type": "uint256"
-        },
-        {
-          "indexed": false,
-          "internalType": "uint256",
-          "name": "newAllocation",
-          "type": "uint256"
-        }
-      ],
-      "name": "AirdropClaimedEarly",
       "type": "event"
     },
     {
@@ -159,22 +122,15 @@
           "internalType": "uint256",
           "name": "totalLoaded",
           "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint64",
+          "name": "claimsOpenAt",
+          "type": "uint64"
         }
       ],
       "name": "AirdropLoadingFinalized",
-      "type": "event"
-    },
-    {
-      "anonymous": false,
-      "inputs": [
-        {
-          "indexed": false,
-          "internalType": "bool",
-          "name": "enabled",
-          "type": "bool"
-        }
-      ],
-      "name": "EarlyClaimEnabledSet",
       "type": "event"
     },
     {
@@ -192,20 +148,7 @@
     },
     {
       "inputs": [],
-      "name": "AIRDROP_VEST",
-      "outputs": [
-        {
-          "internalType": "uint256",
-          "name": "",
-          "type": "uint256"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [],
-      "name": "UPFRONT_DIVISOR",
+      "name": "CLAIM_DELAY",
       "outputs": [
         {
           "internalType": "uint256",
@@ -308,53 +251,8 @@
     },
     {
       "inputs": [],
-      "name": "airdropStart",
-      "outputs": [
-        {
-          "internalType": "uint64",
-          "name": "",
-          "type": "uint64"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "user",
-          "type": "address"
-        }
-      ],
-      "name": "airdropVested",
-      "outputs": [
-        {
-          "internalType": "uint256",
-          "name": "",
-          "type": "uint256"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [],
       "name": "claimAirdrop",
       "outputs": [],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [],
-      "name": "claimAirdropEarly",
-      "outputs": [
-        {
-          "internalType": "uint256",
-          "name": "paid",
-          "type": "uint256"
-        }
-      ],
       "stateMutability": "nonpayable",
       "type": "function"
     },
@@ -411,36 +309,12 @@
     },
     {
       "inputs": [],
-      "name": "earlyClaimEnabled",
+      "name": "claimsOpenAt",
       "outputs": [
         {
-          "internalType": "bool",
+          "internalType": "uint64",
           "name": "",
-          "type": "bool"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "address",
-          "name": "user",
-          "type": "address"
-        }
-      ],
-      "name": "earlyClaimQuote",
-      "outputs": [
-        {
-          "internalType": "uint256",
-          "name": "paid",
-          "type": "uint256"
-        },
-        {
-          "internalType": "uint256",
-          "name": "forfeited",
-          "type": "uint256"
+          "type": "uint64"
         }
       ],
       "stateMutability": "view",
@@ -480,19 +354,6 @@
         }
       ],
       "name": "setAirdropAuthority",
-      "outputs": [],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "bool",
-          "name": "enabled",
-          "type": "bool"
-        }
-      ],
-      "name": "setEarlyClaimEnabled",
       "outputs": [],
       "stateMutability": "nonpayable",
       "type": "function"

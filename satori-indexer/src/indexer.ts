@@ -57,7 +57,7 @@ export interface IndexerState {
 /// v10: BountyFunded carries newPool (new topic hash), and BountyDripped /
 ///    StrandedPotReclaimed are indexed into bounty_pool_state, so a pair's
 ///    pool, rate and liveness are folds; bounty_funded is dropped and refilled.
-const EVENT_SCHEMA_VERSION = '12';
+const EVENT_SCHEMA_VERSION = '13';
 
 export class Indexer {
   private db: Database.Database;
@@ -295,7 +295,7 @@ export class Indexer {
       'INSERT OR REPLACE INTO prediction_scored (block, log_index, tx, user, game_id, round, correct, streak, scaled_weight) VALUES (?,?,?,?,?,?,?,?,?)');
     for (const r of b.scored) scored.run(...r);
     const made = this.db.prepare(
-      'INSERT OR REPLACE INTO prediction_made (block, log_index, tx, predictor, game_id, round, direction, streak, power_wei, power_eth) VALUES (?,?,?,?,?,?,?,?,?,?)');
+      'INSERT OR REPLACE INTO prediction_made (block, log_index, tx, predictor, game_id, round, direction, streak, power_wei, power_eth, hour) VALUES (?,?,?,?,?,?,?,?,?,?,?)');
     for (const r of b.made) made.run(...r);
     const funded = this.db.prepare(
       'INSERT OR REPLACE INTO bounty_funded (block, log_index, tx, funder, game_id, token, received, proposed_rate, new_rate, new_pool) VALUES (?,?,?,?,?,?,?,?,?,?)');
@@ -451,6 +451,7 @@ function decodeInto(
         String(a.predictor).toLowerCase(), Number(a.gameId), Number(a.round),
         Number(a.direction), Number(a.streak),
         a.predictionPower.toString(), Number(formatEther(a.predictionPower)),
+        Number(a.hour),
       ]);
     } else if (t0 === TOPICS.predictionVoided) {
       const a = engineIface.decodeEventLog('PredictionVoided', log.data, log.topics);

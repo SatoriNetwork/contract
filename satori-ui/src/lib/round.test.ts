@@ -1,4 +1,4 @@
-import { earningGames, canTickNow, nextTickTime } from './round';
+import { earningGames, canTickNow, nextTickTime, currentHour, currentRound, setRoundOffset } from './round';
 
 describe('earningGames — the set the predictable list is built from', () => {
   it('uses the frozen snapshot once it exists', () => {
@@ -104,5 +104,27 @@ describe('canTickNow / nextTickTime — the three-band cadence guard, before the
     expect(nextTickTime(H, 1500, T)).toBe((D + 2) * DAY);
     expect(canTickNow(H, 1500, T, T + 1500 * 60)).toBe(false); // 25h later, round 1 of 2
     expect(canTickNow(H, 1500, T, (D + 2) * DAY)).toBe(true);
+  });
+});
+
+describe('currentHour — the chain hour, on the same clock as currentRound', () => {
+  afterEach(() => setRoundOffset(0));
+
+  it('is the wall-clock hour on a real chain', () => {
+    expect(currentHour(Date.UTC(2026, 9, 14, 13, 59))).toBe(Math.floor(Date.UTC(2026, 9, 14, 13) / 3_600_000));
+  });
+
+  it('takes the hour warp measured from the block, which need not be whole days', () => {
+    const now = Date.UTC(2026, 9, 14, 13, 5);
+    setRoundOffset(19, 19 * 24 - 13);
+    expect(currentHour(now)).toBe(Math.floor(Date.UTC(2026, 10, 2, 0) / 3_600_000));
+    expect(currentRound(now)).toBe(Math.floor(Date.UTC(2026, 10, 2) / 86_400_000));
+  });
+
+  it('moves a whole day per round of calibrated warp, in step with currentRound', () => {
+    const now = Date.UTC(2026, 9, 14, 13, 5);
+    setRoundOffset(3);
+    expect(currentHour(now)).toBe(Math.floor(now / 3_600_000) + 72);
+    expect(Math.floor(currentHour(now) / 24)).toBe(currentRound(now));
   });
 });

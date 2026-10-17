@@ -5,15 +5,19 @@
 #   deploy/central/deploy-dapp.sh --check          everything up to shipping; Central untouched
 #   deploy/central/deploy-dapp.sh --new-contracts  the chain now runs contracts whose ABIs
 #                                                  differ from the live dapp's (a contract deploy)
+#   deploy/central/deploy-dapp.sh --ref TAG        build a pushed tag, not this checkout: a dapp
+#                                                  fix while the branch waits on a contract deploy
 set -euo pipefail
 
-CHECK=0 NEW_CONTRACTS=0
-for a in "$@"; do
-  case $a in
+CHECK=0 NEW_CONTRACTS=0 REF=
+while [ $# -gt 0 ]; do
+  case $1 in
     --check) CHECK=1 ;;
     --new-contracts) NEW_CONTRACTS=1 ;;
-    *) sed -n '2,8p' "$0"; exit 2 ;;
+    --ref) REF=${2:?--ref needs a tag}; shift ;;
+    *) sed -n '2,9p' "$0"; exit 2 ;;
   esac
+  shift
 done
 
 ROOT=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
@@ -24,7 +28,7 @@ SSH=(ssh -i "$HOME/.ssh/id_ed25519" -p 2222 -o BatchMode=yes -o ConnectTimeout=1
      -o UserKnownHostsFile="$ROOT/deploy/central/central.known_hosts" -o StrictHostKeyChecking=yes
      root@157.180.104.175)
 TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
+trap 'git -C "$ROOT" worktree remove --force "$TMP/tree" 2>/dev/null; rm -rf "$TMP"' EXIT
 
 say() { printf '\n== %s\n' "$*"; }
 die() { printf '\nSTOP: %s\n' "$*" >&2; exit 1; }
@@ -54,13 +58,23 @@ abi_signatures() {
 
 say "checkout"
 [ -f .env.deploy ] || die "no .env.deploy in $ROOT"
-git fetch -q origin
-BRANCH=$(git branch --show-current)
-COMMIT=$(git rev-parse HEAD)
-[ -z "$(git status --porcelain -- satori-ui)" ] \
-  || die "uncommitted changes in satori-ui/. The deploy ships committed code only."
-[ "$COMMIT" = "$(git rev-parse '@{u}' 2>/dev/null)" ] \
-  || die "$BRANCH is not in sync with its remote. Push or pull first."
+git fetch -q --tags origin
+if [ -n "$REF" ]; then
+  BRANCH=$REF
+  COMMIT=$(git rev-parse --verify -q "$REF^{commit}") || die "no tag $REF"
+  git ls-remote --tags origin | grep -q "^$COMMIT	refs/tags/$REF" \
+    || die "$REF is not a tag on origin. The deploy ships pushed code only."
+  git worktree add -q --detach "$TMP/tree" "$COMMIT"
+  cp .env.deploy "$TMP/tree/"
+  cd "$TMP/tree"
+else
+  BRANCH=$(git branch --show-current)
+  COMMIT=$(git rev-parse HEAD)
+  [ -z "$(git status --porcelain -- satori-ui)" ] \
+    || die "uncommitted changes in satori-ui/. The deploy ships committed code only."
+  [ "$COMMIT" = "$(git rev-parse '@{u}' 2>/dev/null)" ] \
+    || die "$BRANCH is not in sync with its remote. Push or pull first."
+fi
 echo "$(basename "$ROOT") $BRANCH @ $(git log -1 --format='%h %s')"
 
 say "live site"

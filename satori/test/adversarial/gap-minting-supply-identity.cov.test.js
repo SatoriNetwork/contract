@@ -225,7 +225,7 @@ describe("[gap] minting — absolute supply==minted conservation identity", func
   });
 
   // ---------------------------------------------------------------------
-  // THIRD MINT SITE: the vesting airdrop. airdropMint increments a SEPARATE
+  // THIRD MINT SITE: the airdrop. airdropMint increments a SEPARATE
   // counter (airdropMinted), so the strict two-term identity gives way to the
   // full three-term law: totalSupply == totalRewardsMinted + airdropMinted
   // (read via the public mirror airdropClaimedTotal). rewardMint's per-round
@@ -244,10 +244,9 @@ describe("[gap] minting — absolute supply==minted conservation identity", func
       [TOTAL / 3n, TOTAL - TOTAL / 3n]
     );
 
-    // Live from deploy — no finalize. Fully vest (1825 days), both claim their
-    // entire allocation.
-    await time.increase(1825 * 24 * 3600 + 1);
-    await time.increase(1825 * 24 * 3600 + 1);
+    // Claims open one day after finalize; each claim pays the whole allocation.
+    await airdrop.connect(owner).finalizeAirdropLoading();
+    await time.increase(24 * 3600);
     await airdrop.connect(alice).claimAirdrop();
     await airdrop.connect(bob).claimAirdrop();
 

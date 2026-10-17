@@ -42,7 +42,7 @@ const COPY: Record<string, string> = {
   BudgetExceeded:      'Mint would exceed the cumulative reward budget.',
   DelegateActive:      'Your current delegate has already predicted this round. Wait for the next round.',
   Delegated:           'Your prediction power is delegated. Undelegate first to predict yourself.',
-  DuplicatePrediction: 'You already predicted on this stream this round.',
+  DuplicatePrediction: 'You already predicted on this stream this round, or within the last 24 hours on a named stream.',
   EmptyBatch:          'Batch is empty.',
   EmptyStream:         'Stream has no values yet. Wait for its first update.',
   FeeTooHigh:          'Fee exceeds the cap (1440 SATORI).',
@@ -96,15 +96,16 @@ const COPY: Record<string, string> = {
   PoolTooYoung:             'The Uniswap pool is too young for a reliable TWAP. Try again later.',
   // CoinedAdapter (ValueOverflow / InvalidTarget above are shared by selector).
   UnknownTerm:              'That Coined term does not exist.',
-  // Named streams: NameTaken is the registry's; the other two are
-  // NamedStreamAdapter's (its InvalidProvider shares the registry's selector).
+  // Named streams: NameTaken and NamedStreamConfig are the registry's; the other
+  // two are NamedStreamAdapter's (its InvalidProvider shares the registry's selector).
   NameTaken:                'That name is already a named stream.',
+  NamedStreamConfig:        'A named stream takes no config; the registry sets it.',
   StreamIdMismatch:         'Another stream was created first — try again.',
   NotWired:                 'Named streams are not enabled on this chain yet.',
   // Coined's errors, carried by NamedStreamAdapter's ICoinedErrors fragment --
   // extend that fragment when Coined adds a text error, or the dapp cannot name it.
   EmptyName:                'Names can\'t be empty.',
-  BadName:                  'That name has characters Coined doesn\'t allow (control or invisible characters).',
+  BadName:                  'That name has characters Coined doesn\'t allow (control or invisible characters), or starts or ends with a space.',
   MixedScript:              'A name must use one writing system.',
 
   // ---- SatoriVoting.sol ----
@@ -142,6 +143,7 @@ const COPY: Record<string, string> = {
   ClaimDelegatedAway:        'Your claim ability is delegated. The delegate must claim for you.',
   ClaimUndelegationCooldown: 'Claim-delegation cooldown is still active.',
   InsufficientStake:         'Unstake amount exceeds your current stake.',
+  NamedGame:                 'Named games take no bounties.',
   NoPendingPrediction:       'No pending prediction to finalize.',
   NotClaimDelegate:          'You are not the claim delegate for this address.',
   NotDrained:                'Bounty pool still has funds or an active rate.',
@@ -155,11 +157,11 @@ const COPY: Record<string, string> = {
   AlreadySet:               'This one-time setting has already been configured.',
 
   // ---- SatoriAirdrop.sol ----
-  NothingToClaim:           'Nothing has vested since your last claim.',
+  NothingToClaim:           'Nothing to claim: nothing is owed to this address, or it has already been claimed.',
   DuplicateRecipient:       'One of these addresses already has an allocation. Allocations are written once.',
   LengthMismatch:           'Addresses and amounts do not line up.',
   AirdropLoadingClosed:     'Airdrop loading has been closed for good.',
-  EarlyClaimDisabled:       'Early claiming is switched off right now. Your allocation keeps vesting as normal.',
+  ClaimsNotOpen:            'Airdrop claims are not open yet. They open one day after the airdrop is finalized.',
   BountyParamsInvalid:      'Bounty parameters are invalid.',
   ControllerNotSet:         'The token controller is not wired yet. Try again after setup completes.',
   CrosschainLimit:          'That would mint more SATORI on the home chain than has actually been bridged out of it.',

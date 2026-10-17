@@ -11,8 +11,9 @@ import { publishDappEvent } from '../utils/events';
 import { afterTx } from '../lib/afterTx';
 import { planBountyFunding, ApprovalStep } from '../lib/bountyAllowances';
 import { makeAllowanceReaders, fundBountyOneConfirmation, tokenCanPermit, walletCanBatch } from '../lib/bountyAllowanceReaders';
+import { NAMED_NO_BOUNTY } from '../lib/namedStream';
 
-interface StreamOption { id: number; name: string }
+interface StreamOption { id: number; name: string; isNamed?: boolean }
 
 interface BountiesTabProps {
   streams: StreamOption[];
@@ -111,6 +112,7 @@ export function BountiesTab({ streams, onPredictStream }: BountiesTabProps) {
   const [cConfirm, setCConfirm] = useState(false);
   const [cStatus, setCStatus] = useState<Status>(null);
   const [cBusy, setCBusy] = useState(false);
+  const cNamed = streams.find((s) => s.id === cStreamId)?.isNamed === true;
 
   /// The one-off SATORI burn for posting a NEW token on a game, read from the
   /// contract rather than computed here. lib/round has the formula, but the burn
@@ -485,6 +487,9 @@ export function BountiesTab({ streams, onPredictStream }: BountiesTabProps) {
                 <option key={s.id} value={s.id}>#{s.id} {s.name}</option>
               ))}
             </select>
+            {cNamed && (
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400" data-testid="create-bounty-named">{NAMED_NO_BOUNTY}</p>
+            )}
           </div>
 
           <div>
@@ -602,7 +607,7 @@ export function BountiesTab({ streams, onPredictStream }: BountiesTabProps) {
                 // a missing allowance as a revert.
                 await refreshSteps();
               }}
-              disabled={cBusy}
+              disabled={cBusy || cNamed}
               className="w-full py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-400 dark:disabled:bg-gray-600 !text-white text-sm font-medium rounded transition-colors"
               data-testid="create-bounty-review"
             >
@@ -658,7 +663,7 @@ export function BountiesTab({ streams, onPredictStream }: BountiesTabProps) {
               <div className="flex gap-2">
                 <button
                   onClick={createBounty}
-                  disabled={cBusy || cSteps === null || cSteps.length > 0}
+                  disabled={cBusy || cNamed || cSteps === null || cSteps.length > 0}
                   className="flex-1 py-2 bg-red-600 hover:bg-red-700 disabled:bg-gray-400 dark:disabled:bg-gray-600 !text-white text-sm font-medium rounded transition-colors"
                   data-testid="create-bounty-confirm"
                 >

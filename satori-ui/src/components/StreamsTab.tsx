@@ -40,6 +40,7 @@ import { StreamAdaptersPanel, GameAdaptersPanel } from './AdaptersTab';
 import { InfoTip } from './InfoTip';
 import { VotePanel } from './VotePanel';
 import { afterTx } from '../lib/afterTx';
+import { NAMED_NO_BOUNTY } from '../lib/namedStream';
 import { planBountyFunding } from '../lib/bountyAllowances';
 import { makeAllowanceReaders, fundBountyOneConfirmation } from '../lib/bountyAllowanceReaders';
 import { chainCache } from '../hooks/useChainRead';
@@ -2477,8 +2478,11 @@ export function StreamsTab({
                       bounty form just below; it's hidden while that form is open,
                       so Predict goes full-width. Predict jumps to this stream in
                       the top prediction flow. */}
+                  {s.isNamed && (
+                    <p className="text-xs text-gray-500 dark:text-gray-400" data-testid={`bounty-named-${s.id}`}>{NAMED_NO_BOUNTY}</p>
+                  )}
                   <div className="flex gap-2">
-                    {bountyOpenFor !== s.id && (
+                    {bountyOpenFor !== s.id && !s.isNamed && (
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -2501,7 +2505,7 @@ export function StreamsTab({
                   </div>
 
                   {/* + Bounty form (sits where the button was) */}
-                  {bountyOpenFor === s.id && (
+                  {bountyOpenFor === s.id && !s.isNamed && (
                     <div className="space-y-2 border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20 rounded p-3" data-testid={`bounty-form-${s.id}`}>
                       <div className="text-xs text-green-700 dark:text-green-300 flex items-start justify-between gap-1.5">
                         <span>Add a prize for sharp predictors here.</span>

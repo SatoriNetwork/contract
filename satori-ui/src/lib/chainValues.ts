@@ -66,7 +66,19 @@ export async function calibrateRound(reads: Reads): Promise<number> {
     // dev node warped by evm_increaseTime is away by many (the seeder alone
     // moves ~60). So |drift| >= 2 separates them cleanly, and production keeps
     // the exact wall-clock arithmetic — and the zero-RPC property — it has today.
-    setRoundOffset(Math.abs(drift) >= 2 ? drift : 0);
+    if (Math.abs(drift) < 2) {
+      setRoundOffset(0);
+      return 0;
+    }
+    let hours = drift * 24;
+    try {
+      const runner = reads.satori.runner;
+      const block = await (runner?.provider ?? runner).getBlock('latest');
+      hours = Math.floor(Number(block.timestamp) / 3600) - Math.floor(Date.now() / 3_600_000);
+    } catch {
+      // whole rounds are the best measure left
+    }
+    setRoundOffset(drift, hours);
   } catch {
     // A failed calibration must not break the app: fall back to the wall clock,
     // which is exactly right everywhere except a warped dev node.

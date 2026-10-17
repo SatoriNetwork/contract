@@ -321,7 +321,9 @@ contract SatoriEngine is SatoriUUPS {
     // Events
     // ------------------------------------------------------------------
 
-    event PredictionMade(address indexed predictor, uint32 indexed gameId, uint256 indexed round, uint8 direction, uint256 streak, uint256 predictionPower);
+    /// @dev `hour` is the clock hour (timestamp / 3600) the prediction's 24h
+    ///      window opens on, and what a named game's 24h wait counts from.
+    event PredictionMade(address indexed predictor, uint32 indexed gameId, uint256 indexed round, uint8 direction, uint256 streak, uint256 predictionPower, uint64 hour);
     event MultiplePredictionsMade(address indexed user, uint256 indexed round, uint256 count);
     event PredictionScored(address indexed user, uint32 indexed gameId, uint256 indexed round, bool correct, uint256 streak, uint256 scaledWeight);
     event PredictionUnrecoverable(address indexed user, uint32 indexed gameId, uint256 indexed round, bool anchorEvicted);
@@ -984,7 +986,7 @@ contract SatoriEngine is SatoriUUPS {
 
         satoriRewards.scorePrediction(user, gameId, round, direction, scaledWeight);
 
-        emit PredictionMade(user, gameId, round, direction, streak, perStreamPower);
+        emit PredictionMade(user, gameId, round, direction, streak, perStreamPower, uint64(hourNow));
     }
 
     /// @dev No first-predictor bonus: the denominator accumulates per game,

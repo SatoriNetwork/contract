@@ -174,7 +174,6 @@ export function referredBy(db: Database.Database, referrer: string) {
 /// streams" (LAUNCH_CHECKLIST H5), and handing a stream to a new provider
 /// should not erase it from the creator's list.
 export function streams(db: Database.Database, creator?: string) {
-  const named = namedAdapterId(db);
   const rows = db.prepare(`
     WITH latest_name AS (
       SELECT stream_id, new_name FROM (
@@ -222,11 +221,10 @@ export function streams(db: Database.Database, creator?: string) {
     LEFT JOIN named_stream_created k ON k.stream_id = c.stream_id
     ${creator ? 'WHERE c.creator = @creator' : ''}
     ORDER BY c.stream_id ASC
-  `).all({ creator: creator?.toLowerCase() }) as { adapterId: number }[];
-  // `!== 0` first: a Simple stream's adapterId 0 must never match an unset namedAdapterId.
-  return rows.map((r) => ({
-    ...r, named: r.adapterId !== 0 && r.adapterId === named,
-  }));
+  `).all({ creator: creator?.toLowerCase() }) as { nameKey: string | null }[];
+  // NamedStreamCreated is emitted exactly when the registry records
+  // isNamedStream[id], so its presence IS the stream's named flag.
+  return rows.map((r) => ({ ...r, named: r.nameKey != null }));
 }
 
 /// Every game ever created, at its CURRENT name and authority (folded from
@@ -375,6 +373,7 @@ export function predictionOutcomes(db: Database.Database, user: string, limit = 
       m.block     AS block,
       m.tx        AS tx,
       m.power_eth AS power,
+      m.hour      AS hour,
       s.correct   AS correct,
       s.streak    AS streak,
       v.stagnant_value AS stagnantValue,
@@ -402,6 +401,7 @@ export function predictionOutcomes(db: Database.Database, user: string, limit = 
       round: r.round,
       direction: r.direction === 1 ? 'UP' : r.direction === 2 ? 'DOWN' : String(r.direction),
       power: r.power,
+      hour: r.hour,
       block: r.block,
       tx: r.tx,
       outcome,
@@ -411,6 +411,15 @@ export function predictionOutcomes(db: Database.Database, user: string, limit = 
       stagnantValue: r.stagnantValue ?? null,
     };
   });
+}
+
+/// Each game's latest prediction by an address: the hour its window opened on
+/// (PredictionMade.hour). A named game reopens to that address at hour + 24.
+export function lastPredictions(db: Database.Database, user: string) {
+  return db.prepare(`
+    SELECT game_id AS gameId, MAX(hour) AS hour, MAX(round) AS round
+    FROM prediction_made WHERE predictor = ? GROUP BY game_id
+  `).all(user.toLowerCase());
 }
 
 /// The vote ledger for one game, folded from the three weight-moving events

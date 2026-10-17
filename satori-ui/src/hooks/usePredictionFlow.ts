@@ -120,8 +120,10 @@ export function usePredictionFlow(
     // id here because the flow is stream-keyed (1:1 stream<->game) and
     // DEFAULT_STREAM_ID == 1 — always predictable when eligible (its value is
     // written lazily by flushDefaultStream at predict time). The eligibility
-    // grouping below decides whether it's shown.
-    const predictable = streams.filter((s) => s.valueHour > 0 || s.id === 1);
+    // grouping below decides whether it's shown. A named stream is exempt too:
+    // predict's own pull writes it once the clock hour has advanced
+    // (SatoriRegistry.updateValues).
+    const predictable = streams.filter((s) => s.valueHour > 0 || s.id === 1 || s.isNamed);
 
     const favEligible = favorites
       .filter((id) => {

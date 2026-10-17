@@ -1,5 +1,3 @@
-import { ethers } from 'ethers';
-
 /// The only cadence the registry accepts for a named stream.
 export const NAMED_STREAM_CADENCE = 60;
 
@@ -11,14 +9,17 @@ export function requireNamedAdapterId(id: number): number {
 }
 
 /// Arguments for hub.createAdapterDataStream(name, adapterId, provider, config,
-/// cadence) on a named stream. The adapter's validate() pins provider to the
-/// engine and config to the id the stream is about to receive, so `nextStreamId`
-/// must be read right before the send — a stale one reverts StreamIdMismatch.
-export function namedStreamCreateArgs(namedAdapterId: number, engine: string, nextStreamId: number) {
+/// cadence) on a named stream. The registry writes a named stream's config
+/// itself and reverts NamedStreamConfig on any other, so it is always empty.
+export function namedStreamCreateArgs(namedAdapterId: number, engine: string) {
   return {
     adapterId: requireNamedAdapterId(namedAdapterId),
     target: engine,
-    config: ethers.AbiCoder.defaultAbiCoder().encode(['uint32'], [nextStreamId]),
+    config: '0x',
     cadence: NAMED_STREAM_CADENCE,
   };
 }
+
+/// SatoriBounties.fundBounty reverts NamedGame on any game of a named stream.
+export const NAMED_NO_BOUNTY =
+  'Named games take no bounties: a bounty pays every right call, and on a named game the crowd\'s own flow decides what is right.';

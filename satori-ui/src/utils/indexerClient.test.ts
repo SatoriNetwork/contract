@@ -7,6 +7,7 @@ import {
   indexerStreams,
   indexerDelegation,
   indexerRoundBudget,
+  indexerLastPredictions,
 } from './indexerClient';
 import { getAddress } from 'ethers';
 import { getAddresses, DEFAULT_CHAIN_ID } from '../contracts/addresses';
@@ -230,4 +231,18 @@ test('indexerRoundBudget is null for a round nothing has touched yet, so the cal
   configureIndexer();
   mockFetch([READY, { match: '/rounds/8/budget', body: { round: 8, budgetWei: null, frozenAtBlock: null } }]);
   expect(await indexerRoundBudget(8)).toBeNull();
+});
+
+test('indexerLastPredictions keeps each game\'s hour, null when the row predates it, and is null when the route is missing', async () => {
+  configureIndexer();
+  const fn = mockFetch([READY, { match: '/last', body: [{ gameId: 3, round: 41500, hour: 996013 }, { gameId: 4, round: 41490, hour: null }] }]);
+  expect(await indexerLastPredictions(ADDR(1))).toEqual([
+    { gameId: 3, round: 41500, hour: 996013 },
+    { gameId: 4, round: 41490, hour: null },
+  ]);
+  expect(fn.mock.calls.map((c) => String(c[0]))).toContain(`${process.env.REACT_APP_INDEXER_URL}/predictions/${ADDR(1).toLowerCase()}/last`);
+
+  configureIndexer();
+  mockFetch([READY, { match: '/last', status: 404 }]);
+  expect(await indexerLastPredictions(ADDR(1))).toBeNull();
 });

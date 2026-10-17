@@ -1,8 +1,8 @@
 {
   "SatoriEngine": {
     "PredictionMade": {
-      "signature": "event PredictionMade(address indexed predictor, uint32 indexed gameId, uint256 indexed round, uint8 direction, uint256 streak, uint256 predictionPower)",
-      "topic": "0xbb5e1eb5e83ea7df6ea8182f046da073ff73f62a4ad268abc2f1ef9942a9d226"
+      "signature": "event PredictionMade(address indexed predictor, uint32 indexed gameId, uint256 indexed round, uint8 direction, uint256 streak, uint256 predictionPower, uint64 hour)",
+      "topic": "0x902e31c90e6fd2c4253cab7752832fe694d40ea5f01beb39b5d1abe0133a1cd4"
     },
     "PredictionScored": {
       "signature": "event PredictionScored(address indexed user, uint32 indexed gameId, uint256 indexed round, bool correct, uint256 streak, uint256 scaledWeight)",
@@ -165,12 +165,8 @@
       "topic": "0x0fb642b9c05c7f9e19c01da01128cea994c9a0b51f55badfc4a7694c39b28b4c"
     },
     "AirdropClaimed": {
-      "signature": "event AirdropClaimed(address indexed user, uint256 amount, uint256 vestedToDate)",
-      "topic": "0xd0755a9ef5a74f50d34b3503bb5b65ad71a112c001b76dfa6412c9aa4a1f43b0"
-    },
-    "AirdropClaimedEarly": {
-      "signature": "event AirdropClaimedEarly(address indexed user, uint256 paid, uint256 forfeited, uint256 newAllocation)",
-      "topic": "0x487828810f6a20dc34f5aa091a80cea87e1151be8fcc59967ab26ada0373a5f9"
+      "signature": "event AirdropClaimed(address indexed user, uint256 amount)",
+      "topic": "0x650e45f04ef8a0c267b2f78d983913f69ae3a353b2b32de5429307522be0ab55"
     }
   }
 }

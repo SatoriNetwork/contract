@@ -68,11 +68,9 @@ describe("Named streams (prediction-flow counter, hourly snapshot, daily game)",
 
   // Straight through the hub (no fixture auto-approval), with one argument of
   // the canonical creation varied.
-  async function rawCreate({ name = "X", provider, sid, cadence = 60, signer = alice } = {}) {
-    const id = sid ?? (await registry.nextStreamId());
-    const cfg = ethers.AbiCoder.defaultAbiCoder().encode(["uint32"], [id]);
+  async function rawCreate({ name = "X", provider, config = "0x", cadence = 60, signer = alice } = {}) {
     return hub.connect(signer)["createAdapterDataStream(string,uint16,address,bytes,uint24)"](
-      name, fix.namedAdapterId, provider ?? (await engine.getAddress()), cfg, cadence);
+      name, fix.namedAdapterId, provider ?? (await engine.getAddress()), config, cadence);
   }
 
   // Pin the clock to `hourOfDay` (just past the hour) of the NEXT UTC day, so
@@ -332,9 +330,26 @@ describe("Named streams (prediction-flow counter, hourly snapshot, daily game)",
         .to.be.revertedWithCustomError(namedAdapter, "InvalidProvider");
     });
 
-    it("creation rejects a config whose streamId is not the one being created", async function () {
-      await expect(rawCreate({ sid: (await registry.nextStreamId()) + 1n }))
-        .to.be.revertedWithCustomError(namedAdapter, "StreamIdMismatch");
+    it("the registry writes the config: a caller's config is refused, even the right id", async function () {
+      const sid = await registry.nextStreamId();
+      for (const id of [sid, sid + 1n]) {
+        const config = ethers.AbiCoder.defaultAbiCoder().encode(["uint32"], [id]);
+        await expect(rawCreate({ config }))
+          .to.be.revertedWithCustomError(registry, "NamedStreamConfig");
+      }
+    });
+
+    it("back-to-back creates need no id from the caller; each config names its own stream", async function () {
+      const first = await registry.nextStreamId();
+      await rawCreate({ name: "Bitcoin" });
+      await rawCreate({ name: "Ether", signer: bob });
+      const created = await registry.queryFilter(registry.filters.DataStreamCreated());
+      for (const sid of [first, first + 1n]) {
+        const log = created.find((l) => l.args.streamId === sid);
+        expect(log.args.config).to.equal(ethers.AbiCoder.defaultAbiCoder().encode(["uint32"], [sid]));
+        expect(await namedAdapter.readValue(await engine.getAddress(), log.args.config))
+          .to.equal(await engine.namedStreamValue(sid));
+      }
     });
 
     it("creation rejects any cadence other than 60", async function () {
@@ -434,6 +449,32 @@ describe("Named streams (prediction-flow counter, hourly snapshot, daily game)",
       expect((await registry.getLatestUpdateInfo(1))[4]).to.equal(false);
       expect((await registry.getLatestUpdateInfo(9999))[4]).to.equal(false);
     });
+
+    // A named stream's rules (hour grid, always-write, own-exclusion at settle,
+    // pari-mutuel) must not move under a game already being played.
+    it("named status is fixed at creation, whatever namedAdapterId later reads", async function () {
+      const sid = await namedStream();
+      const layout = require("../storage-layouts/SatoriRegistry.json");
+      const entry = layout.find((e) => e.label === "namedAdapterId");
+      const slot = ethers.toBeHex(BigInt(entry.slot), 32);
+      const proxy = await registry.getAddress();
+      const word = BigInt(await ethers.provider.getStorage(proxy, slot));
+      const shift = BigInt(entry.offset * 8);
+      const repointed = (word & ~(0xffffn << shift)) | (999n << shift);
+      await ethers.provider.send("hardhat_setStorageAt", [proxy, slot, ethers.toBeHex(repointed, 32)]);
+      expect(await registry.namedAdapterId()).to.equal(999n);
+      expect(await registry.isNamedStream(sid)).to.equal(true);
+      expect((await registry.streamScoringInfo(sid))[1]).to.equal(true);
+    });
+
+    it("a bounty cannot be funded on a named game", async function () {
+      const sid = await namedStream();
+      const gid = await games.binaryGameByStream(sid);
+      const bounties = fix.bounties;
+      await satori.connect(alice).approve(await bounties.getAddress(), ethers.parseEther("1"));
+      await expect(bounties.connect(alice).fundBounty(gid, await satori.getAddress(), ethers.parseEther("1"), ethers.parseEther("1")))
+        .to.be.revertedWithCustomError(bounties, "NamedGame");
+    });
   });
 
   // ---- names are Coined terms ---------------------------------------------
@@ -469,15 +510,16 @@ describe("Named streams (prediction-flow counter, hourly snapshot, daily game)",
       expect(await coined.exists(idOf("Ether"))).to.equal(true);
     });
 
-    it("a padded name is the same Coined term → NameTaken; the stored name is as passed", async function () {
+    // Coined folds the padding into the id, so " Ether " would claim "Ether"
+    // under a stored name that is not it.
+    it("a padded name is refused, and coins nothing", async function () {
+      for (const name of [" Ether", "Ether ", "\tEther", "Ether\n", "\rEther\r"]) {
+        await expect(rawCreate({ name })).to.be.revertedWithCustomError(namedAdapter, "BadName");
+      }
+      expect(await coined.exists(idOf("Ether"))).to.equal(false);
       const sid = await registry.nextStreamId();
-      await rawCreate({ name: " Ether " });
-      expect((await registry.getDataStreamInfo(sid)).name).to.equal(" Ether ");
-      expect(await registry.namedNameTaken(idOf("Ether"))).to.equal(true);
-      await expect(rawCreate({ name: "Ether", signer: bob }))
-        .to.be.revertedWithCustomError(registry, "NameTaken");
-      await expect(rawCreate({ name: "\tEther\n", signer: bob }))
-        .to.be.revertedWithCustomError(registry, "NameTaken");
+      await rawCreate({ name: "Ether" });
+      expect((await registry.getDataStreamInfo(sid)).name).to.equal("Ether");
     });
 
     it("empty and control-character names revert with Coined's errors", async function () {
@@ -496,6 +538,16 @@ describe("Named streams (prediction-flow counter, hourly snapshot, daily game)",
       // Visible multi-byte text passes the decoder.
       expect(await coined.idOf("ビットコイン")).to.equal(idOf("ビットコイン"));
       expect(await registry.nextStreamId()).to.equal(2n);
+    });
+
+    // The mock carries Coined's rules (CoinedState._checkText at d2a101d), so
+    // a name the real Coined refuses cannot pass here and fail on the chain.
+    it("names Coined refuses since d2a101d revert here too", async function () {
+      for (const name of ["free\u00a0speech", "bit\u0085coin", "bit\u2028coin", "bit\u3164coin", "bit\u2800coin"]) {
+        await expect(rawCreate({ name })).to.be.revertedWithCustomError(coined, "BadName");
+      }
+      await expect(rawCreate({ name: "bitc\u043ein" })) // cyrillic о
+        .to.be.revertedWithCustomError(coined, "MixedScript");
     });
 
     it("a name over 32 bytes is keyed by its hashed id, and is still unique", async function () {
@@ -718,10 +770,9 @@ describe("Named streams (prediction-flow counter, hourly snapshot, daily game)",
 
     it("the permit variant with the dapp's empty permit creates a named stream for free", async function () {
       const sid = await registry.nextStreamId();
-      const cfg = ethers.AbiCoder.defaultAbiCoder().encode(["uint32"], [sid]);
       const aliceBefore = await token.balanceOf(alice.address);
       await hub.connect(alice).createAdapterDataStreamWithPermit(
-        "Bitcoin", fix.namedAdapterId, await engine.getAddress(), cfg, 60, NO_PERMIT);
+        "Bitcoin", fix.namedAdapterId, await engine.getAddress(), "0x", 60, NO_PERMIT);
       expect(await registry.isNamedStream(sid)).to.equal(true);
       expect(await token.balanceOf(alice.address)).to.equal(aliceBefore);
       expect(await token.allowance(alice.address, hubAddr)).to.equal(0n);

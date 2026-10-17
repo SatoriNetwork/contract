@@ -127,8 +127,19 @@ function wifToHex(s: string): string | null {
   return ethers.hexlify(bytes.slice(1, 33));
 }
 
-/// Import an existing secret — a 0x private key, an Evrmore/Ravencoin WIF key
-/// or a mnemonic phrase — and store it encrypted. Same no-overwrite rule as create.
+/// A neuron's 24 words are BIP39 of its key itself, with no HD path (satorilib,
+/// and the browser neuron's src/keys/keys.js), so they open the neuron's own
+/// address. Other phrases are standard wallets' and take ethers' default path.
+function walletFromPhrase(phrase: string): ethers.Wallet | ethers.HDNodeWallet {
+  const mnemonic = ethers.Mnemonic.fromPhrase(phrase);
+  return ethers.dataLength(mnemonic.entropy) === 32
+    ? new ethers.Wallet(mnemonic.entropy)
+    : ethers.HDNodeWallet.fromMnemonic(mnemonic);
+}
+
+/// Import an existing secret — a 0x private key, an Evrmore/Ravencoin WIF key,
+/// a neuron's 24 words or another wallet's recovery phrase — and store it
+/// encrypted. Same no-overwrite rule as create.
 export async function importGameWallet(
   secret: string,
   passphrase: string,
@@ -139,8 +150,8 @@ export async function importGameWallet(
   const trimmed = secret.trim();
   let wallet: ethers.Wallet | ethers.HDNodeWallet;
   try {
-    wallet = trimmed.includes(' ')
-      ? ethers.HDNodeWallet.fromPhrase(trimmed)
+    wallet = /\s/.test(trimmed)
+      ? walletFromPhrase(trimmed)
       : new ethers.Wallet(wifToHex(trimmed) ?? trimmed);
   } catch {
     throw new Error('That is not a valid private key or recovery phrase.');

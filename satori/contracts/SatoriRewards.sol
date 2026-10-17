@@ -1059,11 +1059,9 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
         // OR drained-and-cleaned game) does zero bounty work, and cleanup can't
         // strand a boosted prediction's captured pot. On a boosted prediction
         // the share is pure stake-share (`pot × userStake / totalStake`), so no
-        // SATORI-side numbers are passed — just (user, game, round, direction).
+        // SATORI-side numbers are passed — just (user, game, round).
         if (wasBoosted) {
-            ISatoriBounties(satoriBounties).creditBountyForWin(
-                user, gameId, uint32(round), uint96(direction)
-            );
+            ISatoriBounties(satoriBounties).creditBountyForWin(user, gameId, uint32(round));
         }
 
         // Loyalty: `q`'s numerator. Counted BEFORE the `weight == 0` return, so a

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Claim the vested airdrop slice ON BEHALF of everyone who is owed one, paying
+// Claim the airdrop ON BEHALF of everyone who is owed one, paying
 // their gas. The one-time "welcome" sweep: tokens appear in people's wallets
 // without them knowing the airdrop exists or holding any ETH.
 //
@@ -24,17 +24,13 @@
 // funded wallet can run it.
 //
 // `claimAirdropForMany` SKIPS anyone with nothing claimable instead of
-// reverting, so a re-run pays only what has vested since, one already-claimed
-// address cannot fail a batch of a thousand, and an interrupted run is resumed
-// by simply running it again.
+// reverting, so one already-claimed address cannot fail a batch of a thousand,
+// and an interrupted run is resumed by simply running it again.
 //
-// ── WHAT IT WILL ACTUALLY DELIVER ──────────────────────────────────────────
-// A sixth of every allocation is claimable at once; the rest vests linearly
-// over AIRDROP_VEST = 1825 days (5 years) from `airdropStart`, which is the
-// SatoriAirdrop DEPLOY timestamp and not the load. So a sweep run early delivers
-// the sixth plus a small fraction of the rest: ~0.8% of it at day 30.
-// That is the design, not a bug, but it decides WHEN this is worth running and
-// the plan below prints the number rather than letting it surprise anyone.
+// ── WHEN IT CAN RUN ────────────────────────────────────────────────────────
+// Claims open CLAIM_DELAY (one day) after `finalizeAirdropLoading`, and each
+// claim then pays the whole allocation (docs/issues/airdrop-claim-after-a-day.md).
+// Before that every claim reverts ClaimsNotOpen, so the plan stops early.
 const fs = require('fs');
 const path = require('path');
 
@@ -53,19 +49,10 @@ const AIRDROP_ABI = [
   'function claimableAirdrop(address) view returns (uint256)',
   'function airdropAllocation(address) view returns (uint256)',
   'function airdropClaimedTotal() view returns (uint256)',
-  'function airdropStart() view returns (uint256)',
+  'function claimsOpenAt() view returns (uint64)',
   'function AIRDROP_TOTAL_SUPPLY() view returns (uint256)',
   'event AirdropAllocated(address indexed recipient, uint256 amount)',
 ];
-
-const VEST_SECONDS = 1825n * 24n * 3600n;
-// One sixth of every allocation is claimable at once; the rest drips
-// (docs/issues/airdrop-upfront-sixth.md). Mirrors SatoriAirdrop.airdropVested.
-const vestedOf = (wei, elapsed) => {
-  if (elapsed >= VEST_SECONDS) return wei;
-  const upfront = wei / 6n;
-  return upfront + ((wei - upfront) * elapsed) / VEST_SECONDS;
-};
 
 // Recipients per transaction. Each one is a storage read, a storage write and a
 // mint, so the ceiling is the block gas limit rather than calldata. 200 is
@@ -141,21 +128,26 @@ async function main() {
     console.log('');
   }
 
-  const [start, cap, claimedTotal, block] = await Promise.all([
-    retry(() => airdrop.airdropStart()),
+  const [opensAt, cap, claimedTotal, block] = await Promise.all([
+    retry(() => airdrop.claimsOpenAt()),
     retry(() => airdrop.AIRDROP_TOTAL_SUPPLY()),
     retry(() => airdrop.airdropClaimedTotal()),
     retry(() => provider.getBlock('latest')),
   ]);
-  const elapsed = BigInt(block.timestamp) - BigInt(start);
-  const vestedPct = elapsed >= VEST_SECONDS ? 1 : Number(elapsed) / Number(VEST_SECONDS);
 
   console.log(`\n  airdrop        ${airdropAddr}`);
   console.log(`  recipients     ${addresses.length} unique, from ${files.length ? `${files.length} file(s)` : 'AirdropAllocated logs'}`);
   console.log(`  cap            ${ethers.formatEther(cap)} SATORI`);
   console.log(`  claimed so far ${ethers.formatEther(claimedTotal)} SATORI`);
-  console.log(`  vest clock     ${(Number(elapsed) / 86400).toFixed(2)} of 1825 days ` +
-              `(a sixth of any allocation, plus ${(vestedPct * 100).toFixed(4)}% of the rest, is claimable now)\n`);
+  if (opensAt === 0n) {
+    console.log('\n  loading is not finalized, so nothing is claimable yet.\n');
+    return;
+  }
+  console.log(`  claims open    ${new Date(Number(opensAt) * 1000).toISOString()}\n`);
+  if (BigInt(block.timestamp) < opensAt) {
+    console.log('  claims are not open yet; run this again after that moment.\n');
+    return;
+  }
 
   // ---- who is actually owed something ------------------------------------
   // Filtering here is what makes a re-run cheap AND makes the plan honest: the

@@ -165,8 +165,9 @@ async function main() {
   }
   const token = await ethers.getContractAt("SatoriToken", tokenAddr);
 
-  // 1b. the airdrop — a plain contract, no proxy, no upgrade path. Its vest
-  //     anchor is this block (an immutable), and the token's `airdrop` pointer
+  // 1b. the airdrop — a plain contract, no proxy, no upgrade path. No table and
+  //     no clock at deploy: claims open CLAIM_DELAY after finalizeAirdropLoading.
+  //     The token's `airdrop` pointer
   //     (wired in step 5) is the only door through which airdrop SATORI can be
   //     minted. The loader starts on REWARDS_ADMIN; handoff.js moves it.
   //     See docs/issues/airdrop-own-contract.md.
@@ -419,10 +420,8 @@ async function main() {
     ["token.airdrop == airdrop", async () => eq(await token.airdrop(), A.airdrop)],
     ["airdrop.token == token", async () => eq(await airdrop.token(), A.token)],
     ["airdrop.airdropAuthority == rewardsAdmin", async () => eq(await airdrop.airdropAuthority(), rewardsAdmin)],
-    ["airdrop vest anchored at deploy", async () => (await airdrop.airdropStart()) > 0n],
+    ["airdrop claims not open at deploy", async () => (await airdrop.claimsOpenAt()) === 0n],
     ["airdrop lever not pre-frozen", async () => !(await token.airdropFrozen())],
-    // The early-claim door ships OFF; the loader opens it deliberately, later.
-    ["airdrop early claim OFF at deploy", async () => !(await airdrop.earlyClaimEnabled())],
     // The constructor seeds EVERY slot with the same address, so the deploy is
     // unchanged by the governor split and handoff.js is what pulls them apart.
     // Checking only `root` here would pass a token whose other five slots were

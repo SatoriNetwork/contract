@@ -10,7 +10,7 @@ import { multicallRead } from '../utils/multicall';
 import { explainError, sendPreflighted } from '../utils/errors';
 import { getCurrentRound } from '../lib/chainValues';
 import { afterTx } from '../lib/afterTx';
-import { indexerGames } from '../utils/indexerClient';
+import { indexerGames, indexerLastPredictions } from '../utils/indexerClient';
 
 export interface PredictionResult {
   gameId: number;
@@ -20,6 +20,9 @@ export interface PredictionResult {
   gameName: string;
   direction: number; // 1=UP, 2=DOWN
   roundMade: number;
+  /// The clock hour this prediction's window opened on, from the indexer;
+  /// null when it could not say.
+  hour: number | null;
   scored: boolean;
   // The stream's update cadence in MINUTES (from the already-loaded stream
   // list; no extra reads). Drives the conservative expiry countdown: a pending
@@ -169,10 +172,12 @@ export function useDashboard(streams: StreamBasic[]) {
         // allowFailure: a game never predicted has no entry; it reads back 0 and the floor covers it.
         { contract: contracts.reads.engine, fn: 'gameStreakState', args: [g.gameId], allowFailure: true }
       ));
-      const [batched, gssRes] = await Promise.all([
+      const [batched, gssRes, lastPreds] = await Promise.all([
         multicallRead(contracts.reads.multicall, reqs),
         gssReqs.length ? multicallRead(contracts.reads.multicall, gssReqs) : Promise.resolve([] as any[]),
+        indexerLastPredictions(address),
       ]);
+      const hourByGame = new Map((lastPreds ?? []).map((l) => [l.gameId, l.hour]));
       if (unbarred.length) {
         let dustFloor = 2;
         try {
@@ -206,6 +211,7 @@ export function useDashboard(streams: StreamBasic[]) {
               gameName: name,
               direction,
               roundMade: Number(pred.roundMade),
+              hour: hourByGame.get(g.gameId) ?? null,
               scored: pred.scored,
               cadence: Math.max(1, Number(g.stream.minCadenceMinutes ?? 1440)),
             });

@@ -14,7 +14,7 @@ import "../interfaces/ISatoriRegistry.sol";
  *         The name is a Coined term: `nameKey` coins it if it is new, and
  *         its Coined id is what the registry keys name uniqueness on.
  * @dev `provider` must be the engine and `config = abi.encode(uint32 streamId)`
- *      must name the stream being created — `createAdapterDataStream` calls
+ *      must name the stream being created — the registry writes it and calls
  *      `validate` BEFORE `nextStreamId++`, which is what binds the config to
  *      exactly that id. The registry's named-stream rules (cadence 60, hour-grid
  *      snapshot, always-write) key off `registry.namedAdapterId`, so an instance
@@ -69,7 +69,17 @@ contract NamedStreamAdapter is IStreamAdapter, IStreamAdapterUIDescriptor, IName
         // The registry calls this BEFORE validate; without the check an unwired
         // adapter reverts inside address(0) with no data the dapp can name.
         if (coined == address(0)) revert NotWired();
-        return ICoined(coined).register(name);
+        bytes32 id = ICoined(coined).register(name);
+        // Coined trims these four bytes off the ends before deriving the id, so
+        // a padded name would claim the bare term under text that is not it.
+        // After `register`, so a blank name keeps Coined's EmptyName.
+        bytes calldata b = bytes(name);
+        if (_isSpace(b[0]) || _isSpace(b[b.length - 1])) revert BadName();
+        return id;
+    }
+
+    function _isSpace(bytes1 c) private pure returns (bool) {
+        return c == 0x20 || c == 0x09 || c == 0x0a || c == 0x0d;
     }
 
     // ---- IStreamAdapterUIDescriptor (UI only; never called by core/registry) ----

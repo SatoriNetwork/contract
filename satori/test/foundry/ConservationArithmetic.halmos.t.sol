@@ -270,14 +270,4 @@ contract ConservationArithmeticHalmos is Test {
         (bool passes, ) = _rewardMintGuard(totalMinted, amount, roundsElapsed);
         assert(!passes);                                      // must be rejected
     }
-
-    // NOTE: the airdrop linear drip (`SatoriAirdrop.airdropVested`,
-    // `vested = elapsed >= VEST ? alloc : alloc * elapsed / VEST`) is NOT given a
-    // Halmos kernel here: `alloc * elapsed` is a product of two symbolics
-    // (nonlinear), which this solver cannot discharge in bounded time — the same
-    // limitation the mulDiv kernels above work around. Its conservation
-    // properties (`vested <= alloc` for all elapsed; monotonic; saturates to
-    // alloc with no dust) are instead covered by the Foundry solvency invariant
-    // (Airdrop.invariant.t.sol, claimed <= allocation across 1600 time-warped
-    // claims) and the exact-fraction hardhat tests (Airdrop.test.js).
 }

@@ -11,7 +11,7 @@ export interface ContractAddresses {
   //   hub    — SatoriHub, the user-facing facade (vote/claim/create/adapters/fees)
   // The dapp's `contracts.satori` is a routing Proxy assembled from these three.
   token: string;
-  /// SatoriAirdrop — the vesting drop in its own non-upgradeable contract
+  /// SatoriAirdrop — the airdrop in its own non-upgradeable contract
   /// (docs/issues/airdrop-own-contract.md). Zero on a stack that predates it.
   airdrop: string;
   engine: string;

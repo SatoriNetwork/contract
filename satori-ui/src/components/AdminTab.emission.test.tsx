@@ -34,7 +34,7 @@ beforeEach(() => {
       devFeeBpsMin: 500, devFeeBpsMax: 2500, pendingDevFeeBps: 0, platformFeeBps: 1500,
       protocolFeePerRound: E(127), platformFeeRecipient: ADMIN, emissionRatePerRound: E(846.62),
       currentRound: 3, offchainBudget: BigInt(0), onChainRewardCeiling: BigInt(0), merkleReserveCeiling: BigInt(0),
-      defaultStreamInitialized: true, earlyClaimEnabled: false,
+      defaultStreamInitialized: true, airdropLoadedTotal: BigInt(0), airdropClaimsOpenAt: BigInt(0),
       emission: {
         rateNow: E(846.62), rateNext: E(846.62), rateAfterStep: E(523.24),
         ratioWad: BigInt('618033988749894848'), stepsTaken: 0,

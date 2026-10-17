@@ -41,6 +41,12 @@ export function currentRound(nowMs: number = Date.now()): number {
   return currentRoundRaw(nowMs) + roundOffset;
 }
 
+/// The chain's clock hour, `block.timestamp / 3600`, on the same calibration as
+/// `currentRound`.
+export function currentHour(nowMs: number = Date.now()): number {
+  return Math.floor(nowMs / 3_600_000) + hourOffset;
+}
+
 /// The browser's own round, before any calibration. Only `calibrateRound` and
 /// `currentRound` should need this.
 export function currentRoundRaw(nowMs: number = Date.now()): number {
@@ -62,7 +68,12 @@ export function currentRoundRaw(nowMs: number = Date.now()): number {
 /// locked at all still saw "your delegation is revoked, power stays locked",
 /// because the chain said round 41485 and the browser said 41365.
 let roundOffset = 0;
-export function setRoundOffset(rounds: number): void { roundOffset = rounds; }
+/// The same warp in clock hours: a dev node is rarely warped by whole days.
+let hourOffset = 0;
+export function setRoundOffset(rounds: number, hours: number = rounds * 24): void {
+  roundOffset = rounds;
+  hourOffset = hours;
+}
 export function getRoundOffset(): number { return roundOffset; }
 
 /// When the round next changes, in ms from now. Exact, known in advance, and

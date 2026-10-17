@@ -1,6 +1,8 @@
 import { Interface } from 'ethers';
 import { explainError, isNullGasEstimate, sendPreflighted, EMISSION_RATIO_COPY } from './errors';
 import NamedStreamAdapterAbi from '../contracts/NamedStreamAdapter.json';
+import RegistryAbi from '../contracts/SatoriRegistry.json';
+import BountiesAbi from '../contracts/SatoriBounties.json';
 
 // The failure these cover, concretely: tapping "Tick (pull adapter value)" twice in
 // one round. The contract reverts CadenceRoundsNotElapsed, the node answers
@@ -105,6 +107,18 @@ describe('explainError on the named-stream create path', () => {
     expect(msg).toMatch(/try again/i);
   });
 
+  it('explains a named-stream config, decoded from the registry ABI', () => {
+    const iface = new Interface(RegistryAbi.abi.filter((f: any) => f.type === 'error'));
+    const data = iface.encodeErrorResult('NamedStreamConfig', []);
+    expect(explainError({ data, message: 'unknown custom error' })).toMatch(/takes no config/i);
+  });
+
+  it('refuses a bounty on a named game, decoded from the bounties ABI', () => {
+    const iface = new Interface(BountiesAbi.abi.filter((f: any) => f.type === 'error'));
+    const data = iface.encodeErrorResult('NamedGame', []);
+    expect(explainError({ data, message: 'unknown custom error' })).toBe('Named games take no bounties.');
+  });
+
   it('explains an unwired named adapter', () => {
     expect(explainError({ message: 'execution reverted: NotWired()' })).toMatch(/not .*enabled|not wired/i);
   });
@@ -125,6 +139,7 @@ describe('explainError on the named-stream create path', () => {
     const bad = explainError({ message: 'execution reverted: BadName()' });
     expect(bad).toMatch(/Coined/);
     expect(bad).toMatch(/control or invisible/i);
+    expect(bad).toMatch(/starts or ends with a space/i);
     expect(explainError({ message: 'execution reverted: MixedScript()' })).toMatch(/one writing system/i);
   });
 
@@ -246,8 +261,11 @@ describe('sendPreflighted on the predict and vote paths', () => {
   });
 
   it('explains DuplicatePrediction rather than leaving it raw', () => {
-    expect(explainError({ message: 'execution reverted: DuplicatePrediction()' }))
-      .not.toMatch(/execution reverted/);
+    const msg = explainError({ message: 'execution reverted: DuplicatePrediction()' });
+    expect(msg).not.toMatch(/execution reverted/);
+    // A named game also refuses a second call within 24 hours, across rounds.
+    expect(msg).toMatch(/this round/);
+    expect(msg).toMatch(/24 hours on a named stream/);
   });
 });
 

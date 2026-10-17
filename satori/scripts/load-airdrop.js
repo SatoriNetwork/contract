@@ -15,11 +15,13 @@
 // ── WHY THIS IS NOT A ONE-WAY DOOR, AND WHERE IT IS ────────────────────────
 // `loadAirdropBatch` REVERTS on a duplicate recipient (`DuplicateRecipient`), so
 // an address can be allocated exactly once, ever. A wrong AMOUNT cannot be
-// corrected and a wrong ADDRESS cannot be reclaimed — the allocation simply
-// exists and vests to whoever holds that key. So the plan step below prints
-// every entry and refuses to proceed on anything it can check: bad addresses,
-// zero amounts, duplicates within the file, addresses already allocated on
-// chain, and a total that would exceed the cap.
+// corrected and a wrong ADDRESS cannot be reclaimed in this contract — the
+// allocation simply exists and pays whoever holds that key. The only way back is
+// a corrected SatoriAirdrop and `token.setAirdrop`, before anyone claims and
+// before `freezeAirdrop`. So the plan step below prints every entry and refuses
+// to proceed on anything it can check: bad addresses, zero amounts, duplicates
+// within the file, addresses already allocated on chain, a total that would
+// take the loaded table past the cap, and a table that is already finalized.
 //
 // ── HOW IT GETS SENT ──────────────────────────────────────────────────────
 // `loadAirdropBatch` is loader-only and after handoff the loader is a Safe. Two
@@ -31,14 +33,10 @@
 //   * Otherwise it prints the transaction for the owners to execute in the Safe
 //     UI, and stops.
 //
-// ── VESTING, SO THE NUMBERS ARE NOT A SURPRISE ────────────────────────────
-// A SIXTH of every allocation is claimable at once. The rest vests LINEARLY
-// from `airdropStart` (the SatoriAirdrop deploy timestamp, an immutable) over
-// AIRDROP_VEST = 1825 days (5 years). Loading does not mint anything: it
-// records an entitlement whose drip has been running since deployment, so a
-// batch loaded on day 100 is immediately a sixth plus ~2.7% of the rest. That
-// is intended, the clock is genesis and not the load, but it surprises people,
-// so it is printed.
+// ── WHEN IT PAYS ───────────────────────────────────────────────────────────
+// Loading mints nothing and opens nothing. Claims open CLAIM_DELAY (one day)
+// after the loader calls `finalizeAirdropLoading`, and then every recipient can
+// claim their whole allocation (docs/issues/airdrop-claim-after-a-day.md).
 const fs = require('fs');
 const path = require('path');
 
@@ -55,8 +53,8 @@ const AIRDROP_ABI = [
   'function loadAirdropBatch(address[] recipients, uint256[] amounts)',
   'function airdropAllocation(address) view returns (uint256)',
   'function claimableAirdrop(address) view returns (uint256)',
-  'function airdropClaimedTotal() view returns (uint256)',
-  'function airdropStart() view returns (uint256)',
+  'function airdropLoadedTotal() view returns (uint256)',
+  'function claimsOpenAt() view returns (uint64)',
   'function AIRDROP_TOTAL_SUPPLY() view returns (uint256)',
   'function airdropAuthority() view returns (address)',
 ];
@@ -72,15 +70,6 @@ const SAFE_TX_TYPES = { SafeTx: [
   { name: 'gasPrice', type: 'uint256' }, { name: 'gasToken', type: 'address' },
   { name: 'refundReceiver', type: 'address' }, { name: 'nonce', type: 'uint256' },
 ]};
-
-const VEST_SECONDS = 1825n * 24n * 3600n;
-// One sixth of every allocation is claimable at once; the rest drips
-// (docs/issues/airdrop-upfront-sixth.md). Mirrors SatoriAirdrop.airdropVested.
-const vestedOf = (wei, elapsed) => {
-  if (elapsed >= VEST_SECONDS) return wei;
-  const upfront = wei / 6n;
-  return upfront + ((wei - upfront) * elapsed) / VEST_SECONDS;
-};
 
 const retry = async (fn, n = 6) => {
   for (let i = 0; i < n; i++) {
@@ -127,12 +116,16 @@ async function main() {
     entries.push({ addr: ethers.getAddress(addr), wei });
   }
 
-  const [admin, start, cap, claimedTotal] = await Promise.all([
+  const [admin, opensAt, cap, loadedTotal] = await Promise.all([
     retry(() => airdrop.airdropAuthority()),
-    retry(() => airdrop.airdropStart()),
+    retry(() => airdrop.claimsOpenAt()),
     retry(() => airdrop.AIRDROP_TOTAL_SUPPLY()),
-    retry(() => airdrop.airdropClaimedTotal()),
+    retry(() => airdrop.airdropLoadedTotal()),
   ]);
+  if (opensAt !== 0n) {
+    problems.push(`loading is finalized (claims open at ${new Date(Number(opensAt) * 1000).toISOString()}); ` +
+      `loadAirdropBatch would revert AirdropLoadingClosed`);
+  }
 
   // Already allocated on chain? loadAirdropBatch reverts the WHOLE batch on the
   // first duplicate, so one stale entry wastes the run. Cheaper to say so here.
@@ -144,27 +137,20 @@ async function main() {
   }
 
   const total = entries.reduce((a, e) => a + e.wei, 0n);
-  const now = BigInt((await retry(() => provider.getBlock('latest'))).timestamp);
-  const elapsed = now - BigInt(start);
-  const vestedPct = elapsed >= VEST_SECONDS ? 1 : Number(elapsed) / Number(VEST_SECONDS);
 
   console.log(`\n  airdrop        ${airdropAddr}`);
   console.log(`  loader         ${admin}`);
   console.log(`  cap            ${ethers.formatEther(cap)} SATORI`);
-  console.log(`  claimed so far ${ethers.formatEther(claimedTotal)} SATORI`);
-  console.log(`  vest clock     ${(Number(elapsed) / 86400).toFixed(2)} of 1825 days ` +
-              `(a sixth of any allocation, plus ${(vestedPct * 100).toFixed(4)}% of the rest, is claimable immediately)\n`);
+  console.log(`  loaded so far  ${ethers.formatEther(loadedTotal)} SATORI\n`);
 
   console.log(`  batch: ${entries.length} recipient(s), ${ethers.formatEther(total)} SATORI total`);
-  for (const e of entries) {
-    const immediate = vestedOf(e.wei, elapsed);
-    console.log(`    ${e.addr}  ${ethers.formatEther(e.wei)}  ` +
-                `(~${ethers.formatEther(immediate)} claimable at once)`);
-  }
+  for (const e of entries) console.log(`    ${e.addr}  ${ethers.formatEther(e.wei)}`);
 
-  if (total + claimedTotal > cap) {
-    problems.push(`batch total exceeds the remaining cap ` +
-      `(${ethers.formatEther(total)} + ${ethers.formatEther(claimedTotal)} > ${ethers.formatEther(cap)})`);
+  // Against what is LOADED, not what is claimed: nothing is claimed while the
+  // table is still being loaded, so a claimed-based check would never fire.
+  if (total + loadedTotal > cap) {
+    problems.push(`batch would take the loaded table past the cap ` +
+      `(${ethers.formatEther(total)} + ${ethers.formatEther(loadedTotal)} > ${ethers.formatEther(cap)})`);
   }
 
   if (problems.length) {

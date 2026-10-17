@@ -1,5 +1,4 @@
 import { renderHook, act } from '@testing-library/react';
-import { ethers } from 'ethers';
 import { useVoting } from './useVoting';
 import { signPermit } from '../lib/permit';
 
@@ -52,7 +51,6 @@ beforeEach(() => {
         getAddress: async () => TOKEN,
         runner: { getNetwork: async () => ({ chainId: BigInt(31337) }) },
       },
-      registry: { nextStreamId: async () => BigInt(5) },
       satori: { [SIG5]: { staticCall: jest.fn(async () => undefined) } },
     },
     cached: { live: {
@@ -70,9 +68,8 @@ test('a named create sends the name as given, with no fee permit and no allowanc
   expect(signPermit).not.toHaveBeenCalled();
   expect(mockContracts.reads.token.allowance).not.toHaveBeenCalled();
   expect(mockContracts.hub.createAdapterDataStreamWithPermit).not.toHaveBeenCalled();
-  const config = ethers.AbiCoder.defaultAbiCoder().encode(['uint32'], [5]);
-  expect(mockContracts.reads.satori[SIG5].staticCall).toHaveBeenCalledWith('bitcoin', NAMED_ID, ENGINE, config, 60, { from: ME });
-  expect(mockContracts.satori[SIG5]).toHaveBeenCalledWith('bitcoin', NAMED_ID, ENGINE, config, 60);
+  expect(mockContracts.reads.satori[SIG5].staticCall).toHaveBeenCalledWith('bitcoin', NAMED_ID, ENGINE, '0x', 60, { from: ME });
+  expect(mockContracts.satori[SIG5]).toHaveBeenCalledWith('bitcoin', NAMED_ID, ENGINE, '0x', 60);
 });
 
 test('a named create keeps capitals the form chose to keep', async () => {

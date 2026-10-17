@@ -179,14 +179,12 @@ async function createUniswapStream(satoriContract, name, pool, _authority, caden
   );
 }
 
-// A named stream: provider is the ENGINE, config binds the stream id being
-// created (the adapter checks it against registry.nextStreamId()), cadence is
-// fixed at 60. Goes through `fix.satori` so the auto-created game is approved.
+// A named stream: provider is the ENGINE, config is empty (the registry writes
+// the stream's own id), cadence is fixed at 60. Goes through `fix.satori` so the
+// auto-created game is approved.
 async function createNamedStream(fix, name, signer = fix.owner) {
-  const sid = await fix.registry.nextStreamId();
-  const config = _coder.encode(["uint32"], [sid]);
   return fix.satori.connect(signer)["createAdapterDataStream(string,uint16,address,bytes,uint24)"](
-    name, fix.namedAdapterId, await fix.engine.getAddress(), config, 60
+    name, fix.namedAdapterId, await fix.engine.getAddress(), "0x", 60
   );
 }
 

@@ -33,7 +33,7 @@ const CONSUMED = {
     'NameUpdated', 'ProviderChanged',
   ],
   SatoriGames: ['GameCreated', 'GameNameUpdated', 'GameAuthorityTransferred'],
-  SatoriAirdrop: ['AirdropAllocated', 'AirdropClaimed', 'AirdropClaimedEarly'],
+  SatoriAirdrop: ['AirdropAllocated', 'AirdropClaimed'],
 };
 
 const ARTIFACTS = path.join(__dirname, '..', 'artifacts', 'contracts');

@@ -78,6 +78,11 @@
     },
     {
       "inputs": [],
+      "name": "NamedStreamConfig",
+      "type": "error"
+    },
+    {
+      "inputs": [],
       "name": "NonMonotonicRound",
       "type": "error"
     },

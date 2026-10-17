@@ -19,6 +19,7 @@ import "./next/SatoriUUPS.sol";
 interface IRegistryForBounties {
     function getFirstValueAfter(uint32 streamId, uint256 afterHour)
         external view returns (int232 valueB, bool found, bool anchorEvicted);
+    function isNamedStream(uint32 streamId) external view returns (bool);
 }
 
 /// @dev SATORI's ERC-1271 permit overload (arbitrary-length signature), distinct
@@ -99,10 +100,9 @@ contract SatoriBounties is ISatoriBounties, ReentrancyGuard, SatoriUUPS {
 
     mapping(address => address[]) public userStakedTokens;
 
-    /// @notice Stake-weighted boost accumulator per (game, round, key, token) —
-    ///         the pari-mutuel denominator for the winning key. `key` is the
-    ///         outcome group (binary games pass `uint96(direction)`); adapter
-    ///         games use `_adapterBountyTotal` instead.
+    /// @notice Stake-weighted boost accumulator per (game, round, key, token).
+    ///         `key` is the binary direction; the payout denominator is the sum
+    ///         over BOTH directions. Adapter games use `_adapterBountyTotal`.
     mapping(uint32 =>
         mapping(uint32 =>
             mapping(uint96 =>
@@ -194,6 +194,7 @@ contract SatoriBounties is ISatoriBounties, ReentrancyGuard, SatoriUUPS {
     error NothingToReclaim();
     error RoundNotEvicted();
     error StakeLocked();
+    error NamedGame();
 
     // ========== Modifiers ==========
 
@@ -343,6 +344,13 @@ contract SatoriBounties is ISatoriBounties, ReentrancyGuard, SatoriUUPS {
 
         address games = ISatoriCore(satoriCore).satoriGames();
         if (!ISatoriGames(games).gameExists(gameId)) revert UnknownStream();
+        // A named game's flow moves its own value, so a crowd that agrees wins
+        // together; SatoriRewards pays it pari-mutuel for that reason, and a
+        // stake-share bounty would pay the agreement the mint refuses to.
+        address registry = ISatoriCore(satoriCore).satoriRegistry();
+        if (IRegistryForBounties(registry).isNamedStream(ISatoriGames(games).dataStreamId(gameId))) {
+            revert NamedGame();
+        }
 
         bool isFirstFundForToken = !_gameTokenSeen[gameId][token];
 
@@ -499,8 +507,7 @@ contract SatoriBounties is ISatoriBounties, ReentrancyGuard, SatoriUUPS {
     function creditBountyForWin(
         address user,
         uint32 gameId,
-        uint32 round,
-        uint96 key
+        uint32 round
     ) external override onlyRewards {
         address[] storage toks = boostedTokensInRound[user][round];
         uint256 n = toks.length;
@@ -516,7 +523,7 @@ contract SatoriBounties is ISatoriBounties, ReentrancyGuard, SatoriUUPS {
             // returns when this game's snapshot is zero (so a token snapshotted
             // for a DIFFERENT game this round is skipped there).
             _dripTokenForRound(gameId, round, tk);
-            _accrueBountyForWinToken(user, gameId, round, key, tk);
+            _accrueBountyForWinToken(user, gameId, round, tk);
         }
     }
 
@@ -545,10 +552,6 @@ contract SatoriBounties is ISatoriBounties, ReentrancyGuard, SatoriUUPS {
 
         uint256 newPool = p - actualDrip;
         pool[gameId][tk] = newPool;
-        // Conservation (Σ payout shares ≤ pot): every correct prediction for a
-        // (game, round) shares ONE winning direction, so Σ userBoost ≤ totalBoost
-        // for that direction, and the rewards side only credits the winning
-        // direction's total.
         roundBountyPot[gameId][round][tk] += actualDrip;
 
         if (newPool == 0) {
@@ -565,7 +568,6 @@ contract SatoriBounties is ISatoriBounties, ReentrancyGuard, SatoriUUPS {
         address user,
         uint32 gameId,
         uint32 round,
-        uint96 key,
         address tk
     ) internal {
         uint256 pot = roundBountyPot[gameId][round][tk];
@@ -574,7 +576,10 @@ contract SatoriBounties is ISatoriBounties, ReentrancyGuard, SatoriUUPS {
         uint256 userBoost = boostStakeForPrediction[user][gameId][round][tk];
         if (userBoost == 0) return;
 
-        uint256 totalBoost = _totalBoostStakeByKey[gameId][round][key][tk];
+        // Both directions can win one round: each prediction scores its own 24h
+        // window (SatoriEngine settle). Dividing by both sides keeps Σ share ≤ pot.
+        uint256 totalBoost = _totalBoostStakeByKey[gameId][round][1][tk]
+            + _totalBoostStakeByKey[gameId][round][2][tk];
         if (totalBoost == 0) return;
 
         uint256 share = Math.mulDiv(pot, userBoost, totalBoost);
@@ -703,10 +708,6 @@ contract SatoriBounties is ISatoriBounties, ReentrancyGuard, SatoriUUPS {
             if (pool[gameId][tk] == 0 || ratePerRound[gameId][tk] == 0) continue;
             uint256 weightedBoost = boost * multiplier;
             _totalBoostStakeByKey[gameId][r][key][tk] += weightedBoost;
-            // Asymmetry: the key-keyed total accumulates (+=) across predictors,
-            // while this per-user snapshot is key-LESS and ASSIGNED (=). Safe: at
-            // settle only the WINNING key is credited, so a user's snapshot can
-            // only match the one key total it contributed to.
             boostStakeForPrediction[user][gameId][round][tk] = weightedBoost;
             boosted = true;
             // Record tk in this round's boosted-token set so score-time payout

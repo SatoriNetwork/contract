@@ -45,6 +45,11 @@ export function openDb(dbPath: string): Database.Database {
     "SELECT COUNT(*) AS n FROM pragma_table_info('bounty_funded') WHERE name = 'new_pool'"
   ).get() as { n: number };
   if (staleFunded.n === 0) db.exec('DROP TABLE IF EXISTS bounty_funded');
+  // And for prediction_made gaining hour (v13).
+  const staleMade = db.prepare(
+    "SELECT COUNT(*) AS n FROM pragma_table_info('prediction_made') WHERE name = 'hour'"
+  ).get() as { n: number };
+  if (staleMade.n === 0) db.exec('DROP TABLE IF EXISTS prediction_made');
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS meta (
@@ -78,9 +83,11 @@ export function openDb(dbPath: string): Database.Database {
       streak    INTEGER NOT NULL,
       power_wei TEXT NOT NULL,
       power_eth REAL NOT NULL,
+      hour      INTEGER NOT NULL,
       PRIMARY KEY (block, log_index)
     );
     CREATE INDEX IF NOT EXISTS idx_made_game_round ON prediction_made (game_id, round);
+    CREATE INDEX IF NOT EXISTS idx_made_predictor_game ON prediction_made (predictor, game_id, hour DESC);
 
     -- Terminal outcomes that are NOT a win or a loss. A prediction reaching any
     -- of these is finished; without them the dapp cannot tell "finally judged,

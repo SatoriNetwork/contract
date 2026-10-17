@@ -8,7 +8,7 @@ pragma solidity ^0.8.20;
 library SatoriTypes {
     // ========== Constants ==========
 
-    /// @notice One-time vesting-airdrop ceiling, the TEST-SIDE mirror of
+    /// @notice One-time airdrop ceiling, the TEST-SIDE mirror of
     ///         `SatoriToken.AIRDROP_TOTAL_SUPPLY`. The token's copy is the one
     ///         enforced (it caps `airdropMint`), and `SatoriAirdrop` reads it
     ///         from the token rather than from here; this constant exists so the

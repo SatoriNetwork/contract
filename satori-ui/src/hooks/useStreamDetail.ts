@@ -113,7 +113,7 @@ export function useStreamDetail(streamId: number | null) {
             // would build an undefined filter and throw.
             contract: contracts.engine,
             eventName: 'PredictionMade',
-            // PredictionMade(predictor, gameId, round, direction, streak, power).
+            // PredictionMade(predictor, gameId, round, direction, streak, power, hour).
             // The 2nd indexed topic is the gameId — filterArgs [null, gameId].
             filterArgs: [null, gameId],
             fromBlock,

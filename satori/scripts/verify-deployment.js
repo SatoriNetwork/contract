@@ -205,7 +205,7 @@ async function main() {
     // if the pointer is wrong — which is exactly what it is here to catch.
     ["airdrop AIRDROP_TOTAL_SUPPLY reads the token's", async () =>
       (await airdrop.AIRDROP_TOTAL_SUPPLY()) === (await token.AIRDROP_TOTAL_SUPPLY())],
-    ["airdrop vest anchored", async () => (await airdrop.airdropStart()) > 0n],
+    ["airdrop CLAIM_DELAY == 1 day", async () => (await airdrop.CLAIM_DELAY()) === 86400n],
     ["HOME_CHAIN_ID == this chain", async () =>
       Number(await token.HOME_CHAIN_ID()) === chainId],
     ["deploymentRound is set", async () => (await token.deploymentRound()) > 0n],
@@ -273,7 +273,7 @@ async function main() {
     await safe("airdrop.loader", () => airdrop.airdropAuthority()),
     await safe("airdrop.loadedTotal", () => airdrop.airdropLoadedTotal(), eth),
     await safe("airdrop.loadingFinalized", () => airdrop.airdropLoadingFinalized()),
-    await safe("airdrop.earlyClaimEnabled", () => airdrop.earlyClaimEnabled()),
+    await safe("airdrop.claimsOpenAt", () => airdrop.claimsOpenAt()),
     await safe("token.airdropFrozen", () => token.airdropFrozen()),
     await safe("bridgeAuthority", () => token.bridgeAuthority()),
     await safe("streams", () => registry.getDataStreamCount()),

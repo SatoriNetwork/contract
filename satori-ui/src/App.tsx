@@ -51,6 +51,8 @@ import { resolveStreamAdapterUI, type StreamValueDisplay } from './lib/streamAda
 import { orientationOf, directionToChain, rememberOrientation } from './lib/streamOrientation';
 import './index.css';
 import { getCurrentRound, calibrateRound } from './lib/chainValues';
+import { currentHour } from './lib/round';
+import { predictGate, reopenTime } from './lib/predictGate';
 import { streamValueDisplayFor, DEFAULT_STREAM_ID } from './lib/defaultStreamSeries';
 import { describeStream } from './lib/streamDescription';
 import { afterTx } from './lib/afterTx';
@@ -339,49 +341,14 @@ function App() {
     contracts.satori.deploymentRound().then((r: any) => setDeploymentRound(Number(r))).catch(() => {});
   }, [contracts]);
 
-  // Client-side mirror of the engine's predict gate. PredictExpired is DELETED:
-  // a prediction works ANY moment — its target is a known duration from the
-  // moment it is made — and the only gates left are
-  //   - StaleValue: the stream must have written a value SINCE your last
-  //     prediction (streamLastHour > lastPredHour),
-  //   - DuplicatePrediction: one prediction per stream per 24h round
-  //     (floor(lastPredHour/24) != currentRound),
-  //   - and, for games with targetMinutes > 1440, once per target period
-  //     (nowHour >= lastPredHour + targetMinutes/60).
-  // We mirror what we can from data already loaded, so a pick that must revert
-  // is grayed out and dropped from the batch instead of reverting it. Unknown →
-  // treat as active and let the contract (via the preflight) be the backstop.
-  //
-  // TODO(hooks): the engine's exact lastPredHour for (user, gameId) is not
-  // exposed by any hook — dashboard predictions carry only `roundMade` (day
-  // granularity). Until an engine.predictions/lastPredictionHour read lands,
-  // the StaleValue half is approximated at round granularity (a stream write
-  // in a LATER round than the prediction is definitely a fresh write; a write
-  // in the SAME round is treated as stale, since predicting after seeing the
-  // newest value is the overwhelmingly common order), and the
-  // once-per-target-period gate for targetMinutes > 1440 is not mirrored at
-  // all — the preflight names that revert instead.
-  const isActiveThisRound = useCallback((streamId: number): boolean => {
-    // Exception: the default stream (SatoriEngine.DEFAULT_STREAM_ID == 1) is ALWAYS
-    // predictable (unless already predicted this round). `predict` calls
-    // flushDefaultStream() at the top of _predictMultipleWithPayloads
-    // (SatoriEngine) — which stamps the default stream's value — BEFORE the
-    // staleness check, so the act of predicting makes it fresh.
-    const lastPred = dashboard.data?.recentPredictions.find((p) => p.streamId === streamId);
-    if (streamId === DEFAULT_STREAM_ID) {
-      return !(lastPred && currentRound != null && lastPred.roundMade === Number(currentRound));
-    }
-    const s = streamList.streams.find((x) => x.id === streamId);
-    if (!s) return true;
-    // Never ticked: there is no anchor value to predict against.
-    if (s.valueHour <= 0) return false;
-    if (!lastPred) return true;
-    // DuplicatePrediction: already predicted this stream in the current round.
-    if (currentRound != null && lastPred.roundMade === Number(currentRound)) return false;
-    // StaleValue, at the granularity we have: the stream's newest write must
-    // land in a round AFTER the last prediction's.
-    return Math.floor(s.valueHour / 24) > lastPred.roundMade;
-  }, [currentRound, streamList.streams, dashboard.data]);
+  const gateFor = useCallback((streamId: number) => predictGate(
+    streamId,
+    streamList.streams.find((x) => x.id === streamId),
+    dashboard.data?.recentPredictions.find((p) => p.streamId === streamId),
+    currentRound != null ? Number(currentRound) : null,
+    currentHour(),
+  ), [currentRound, streamList.streams, dashboard.data]);
+  const isActiveThisRound = useCallback((streamId: number) => gateFor(streamId).active, [gateFor]);
 
   // How many queued picks will actually be sent (drives the Submit label/enable).
   const activePredictionCount = flow.predictions.filter((p) => isActiveThisRound(p.streamId)).length;
@@ -957,7 +924,8 @@ function App() {
                     <div className="space-y-2">
                       {flow.predictions.map((p) => {
                         const s = streamList.streams.find((s) => s.id === p.streamId);
-                        const active = isActiveThisRound(p.streamId);
+                        const gate = gateFor(p.streamId);
+                        const active = gate.active;
                         // Cadence badge — the same purple chip as the chart
                         // header.
                         const cadenceLabel = s ? formatCadenceLabel(s.minCadenceMinutes) : null;
@@ -1000,7 +968,14 @@ function App() {
                             triggerClassName="w-full flex items-center justify-between gap-2 bg-gray-800/40 text-gray-500 rounded px-3 py-2 text-sm text-left cursor-help"
                             trigger={inner}
                           >
-                            This stream can&apos;t take a prediction right now, so it&apos;ll be skipped when you submit. Either it hasn&apos;t published a new value since your last prediction on it, or you&apos;ve already predicted it this round \u2014 one prediction per stream per 24-hour round.
+                            {s?.isNamed ? (
+                              <>
+                                This stream can&apos;t take a prediction right now, so it&apos;ll be skipped when you submit. Named streams take one call per 24 hours.
+                                {gate.reopenHour != null && <> You can call this one again at {reopenTime(gate.reopenHour, currentHour())}.</>}
+                              </>
+                            ) : (
+                              <>This stream can&apos;t take a prediction right now, so it&apos;ll be skipped when you submit. Either it hasn&apos;t published a new value since your last prediction on it, or you&apos;ve already predicted it this round: one prediction per stream per 24-hour round.</>
+                            )}
                           </InfoTip>
                         );
                       })}

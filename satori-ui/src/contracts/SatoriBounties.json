@@ -33,6 +33,11 @@
     },
     {
       "inputs": [],
+      "name": "NamedGame",
+      "type": "error"
+    },
+    {
+      "inputs": [],
       "name": "NotDrained",
       "type": "error"
     },
@@ -676,11 +681,6 @@
           "internalType": "uint32",
           "name": "round",
           "type": "uint32"
-        },
-        {
-          "internalType": "uint96",
-          "name": "key",
-          "type": "uint96"
         }
       ],
       "name": "creditBountyForWin",

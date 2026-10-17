@@ -1,7 +1,7 @@
 import express from 'express';
 import type Database from 'better-sqlite3';
 import { Indexer } from './indexer';
-import { leaderboard, sentiment, bountyPairs, referrals, referredBy, predictionOutcomes, streams, streamValues, games, gameVotes, namedAdapterId, curveConfig, rewardsLedger, roundBudget, delegation } from './views';
+import { leaderboard, sentiment, bountyPairs, referrals, referredBy, predictionOutcomes, lastPredictions, streams, streamValues, games, gameVotes, namedAdapterId, curveConfig, rewardsLedger, roundBudget, delegation } from './views';
 import { EVENT_TABLES } from './db';
 
 // Read-only JSON API. Public data, GET-only, permissive CORS (the dapp is a
@@ -147,6 +147,12 @@ export function makeServer(
     if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) { res.status(400).json({ error: 'bad address' }); return; }
     const limit = Math.min(Number(req.query.limit ?? 200) || 200, 1000);
     res.json(predictionOutcomes(db, addr, limit));
+  });
+
+  app.get('/predictions/:address/last', (req, res) => {
+    const addr = String(req.params.address ?? '');
+    if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) { res.status(400).json({ error: 'bad address' }); return; }
+    res.json(lastPredictions(db, addr));
   });
 
   app.get('/leaderboard', (req, res) => {

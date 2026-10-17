@@ -156,15 +156,19 @@ describe("Bounty fee + payout simulation (end-to-end, demo ERC-20)", function ()
     const bobEarned = (await bounties.bountyStake(bob.address, memeAddr)) - E(100);
     const carolEarned = (await bounties.bountyStake(carol.address, memeAddr)) - E(200);
 
-    // One round scored ⇒ drip = RATE. Winners are UP stakers only:
-    // total winning stake = 300 + 100 = 400. Alice 3/4, Bob 1/4. Carol (DOWN) 0.
+    // One round scored ⇒ drip = RATE, shared over the stake on BOTH sides
+    // (300 + 100 + 200 = 600): each prediction scores its own window, so UP
+    // and DOWN could both have won. Alice 3/6, Bob 1/6, Carol (wrong) 0.
     const drip = RATE;
     const TOL = E("0.01");
-    expect(aliceEarned).to.be.closeTo((drip * 300n) / 400n, TOL, "Alice gets 3/4 of the drip");
-    expect(bobEarned).to.be.closeTo((drip * 100n) / 400n, TOL, "Bob gets 1/4 of the drip");
+    expect(aliceEarned).to.be.closeTo((drip * 300n) / 600n, TOL, "Alice gets 3/6 of the drip");
+    expect(bobEarned).to.be.closeTo((drip * 100n) / 600n, TOL, "Bob gets 1/6 of the drip");
     expect(carolEarned).to.equal(0n, "wrong-direction staker earns nothing");
-    // Winners split the WHOLE drip (no payout fee, no leakage).
-    expect(aliceEarned + bobEarned).to.be.closeTo(drip, TOL, "winners together take the full drip");
+    // Carol's 2/6 stays in the round's pot for reclaimStrandedPot (no leakage).
+    const round = (await satori.getCurrentRound()) - 2n;
+    expect(await bounties.roundBountyPot(stream, round, memeAddr)
+      - await bounties.roundBountyPotClaimed(stream, round, memeAddr))
+      .to.be.closeTo((drip * 200n) / 600n, TOL, "the wrong call's share stays in the pot");
     // The platform fee recipient never receives bounty tokens (payout fee removed).
     expect(await bounties.bountyStake(feeRecipient, memeAddr)).to.equal(0n);
   });

@@ -15,11 +15,12 @@ interface ISatoriAirdropToken {
 
 /**
  * @title SatoriAirdrop
- * @notice The one-time vesting drip, in its own contract with no proxy and no
- *         upgrade path. A table of allocations vests linearly over five years
- *         from the construction block; each claim mints the newly-vested slice
- *         through the token's separate `airdropMint` door, so the airdrop
- *         never touches the per-round reward cap and the supply identity is
+ * @notice The one-time airdrop, in its own contract with no proxy and no
+ *         upgrade path. The loader writes a table of allocations in batches and
+ *         finalizes it; `CLAIM_DELAY` after finalizing, every recipient can claim
+ *         their whole allocation at once. Each claim mints through the token's
+ *         separate `airdropMint` door, so the airdrop never touches the
+ *         per-round reward cap and the supply identity is
  *         `totalSupply == totalRewardsMinted + airdropMinted`.
  *
  *         Nothing here copies a number the token already holds: the ceiling,
@@ -29,40 +30,29 @@ interface ISatoriAirdropToken {
 contract SatoriAirdrop {
     ISatoriAirdropToken public immutable token;
 
-    /// The single vest anchor for every recipient: the construction block. A
-    /// recipient loaded later is back-vested off it. An immutable, because
-    /// there is no proxy to re-anchor it on.
-    uint64 public immutable airdropStart;
+    /// Between finalizing and the first claim. Nothing is minted in it and,
+    /// until `token.freezeAirdrop`, the token can still be re-pointed, so a
+    /// wrong table found in this day is replaced rather than paid.
+    uint256 public constant CLAIM_DELAY = 1 days;
 
-    uint256 public constant AIRDROP_VEST = 1825 days;
-    /// The share available the moment an allocation exists: one sixth.
-    uint256 public constant UPFRONT_DIVISOR = 6;
-
-    /// Per-recipient lifetime allocation. Written once per recipient, never
-    /// edited, never removed.
+    /// Per-recipient allocation. Written once per recipient, never edited,
+    /// never removed.
     mapping(address => uint256) public airdropAllocation;
     /// Running sum of every loaded allocation. Nothing on-chain checks it
     /// against the ceiling: the loader verifies `<= AIRDROP_TOTAL_SUPPLY()`
     /// off-chain as it loads, because an over-loaded table does not over-mint
     /// (the token cap holds) but it does lock out the last claimers.
     uint256 public airdropLoadedTotal;
-    bool public airdropLoadingFinalized;
+    /// Zero until `finalizeAirdropLoading`; then the moment claims open.
+    uint64 public claimsOpenAt;
     /// Who may load and finalize. Seeded at construction; rotated by its holder
     /// or recalled by the token's appoint authority. There is no admin behind
     /// it to fall back to, so zero is rejected.
     address public airdropAuthority;
-    /// The early-claim door, OFF by default. A reversible switch held by the
-    /// loader role — the one mutable lever in this contract, and it gates a
-    /// feature, never the schedule: switching it off strands nobody, it only
-    /// returns them to the plain drip.
-    bool public earlyClaimEnabled;
 
-    event AirdropClaimed(address indexed user, uint256 amount, uint256 vestedToDate);
+    event AirdropClaimed(address indexed user, uint256 amount);
     event AirdropAllocated(address indexed recipient, uint256 amount);
-    /// `newAllocation` is the shrunk allocation, equal to everything ever minted to `user`.
-    event AirdropClaimedEarly(address indexed user, uint256 paid, uint256 forfeited, uint256 newAllocation);
-    event EarlyClaimEnabledSet(bool enabled);
-    event AirdropLoadingFinalized(uint256 totalLoaded);
+    event AirdropLoadingFinalized(uint256 totalLoaded, uint64 claimsOpenAt);
     event AirdropAuthorityChanged(address indexed oldHolder, address indexed newHolder);
 
     error Unauthorized();
@@ -72,12 +62,11 @@ contract SatoriAirdrop {
     error NothingToClaim();
     error AirdropLoadingClosed();
     error AlreadySet();
-    error EarlyClaimDisabled();
+    error ClaimsNotOpen();
 
     constructor(address token_, address authority_) {
         if (token_ == address(0) || authority_ == address(0)) revert BadInput();
         token = ISatoriAirdropToken(token_);
-        airdropStart = uint64(block.timestamp);
         airdropAuthority = authority_;
         emit AirdropAuthorityChanged(address(0), authority_);
     }
@@ -88,7 +77,7 @@ contract SatoriAirdrop {
 
     function loadAirdropBatch(address[] calldata recipients, uint256[] calldata amounts) external {
         if (msg.sender != airdropAuthority) revert Unauthorized();
-        if (airdropLoadingFinalized) revert AirdropLoadingClosed();
+        if (claimsOpenAt != 0) revert AirdropLoadingClosed();
         if (recipients.length != amounts.length) revert LengthMismatch();
         uint256 added;
         for (uint256 i = 0; i < recipients.length; i++) {
@@ -104,19 +93,18 @@ contract SatoriAirdrop {
         airdropLoadedTotal += added;
     }
 
-    /// Optional one-shot: close loading forever so the world can know the
-    /// table is complete. Claiming never reads this.
+    /// One-shot: closes loading forever and opens claims `CLAIM_DELAY` later.
+    /// Nothing is claimable until this is called.
     function finalizeAirdropLoading() external {
         if (msg.sender != airdropAuthority) revert Unauthorized();
-        if (airdropLoadingFinalized) revert AlreadySet();
-        airdropLoadingFinalized = true;
-        emit AirdropLoadingFinalized(airdropLoadedTotal);
+        if (claimsOpenAt != 0) revert AlreadySet();
+        uint64 opens = uint64(block.timestamp + CLAIM_DELAY);
+        claimsOpenAt = opens;
+        emit AirdropLoadingFinalized(airdropLoadedTotal, opens);
     }
 
-    function setEarlyClaimEnabled(bool enabled) external {
-        if (msg.sender != airdropAuthority) revert Unauthorized();
-        earlyClaimEnabled = enabled;
-        emit EarlyClaimEnabledSet(enabled);
+    function airdropLoadingFinalized() external view returns (bool) {
+        return claimsOpenAt != 0;
     }
 
     function setAirdropAuthority(address who) external {
@@ -133,6 +121,7 @@ contract SatoriAirdrop {
     // ------------------------------------------------------------------
 
     function claimAirdrop() external {
+        _requireOpen();
         if (_claimAirdrop(msg.sender) == 0) revert NothingToClaim();
     }
 
@@ -140,6 +129,7 @@ contract SatoriAirdrop {
     /// is pinned to `user`: a caller can only move tokens TOWARD the allocated
     /// recipient, never redirect them.
     function claimAirdropFor(address user) external {
+        _requireOpen();
         if (_claimAirdrop(user) == 0) revert NothingToClaim();
     }
 
@@ -148,36 +138,24 @@ contract SatoriAirdrop {
     /// re-run is harmless. Returns what it minted so a `staticCall` can price
     /// the run first.
     function claimAirdropForMany(address[] calldata users) external returns (uint256 total) {
+        _requireOpen();
         for (uint256 i = 0; i < users.length; i++) {
             total += _claimAirdrop(users[i]);
         }
     }
 
-    function _claimAirdrop(address user) private returns (uint256 claimable) {
-        uint256 vested = airdropVested(user);
-        uint256 already = token.airdropMintedTo(user);
-        if (vested <= already) return 0;
-        claimable = vested - already;
-        token.airdropMint(user, claimable);
-        emit AirdropClaimed(user, claimable, vested);
+    function _requireOpen() private view {
+        uint256 opens = claimsOpenAt;
+        if (opens == 0 || block.timestamp < opens) revert ClaimsNotOpen();
     }
 
-    /// Take everything now: the drip slice at full value, then the locked
-    /// remainder at the elapsed fraction of the window, forfeiting the rest
-    /// forever (docs/issues/airdrop-early-claim.md). Only while the loader has
-    /// switched it on. Self-only — it destroys value, so no on-behalf door.
-    /// Reverts rather than forfeit for a zero payout. Afterwards the allocation IS what was minted, so the drip
-    /// formula saturates and nothing more ever vests.
-    function claimAirdropEarly() external returns (uint256 paid) {
-        if (!earlyClaimEnabled) revert EarlyClaimDisabled();
-        _claimAirdrop(msg.sender);
-        uint256 forfeited;
-        (paid, forfeited) = earlyClaimQuote(msg.sender);
-        if (paid == 0) revert NothingToClaim();
-        uint256 newAllocation = token.airdropMintedTo(msg.sender) + paid;
-        airdropAllocation[msg.sender] = newAllocation;
-        token.airdropMint(msg.sender, paid);
-        emit AirdropClaimedEarly(msg.sender, paid, forfeited, newAllocation);
+    function _claimAirdrop(address user) private returns (uint256 claimable) {
+        uint256 alloc = airdropAllocation[user];
+        uint256 already = token.airdropMintedTo(user);
+        if (alloc <= already) return 0;
+        claimable = alloc - already;
+        token.airdropMint(user, claimable);
+        emit AirdropClaimed(user, claimable);
     }
 
     // ------------------------------------------------------------------
@@ -185,41 +163,11 @@ contract SatoriAirdrop {
     // ------------------------------------------------------------------
 
     function claimableAirdrop(address user) external view returns (uint256) {
-        uint256 vested = airdropVested(user);
-        uint256 already = token.airdropMintedTo(user);
-        return vested > already ? vested - already : 0;
-    }
-
-    /// One sixth at once, the rest linear: `alloc/6 + (alloc - alloc/6) *
-    /// min(elapsed, VEST) / VEST`, saturating to `alloc` DIRECTLY past the
-    /// window so no wei is ever stranded by the divisions
-    /// (docs/issues/airdrop-upfront-sixth.md). Measured off the single
-    /// construction anchor, so the sixth is claimable the block after a load.
-    function airdropVested(address user) public view returns (uint256) {
+        uint256 opens = claimsOpenAt;
+        if (opens == 0 || block.timestamp < opens) return 0;
         uint256 alloc = airdropAllocation[user];
-        if (alloc == 0) return 0;
-        uint256 elapsed = block.timestamp - airdropStart;
-        if (elapsed >= AIRDROP_VEST) return alloc;
-        uint256 upfront = alloc / UPFRONT_DIVISOR;
-        return upfront + (alloc - upfront) * elapsed / AIRDROP_VEST;
-    }
-
-    /// What `claimAirdropEarly` would pay and forfeit right now, on top of the
-    /// ordinary drip slice. The remainder is taken against the LARGER of the
-    /// vested figure and the minted cursor: before a buyout they agree (a
-    /// claim never mints past vested); after one the cursor equals the shrunk
-    /// allocation, so the remainder is zero and a second buyout is impossible.
-    function earlyClaimQuote(address user) public view returns (uint256 paid, uint256 forfeited) {
-        uint256 alloc = airdropAllocation[user];
-        uint256 settled = airdropVested(user);
         uint256 already = token.airdropMintedTo(user);
-        if (already > settled) settled = already;
-        if (alloc <= settled) return (0, 0);
-        uint256 remainder = alloc - settled;
-        uint256 elapsed = block.timestamp - airdropStart;
-        if (elapsed >= AIRDROP_VEST) return (0, 0);
-        paid = remainder * elapsed / AIRDROP_VEST;
-        forfeited = remainder - paid;
+        return alloc > already ? alloc - already : 0;
     }
 
     function airdropClaimed(address user) external view returns (uint256) {

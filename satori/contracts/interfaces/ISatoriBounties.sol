@@ -16,14 +16,12 @@ interface ISatoriBounties {
     ///         predict-time boosted-token set for the round; for each funded
     ///         token, lazy-drips the pot and credits
     ///         `share = pot × userStake / totalStake` from the snapshot.
-    /// @param key  The winning outcome group (uint96). Binary games pass
-    ///             `uint96(direction)`; adapter games pass the pinned winning
-    ///             bucket. Pari-mutuel denominator is keyed by it, per token.
+    ///         `totalStake` is the boost on BOTH directions: each prediction
+    ///         scores its own window, so both can win one round.
     function creditBountyForWin(
         address user,
         uint32 gameId,
-        uint32 round,
-        uint96 key
+        uint32 round
     ) external;
 
     /// @notice Predict-time auto-boost hook. Called by `SatoriEngine._makePrediction`

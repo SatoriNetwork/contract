@@ -125,6 +125,31 @@ export function indexerPredictions(
   });
 }
 
+// --- Each game's latest prediction (the predict gate) ----------------------
+// `hour` is PredictionMade.hour, the clock hour that prediction's window opened
+// on; a named game reopens to the address at hour + 24. Null hour: a row
+// indexed before the event carried one.
+
+export interface IndexerLastPrediction {
+  gameId: number;
+  round: number;
+  hour: number | null;
+}
+
+export function indexerLastPredictions(address: string): Promise<IndexerLastPrediction[] | null> {
+  const path = `/predictions/${address.toLowerCase()}/last`;
+  return tryIndexer(path, async (base) => {
+    const rows = await fetchJson<Array<Record<string, unknown>>>(`${base}${path}`);
+    if (!Array.isArray(rows)) throw new Error('bad last-predictions shape');
+    return rows.map((r) => {
+      const gameId = Number(r.gameId);
+      const round = Number(r.round);
+      if (!Number.isFinite(gameId) || !Number.isFinite(round)) throw new Error('bad last-prediction row');
+      return { gameId, round, hour: r.hour == null ? null : Number(r.hour) };
+    });
+  });
+}
+
 // --- Leaderboard (LeaderboardTab) ---------------------------------------
 // Server view is already the client reduction: latest PredictionScored per
 // (user, gameId), streak > 0. limit=1000 is the server-side max; if the

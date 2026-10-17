@@ -31,7 +31,7 @@ export function AdminTab() {
   const [reporterAction, setReporterAction] = useState<ActionState>(null);
   const [airdropInput, setAirdropInput] = useState('');
   const [airdropAction, setAirdropAction] = useState<ActionState>(null);
-  const [earlyAction, setEarlyAction] = useState<ActionState>(null);
+  const [finalizeAction, setFinalizeAction] = useState<ActionState>(null);
 
   const [busy, setBusy] = useState<string | null>(null);
   // Game approval: games are BORN unapproved (opt-in; the default game is live
@@ -299,7 +299,7 @@ export function AdminTab() {
         />
         <Row
           title="Load Airdrop Batch"
-          subtitle={<>Seed airdrop allocations (loader-gated, on the SatoriAirdrop contract). One entry per line: <span className="font-mono">address, amount</span> (amount in SATORI). A sixth of each allocation is claimable at once, the rest vests linearly on-chain; the total is hard-capped by the contract.</>}
+          subtitle={<>Seed airdrop allocations (loader-gated, on the SatoriAirdrop contract). One entry per line: <span className="font-mono">address, amount</span> (amount in SATORI). Nothing is claimable until the airdrop is finalized; a day after that, each recipient can claim their whole allocation. The total is hard-capped by the contract.</>}
           summary={<span className="text-xs text-gray-500">admin only</span>}
           input={<textarea value={airdropInput} onChange={(e) => setAirdropInput(e.target.value)} placeholder={'0xabc…, 1000\n0xdef…, 250.5'} rows={3} className="w-full bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded px-3 py-2 text-sm font-mono" disabled={busy !== null || !owner.isAirdropHolder} />}
           action={airdropAction} onSave={onLoadAirdrop} saving={busy === 'airdrop'} disabled={!airdropInput.trim() || !owner.isAirdropHolder}
@@ -307,16 +307,19 @@ export function AdminTab() {
         />
         {data.airdropHolder !== ethers.ZeroAddress && (
           <Row
-            title="Early Airdrop Claim"
-            subtitle={<>Lets a recipient take their whole airdrop at once: the vested part in full, plus the locked remainder at the fraction of the five years already elapsed, forfeiting the rest for good. Ships <strong>off</strong>. Switching it off later strands nobody — anyone who already took the deal stays settled, everyone else keeps vesting as normal. Loader-gated.</>}
-            summary={<span className={`text-xs font-medium ${data.earlyClaimEnabled ? 'text-green-500' : 'text-gray-500'}`} data-testid="early-claim-state">{data.earlyClaimEnabled ? 'on' : 'off'}</span>}
+            title="Finalize Airdrop"
+            subtitle={<>Closes loading for good and opens claims one day later; nothing is claimable before. Check the loaded table first: once finalized, no allocation can be added or changed. Loaded so far: {fmtSatori(data.airdropLoadedTotal)} SATORI. Loader-gated.</>}
+            summary={<span className="text-xs font-medium text-gray-500" data-testid="airdrop-finalize-state">
+              {data.airdropClaimsOpenAt === BigInt(0) ? 'loading open'
+                : `claims open ${new Date(Number(data.airdropClaimsOpenAt) * 1000).toLocaleString()}`}
+            </span>}
             input={null}
-            action={earlyAction}
-            onSave={() => wrap('early', setEarlyAction, () => owner.setEarlyClaimEnabled(!data.earlyClaimEnabled),
-              data.earlyClaimEnabled ? 'Early claiming switched off' : 'Early claiming switched on')}
-            saving={busy === 'early'} disabled={!owner.isAirdropHolder}
-            saveLabel={data.earlyClaimEnabled ? 'Turn off' : 'Turn on'} saveTestId="btn-toggle-early-claim"
-            danger={!data.earlyClaimEnabled}
+            action={finalizeAction}
+            onSave={() => wrap('finalize', setFinalizeAction, () => owner.finalizeAirdropLoading(),
+              'Airdrop finalized. Claims open in one day.')}
+            saving={busy === 'finalize'} disabled={!owner.isAirdropHolder || data.airdropClaimsOpenAt !== BigInt(0)}
+            saveLabel="Finalize" saveTestId="btn-finalize-airdrop"
+            danger
           />
         )}
         <Row

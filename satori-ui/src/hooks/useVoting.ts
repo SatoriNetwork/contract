@@ -483,15 +483,9 @@ export function useVoting(active: boolean = true) {
         let config: string;
         let provider = target ?? '';
         if (kind === 'named') {
-          // nextStreamId is read UNCACHED, right before the send: it moves on
-          // every create and the adapter rejects a stale one (StreamIdMismatch).
           // Cadence 60 is forced and `explicit` set, so the 4-arg (1440)
           // overload below is never reached — it reverts for this adapter.
-          const named = namedStreamCreateArgs(
-            namedAdapterId,
-            engine,
-            Number(await contracts.reads.registry.nextStreamId()),
-          );
+          const named = namedStreamCreateArgs(namedAdapterId, engine);
           ({ adapterId, config, target: provider, cadence } = named);
           explicit = true;
         } else if (!ethers.isAddress(provider)) {

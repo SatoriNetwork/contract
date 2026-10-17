@@ -80,6 +80,14 @@ describe('the lowercase rule', () => {
     expect(submitNameOf('東京', false)).toBe('東京');
   });
 
+  // NamedStreamAdapter.nameKey reverts BadName on outer space/tab/CR/LF.
+  it('never sends a padded name', () => {
+    for (const raw of [' x', 'x ', '\tx', 'x\n', '\r\nx\t', ' x　']) {
+      expect(submitNameOf(raw, true)).toBe('x');
+      expect(submitNameOf(raw, false)).toBe('x');
+    }
+  });
+
   it('says what will be created and offers to keep the capitals', async () => {
     await mount(<Harness />);
     type('Ether');
