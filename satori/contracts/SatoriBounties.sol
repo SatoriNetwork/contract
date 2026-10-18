@@ -14,8 +14,8 @@ import "@openzeppelin/contracts/utils/math/Math.sol";
 import "./next/SatoriUUPS.sol";
 
 /// @dev `anchorEvicted` is true only once the round's anchor entry has been
-///      pushed out of the hour-keyed history ring — after which no prediction
-///      from that round can ever score a win again (design 9.5).
+///      pushed out of the hour-keyed history ring — after which no binary
+///      prediction from that round can ever score a win again (design 9.5).
 interface IRegistryForBounties {
     function getFirstValueAfter(uint32 streamId, uint256 afterHour)
         external view returns (int232 valueB, bool found, bool anchorEvicted);
@@ -125,7 +125,7 @@ contract SatoriBounties is ISatoriBounties, ReentrancyGuard, SatoriUUPS {
     mapping(uint32 => mapping(uint256 => uint256)) internal _adapterBountyTotal;
 
     /// @notice Running paid numerator per (game, round), capped at the pinned
-    ///         `bountyTotal` so Σ paid ≤ one pot.
+    ///         `bountyTotal`.
     mapping(uint32 => mapping(uint256 => uint256)) internal _adapterBountyPaid;
 
     /// @notice Per-(user, round) set of tokens the user snapshotted that round.
@@ -436,8 +436,11 @@ contract SatoriBounties is ISatoriBounties, ReentrancyGuard, SatoriUUPS {
      * @dev SAFE TRIGGER: `anchorEvicted` is true only when the round's anchor has
      *      left the ring, so no future settle can score a win and `pot - claimed`
      *      is final. Reclaiming earlier could rob a slow-but-valid winner. A late
-     *      settle cannot happen: once the anchor evicts, the engine force-finalizes
-     *      as `PredictionUnrecoverable` and never reaches `creditBountyForWin`.
+     *      binary settle cannot happen: once the anchor evicts, the engine
+     *      force-finalizes it as `PredictionUnrecoverable`. A late adapter
+     *      settle can (the engine does not gate adapter settles on the ring),
+     *      and is paid nothing: this sets claimed = pot, and `_payBounty` pays
+     *      at most pot − claimed.
      *
      *      RATE REVIVAL: a fully-drained pool has rate 0 (and may have been swept
      *      from `gameBountyTokens`). Returning residue without a rate would strand
@@ -576,24 +579,26 @@ contract SatoriBounties is ISatoriBounties, ReentrancyGuard, SatoriUUPS {
         uint256 userBoost = boostStakeForPrediction[user][gameId][round][tk];
         if (userBoost == 0) return;
 
-        // Both directions can win one round: each prediction scores its own 24h
-        // window (SatoriEngine settle). Dividing by both sides keeps Σ share ≤ pot.
+        // Both directions can win one round, so divide by both sides. The total
+        // is read live: it is final only because SatoriEngine._scorePreviousPrediction
+        // leaves a prediction pending until its round ends.
         uint256 totalBoost = _totalBoostStakeByKey[gameId][round][1][tk]
             + _totalBoostStakeByKey[gameId][round][2][tk];
         if (totalBoost == 0) return;
 
-        uint256 share = Math.mulDiv(pot, userBoost, totalBoost);
-        if (share == 0) return;
-
-        // The pot stays constant (the fixed proportional denominator); `claimed`
-        // tracks what winners took, and `reclaimStrandedPot` sweeps `pot - claimed`
-        // once the round evicts (review A5).
-        roundBountyPotClaimed[gameId][round][tk] += share;
-        _payBounty(user, gameId, round, tk, share);
+        _payBounty(user, gameId, round, tk, pot, Math.mulDiv(pot, userBoost, totalBoost));
     }
 
-    /// @dev The one place a win reaches stake, for both rails.
-    function _payBounty(address user, uint32 gameId, uint32 round, address tk, uint256 share) private {
+    /// @dev The one place a win reaches stake, for both rails. Capped at what
+    ///      the pot has left, so no settle order and no earlier reclaimStrandedPot
+    ///      can pay a round more than its pot. Saturating: a revert here would
+    ///      leave the prediction unable to settle.
+    function _payBounty(address user, uint32 gameId, uint32 round, address tk, uint256 pot, uint256 share) private {
+        uint256 claimed = roundBountyPotClaimed[gameId][round][tk];
+        if (claimed >= pot) return;
+        if (share > pot - claimed) share = pot - claimed;
+        if (share == 0) return;
+        roundBountyPotClaimed[gameId][round][tk] = claimed + share;
         uint256 newStake = bountyStake[user][tk] + share;
         if (newStake == share) userStakedTokens[user].push(tk);
         bountyStake[user][tk] = newStake;
@@ -711,8 +716,8 @@ contract SatoriBounties is ISatoriBounties, ReentrancyGuard, SatoriUUPS {
             boostStakeForPrediction[user][gameId][round][tk] = weightedBoost;
             boosted = true;
             // Record tk in this round's boosted-token set so score-time payout
-            // survives an unstake after the lock. Dedup so a token predicted
-            // across several games in one round is paid once.
+            // survives an unstake after the lock. Dedup: each game's settle walks
+            // this list, so a duplicate would pay that game twice.
             address[] storage roundToks = boostedTokensInRound[user][round];
             uint256 m = roundToks.length;
             bool seen = false;
@@ -816,13 +821,7 @@ contract SatoriBounties is ISatoriBounties, ReentrancyGuard, SatoriUUPS {
     function _accrueAdapterBounty(address user, uint32 gameId, uint256 round, address tk, uint256 num, uint256 denom) internal {
         uint256 pot = roundBountyPot[gameId][uint32(round)][tk];
         if (pot == 0) return;
-        uint256 share = Math.mulDiv(pot, num, denom);
-        if (share == 0) return;
-        // Mirror the binary rail: without recording `claimed`, reclaimStrandedPot
-        // would later sweep the ENTIRE already-paid pot back to `pool`,
-        // double-spending it (audit F2).
-        roundBountyPotClaimed[gameId][uint32(round)][tk] += share;
-        _payBounty(user, gameId, uint32(round), tk, share);
+        _payBounty(user, gameId, uint32(round), tk, pot, Math.mulDiv(pot, num, denom));
     }
 
     // ========== Bounty Views ==========

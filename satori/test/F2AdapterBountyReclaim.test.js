@@ -93,7 +93,7 @@ describe("F2 — adapter bounty payouts are tracked in claimed; reclaim cannot d
     return stakeA + stakeB + pool + unclaimed;
   }
 
-  it("keeps the bounty subsystem solvent across an adapter-game settle and reclaim", async function () {
+  it("keeps the bounty subsystem solvent across an adapter-game settle, a reclaim and a late settle", async function () {
     // Two equal winners stake, fund the adapter game's bounty, both predict YES.
     await bounties.connect(alice).stakeBountyToken(usdAddr, ethers.parseEther("100"));
     await bounties.connect(bob).stakeBountyToken(usdAddr, ethers.parseEther("100"));
@@ -132,6 +132,14 @@ describe("F2 — adapter bounty payouts are tracked in claimed; reclaim cannot d
 
     // Solvency MUST still hold after reclaim. Pre-fix, reclaim swept the full
     // already-paid pot into pool, double-counting Alice's share.
+    expect(await usd.balanceOf(bountiesAddr)).to.be.gte(await liabilities(predRound));
+
+    // M28: the adapter still resolves Bob's bet, but his share went back to
+    // the pool with the reclaim, so the late settle pays nothing.
+    const bobBefore = await bounties.bountyStake(bob.address, usdAddr);
+    await satori.connect(funder).settlePrediction(bob.address, gameId);
+    expect(await bounties.bountyStake(bob.address, usdAddr)).to.equal(bobBefore);
+    expect(await bounties.roundBountyPotClaimed(gameId, predRound, usdAddr)).to.equal(pot);
     expect(await usd.balanceOf(bountiesAddr)).to.be.gte(await liabilities(predRound));
   });
 });

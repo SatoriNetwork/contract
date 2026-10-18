@@ -841,7 +841,7 @@ contract SatoriEngine is SatoriUUPS {
             address impl = impls[i];
             _recordVotes(gameId, round);
             if (impl == address(0)) {
-                _scorePreviousPrediction(user, gameId);
+                _scorePreviousPrediction(user, gameId, round);
                 _makePrediction(user, gameId, dir, round, hourNow, thisPower, eligibleFlags[i], aboveFloor);
                 // After _makePrediction (it validates `dir`), and after the
                 // batch's updateValues above, so this hour's snapshot never
@@ -1054,7 +1054,8 @@ contract SatoriEngine is SatoriUUPS {
         (address impl, uint32 streamId) = satoriGames.gameDispatch(gameId);
         if (streamId == 0) return;
         if (impl == address(0)) {
-            for (uint256 i = 0; i < 2; i++) _scorePreviousPrediction(user, gameId);
+            uint256 nowRound = _currentRound();
+            for (uint256 i = 0; i < 2; i++) _scorePreviousPrediction(user, gameId, nowRound);
             return;
         }
         _scoreAdapterPrediction(user, gameId, impl, streamId);
@@ -1104,7 +1105,7 @@ contract SatoriEngine is SatoriUUPS {
         if (finalized) _notifyFinalized(user, uint256(roundIdx), wasBoosted);
     }
 
-    function _scorePreviousPrediction(address user, uint32 gameId) internal {
+    function _scorePreviousPrediction(address user, uint32 gameId, uint256 nowRound) internal {
         uint256 slot = userPredictions[user][gameId];
 
         uint256 predA = _predAt(slot, 0);
@@ -1123,6 +1124,10 @@ contract SatoriEngine is SatoriUUPS {
 
         uint64  predHour   = _predHour(pred);
         uint64  predRound  = uint64(uint256(predHour) / 24); // pool keying (design 9.4)
+        // Pending until its round ends, like adapter games (_scoreAdapterPrediction).
+        // Until then the round's bounty boost total (SatoriBounties.applyBoost) and
+        // weight totals still grow, and a share scored against a partial total overpays.
+        if (uint256(predRound) >= nowRound) return;
         uint8   dir        = _predDir(pred);
         uint32  streamId   = satoriGames.dataStreamId(gameId);
         bool    wasBoosted = _boostedAt(slot, idx);

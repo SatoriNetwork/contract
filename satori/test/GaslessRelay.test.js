@@ -5,8 +5,8 @@
 //   1. The signature commits to everything: user, action, params, fee, relayer,
 //      nonce, deadline. Change any of them and the relay is refused.
 //   2. Atomicity: a failed action takes no fee and consumes no nonce.
-//   3. The fee is pulled AFTER the action, so a zero-balance wallet with
-//      unclaimed rewards pays the fee out of the claim itself.
+//   3. A claim's fee is minted out of the claim itself, so a zero-balance or
+//      transfer-locked wallet with unclaimed rewards can still claim.
 //   4. Each relayed action produces the same state transition as its direct
 //      msg.sender call.
 
@@ -274,6 +274,58 @@ describe("Gasless relay", function () {
 
       expect(await token.balanceOf(relayer.address)).to.equal(relayerBefore + ONE);
       expect(await token.balanceOf(alice.address)).to.be.gt(0n); // proceeds minus fee
+    });
+  });
+
+  describe("Claim fee comes out of the claim", function () {
+    async function aliceWinsThenPredictsAgain() {
+      await registry.setValue(stream1, 100);
+      await satori.connect(alice).predictMultipleWithPayloads([{ gameId: stream1, payload: pack1(1) }]);
+      await advanceToNextRound();
+      await registry.setValue(stream1, 150);
+      await advanceToNextRound();
+      await registry.setValue(stream1, 200);
+      await engine.settlePrediction(alice.address, stream1);
+      await satori.connect(alice).predictMultipleWithPayloads([{ gameId: stream1, payload: pack1(1) }]);
+    }
+
+    it("a wallet locked by a prediction can still claim: the fee is minted from the bucket", async function () {
+      await aliceWinsThenPredictsAgain();
+      const claimData = abi.encode(["address"], [alice.address]);
+      const bucket = await rewards.unclaimedRewards(alice.address);
+      const aliceBefore = await token.balanceOf(alice.address);
+      const relayerBefore = await token.balanceOf(relayer.address);
+      const { req, sig } = await relayReq(alice, A.Claim, claimData);
+
+      await hub.connect(relayer).relay(req, sig, NO_PERMIT);
+
+      expect(await token.balanceOf(relayer.address)).to.equal(relayerBefore + ONE);
+      expect(await token.balanceOf(alice.address)).to.equal(aliceBefore + bucket - ONE);
+      expect(await rewards.unclaimedRewards(alice.address)).to.equal(0n);
+    });
+
+    it("a fee larger than the bucket refuses, takes nothing and keeps the nonce", async function () {
+      await aliceWinsThenPredictsAgain();
+      const claimData = abi.encode(["address"], [alice.address]);
+      const bucket = await rewards.unclaimedRewards(alice.address);
+      const { req, sig } = await relayReq(alice, A.Claim, claimData, { fee: bucket + 1n });
+
+      await expect(hub.connect(relayer).relay(req, sig, NO_PERMIT))
+        .to.be.revertedWithCustomError(rewards, "BadInput");
+      expect(await rewards.unclaimedRewards(alice.address)).to.equal(bucket);
+      expect(await hub.relayNonces(alice.address)).to.equal(0n);
+    });
+
+    it("a zero fee claims the whole bucket", async function () {
+      await aliceWinsThenPredictsAgain();
+      const claimData = abi.encode(["address"], [alice.address]);
+      const bucket = await rewards.unclaimedRewards(alice.address);
+      const aliceBefore = await token.balanceOf(alice.address);
+      const { req, sig } = await relayReq(alice, A.Claim, claimData, { fee: 0n });
+
+      await hub.connect(relayer).relay(req, sig, NO_PERMIT);
+
+      expect(await token.balanceOf(alice.address)).to.equal(aliceBefore + bucket);
     });
   });
 

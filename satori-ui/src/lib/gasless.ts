@@ -133,7 +133,8 @@ export async function submitRelay(opts: {
   const { relayerUrl, chainId, hubAddress, tokenAddress, reader, signer, user, spec, quote } = opts;
   const { action, data, hubPullWei } = encodeAction(spec);
   const fee = BigInt(quote.fee);
-  const needed = fee + hubPullWei;
+  // A claim's fee is minted from the claim itself (rewards.claimWithFee): no balance or allowance.
+  const needed = spec.kind === 'claim' ? hubPullWei : fee + hubPullWei;
 
   const erc20 = new ethers.Contract(tokenAddress, [
     'function balanceOf(address) view returns (uint256)',

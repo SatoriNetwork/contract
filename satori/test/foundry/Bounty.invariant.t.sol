@@ -134,6 +134,27 @@ contract BountyInvariantTest is Test {
             );
         }
     }
+
+    // INV-B4: no (game, round, token) pays out more than its pot.
+    function invariant_roundNeverPaysPastPot() public view {
+        _checkPotClaims(address(handler.bountyToken()));
+        _checkPotClaims(address(handler.bountyTokenB()));
+    }
+
+    function _checkPotClaims(address token) internal view {
+        uint256 currentRound = handler.satori().getCurrentRound();
+        uint256 deployRound = handler.satori().deploymentRound();
+        uint32 gameCountU = uint32(handler.games().gameCount());
+        for (uint32 g = 1; g <= gameCountU; g++) {
+            for (uint256 r = deployRound; r <= currentRound; r++) {
+                assertLe(
+                    handler.bounties().roundBountyPotClaimed(g, uint32(r), token),
+                    handler.bounties().roundBountyPot(g, uint32(r), token),
+                    "a round's claimed bounty cannot exceed its pot"
+                );
+            }
+        }
+    }
 }
 
 interface IERC20Like {

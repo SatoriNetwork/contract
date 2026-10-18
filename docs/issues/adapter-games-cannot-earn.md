@@ -225,7 +225,9 @@ storage           51 -> 49 slots (re-pinned deliberately)
 the H3 over-mint (a hostile adapter handing each user a tailored singleton total
 to pay everyone a full pool). There is no longer a mint path to over-mint
 through. The mirrored rails on `SatoriBounties` are untouched and still bound
-`Σ bounty ≤ pot`, which is where the reasoning still earns its keep.
+`Σ bounty ≤ pot`, which is where the reasoning still earns its keep. (True
+since the B3 share cap, 2026-10-18; before it, a settle after
+`reclaimStrandedPot` could pay twice — M28.)
 
 **Tests:** 2137 passing, down exactly 5 — the removed arithmetic's own tests.
 They had already been reduced to shape-checks: their titles read "credits the

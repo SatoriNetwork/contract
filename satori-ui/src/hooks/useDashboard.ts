@@ -313,17 +313,32 @@ export function useDashboard(streams: StreamBasic[]) {
 
   /// Permissionless: score the user's stranded prediction on a game.
   /// Useful when scoring hasn't run yet (no later predict/settle has fired
-  /// for this user on this game) and the game's B/C values are already
-  /// posted. Returns true on success, false on revert.
+  /// for this user on this game). Returns null on success, else why not.
   const settle = useCallback(async (gameId: number): Promise<string | null> => {
     if (!contracts || !address) return 'Connect a wallet to settle.';
     try {
-      // Read-path simulation first, so a revert arrives as its reason. Settle is the
-      // path where this mattered most and was worst: it used to swallow the error
-      // whole and return false, so the button just did nothing and the user was told
-      // literally nothing about why. The usual causes have real copy already —
-      // the game's B/C values are not posted yet, or the prediction is past
-      // recovery.
+      // On a binary game, settlePrediction neither reverts nor emits while the
+      // prediction's round is open or its values are not posted; it just costs
+      // gas. Every branch that does settle rewrites the prediction slot
+      // (SatoriEngine._scorePreviousPrediction), so simulate it between two
+      // reads of the slot and skip a transaction that would change nothing.
+      // Adapter games keep their bets elsewhere, so they are sent as before.
+      // The simulation runs at the latest block, which can still be in the
+      // round the History tab already shows as ended (an idle node mines no
+      // block at midnight). Then only a sent transaction reaches the new round.
+      const e = contracts.reads.engine;
+      const [dispatch, before, simulated, after, simRound] = await multicallRead(contracts.reads.multicall, [
+        { contract: contracts.reads.games, fn: 'gameDispatch', args: [gameId] },
+        { contract: e, fn: 'userPredictions', args: [address, gameId] },
+        { contract: e, fn: 'settlePrediction', args: [address, gameId], allowFailure: true },
+        { contract: e, fn: 'userPredictions', args: [address, gameId] },
+        { contract: contracts.reads.token, fn: 'getCurrentRound', args: [] },
+      ]);
+      if (dispatch[0] === ethers.ZeroAddress && simulated !== null && before === after
+          && simRound >= await getCurrentRound()) {
+        return 'Nothing to settle yet: a prediction settles after its round ends, once the stream has posted the values it is scored on.';
+      }
+      // A revert in the simulation falls through, so the preflight below reports its reason.
       const tx = await sendPreflighted(contracts.reads.satori, contracts.satori, 'settlePrediction', [address, gameId], address);
       await afterTx(tx);
       await load();

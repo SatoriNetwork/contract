@@ -956,19 +956,17 @@ contract SatoriHub is IEngineGateway, SatoriUUPS {
         )));
         if (ECDSA.recover(digest, sig) != r.user) revert BadRelaySignature();
         _tryPermitFor(r.user, p);
-        // Fee placement follows the action's lock behavior. Predict and
-        // DelegatePrediction SET the lane-A transfer lock inside the action, so
-        // their fee must leave first or the token's transfer gate refuses it.
-        // Claim sets no lock and MINTS its proceeds, so its fee comes after —
-        // letting a zero-balance wallet with unclaimed rewards pay the fee out
-        // of the claim itself. An already-locked user (a live delegation) can
-        // pay no SATORI fee either way; the relayer's policy handles those with
-        // `fee == 0` requests, which skip the transfer entirely.
+        // A claim pays its fee out of the claim (rewards mints it to the relayer),
+        // so a transfer-locked wallet can claim. Every other action pulls the fee
+        // first: Predict and DelegatePrediction set the lane-A lock inside the
+        // action, and the token's transfer gate would then refuse it.
         RelayAction a = RelayAction(r.action);
-        bool feeAfter = a == RelayAction.Claim;
-        if (!feeAfter && r.fee > 0) token.transferFrom(r.user, msg.sender, r.fee);
-        _dispatchRelay(r.user, a, r.data);
-        if (feeAfter && r.fee > 0) token.transferFrom(r.user, msg.sender, r.fee);
+        if (a == RelayAction.Claim) {
+            rewards.claimWithFee(r.user, abi.decode(r.data, (address)), msg.sender, r.fee);
+        } else {
+            if (r.fee > 0) token.transferFrom(r.user, msg.sender, r.fee);
+            _dispatchRelay(r.user, a, r.data);
+        }
         emit Relayed(r.user, msg.sender, r.action, r.nonce, r.fee);
     }
 
@@ -977,8 +975,6 @@ contract SatoriHub is IEngineGateway, SatoriUUPS {
             (address referrer, SatoriTypes.PredictionRequestWithPayload[] memory reqs) =
                 abi.decode(data, (address, SatoriTypes.PredictionRequestWithPayload[]));
             engine.predictMultipleFor(user, referrer, reqs);
-        } else if (a == RelayAction.Claim) {
-            rewards.claim(user, abi.decode(data, (address)));
         } else if (a == RelayAction.Transfer) {
             (address to, uint256 amount) = abi.decode(data, (address, uint256));
             token.transferFrom(user, to, amount);

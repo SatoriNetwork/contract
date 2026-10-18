@@ -28,7 +28,7 @@ class Settings:
 
     fee_file: str = field(default_factory=lambda: os.environ.get("FEE_FILE", "fees.json"))
     # Fallback flat fee (SATORI) when FEE_FILE is absent or unreadable.
-    flat_fee_satori: Decimal = field(default_factory=lambda: Decimal(os.environ.get("FLAT_FEE_SATORI", "0.25")))
+    flat_fee_satori: Decimal = field(default_factory=lambda: Decimal(os.environ.get("FLAT_FEE_SATORI", "0.0001")))
 
     # Per-IP sliding-window rate limit for the public endpoints.
     rate_limit_per_minute: int = field(default_factory=lambda: int(os.environ.get("RATE_LIMIT_PER_MINUTE", "30")))

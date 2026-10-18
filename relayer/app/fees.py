@@ -4,7 +4,7 @@ is enough to relay is decided here, per request.
 
 Policy lives in FEE_FILE (JSON, SATORI units as strings):
 
-    { "default": "0.25", "per_action": { "Predict": "0.5", "Claim": "0" } }
+    { "default": "0.0001", "per_action": { "Predict": "0.0002" } }
 
 The file is re-read on every quote/submit (mtime-cached), so repricing is an
 edit to that file — no restart, no deploy, no transaction."""

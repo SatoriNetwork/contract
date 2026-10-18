@@ -141,6 +141,12 @@ interface ISatoriRewards {
      */
     function claimFor(address owner, address caller, address recipient) external returns (uint256);
 
+    /**
+     * @notice Self-claim that mints `fee` to `feeTo` out of the bucket and the
+     *         remainder to `recipient`. Reverts if `fee` exceeds the bucket.
+     */
+    function claimWithFee(address owner, address recipient, address feeTo, uint256 fee) external returns (uint256);
+
     /// @notice A stream produced a value this round (registry-gated, deduped per
     ///         stream per round). Arms off-chain game pots on that stream.
     function onStreamProduced(uint32 streamId) external;

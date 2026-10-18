@@ -36,7 +36,7 @@ export const GAME_BURN_WEI = BigInt('100000000000000000');   // 0.1 ether
 /// second or two of a boundary the chain may still be on the previous round.
 /// `msUntilNextRound` therefore carries a grace period, and anything that must
 /// agree with the chain exactly at a boundary should read `getCurrentRound()`
-/// rather than compute it. Nothing in the dapp currently needs that.
+/// rather than compute it.
 export function currentRound(nowMs: number = Date.now()): number {
   return currentRoundRaw(nowMs) + roundOffset;
 }

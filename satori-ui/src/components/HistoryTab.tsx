@@ -8,8 +8,8 @@ import { currentRound } from '../lib/round';
 
 // Hours until the current round closes (next UTC midnight). A prediction made in
 // the current round cannot be settled until the round closes, so — like the
-// dashboard — History shows this wait instead of a Settle button that would just
-// revert. (Rounds close at midnight UTC; round = timestamp / 86400.)
+// dashboard — History shows this wait instead of a Settle button that would do
+// nothing. (Rounds close at midnight UTC; round = timestamp / 86400.)
 function hoursUntilRoundClose(): number {
   const now = Date.now();
   const msLeft = Math.ceil(now / 86_400_000) * 86_400_000 - now;
@@ -45,7 +45,7 @@ function OutcomeBadge({ outcome }: { outcome?: string }) {
     lost: { text: 'lost', cls: 'bg-red-600/20 text-red-400 border-red-600/40' },
     pending: {
       text: 'not scored yet', cls: 'bg-gray-600/20 text-gray-400 border-gray-600/40',
-      tip: 'Waiting on this stream to produce its next value. Normal: a slow-cadence stream can take a while.',
+      tip: 'Waiting for its round to end and for the stream to post the values it is scored on. Normal: a slow-cadence stream can take a while.',
     },
     void: {
       text: 'void', cls: 'bg-gray-600/20 text-gray-400 border-gray-600/40',
@@ -215,8 +215,8 @@ export function HistoryTab({ onSettle }: HistoryTabProps = {}) {
                   {onSettle && r.kind === 'prediction' && r.gameId != null
                     && (r.outcome == null || r.outcome === 'pending') && (
                     (r.round != null && r.round >= currentRound()) ? (
-                      // Round still open: genuinely not settleable yet (settling
-                      // would revert). Show the wait, matching the dashboard.
+                      // Round still open: not settleable yet. Show the wait,
+                      // matching the dashboard.
                       <span className="text-xs text-gray-500" data-testid={`settle-wait-${r.gameId}`}>
                         settles in ~{hoursUntilRoundClose()}h
                       </span>

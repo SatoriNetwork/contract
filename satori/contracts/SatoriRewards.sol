@@ -1283,14 +1283,23 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
      *      lives separately on `claimFor(owner, recipient)` below.
      */
     function claim(address owner, address recipient) external override onlyCore nonReentrant returns (uint256) {
-        return _claimFor(owner, owner, recipient);
+        return _claimFor(owner, owner, recipient, address(0), 0);
+    }
+
+    /// @notice Self-claim that mints `fee` of the bucket to `feeTo` and the rest
+    ///         to `recipient`. The hub's gasless relay uses it so a transfer-locked
+    ///         wallet can still pay the relayer: nothing moves out of the wallet.
+    function claimWithFee(address owner, address recipient, address feeTo, uint256 fee)
+        external override onlyCore nonReentrant returns (uint256)
+    {
+        return _claimFor(owner, owner, recipient, feeTo, fee);
     }
 
     /**
      * @notice Claim rewards for an owner to a recipient using claim delegation authorization
      */
     function claimFor(address owner, address caller, address recipient) external override onlyCore nonReentrant returns (uint256) {
-        return _claimFor(owner, caller, recipient);
+        return _claimFor(owner, caller, recipient, address(0), 0);
     }
 
     /// @dev NOTE (audit F30 — accepted, working-as-intended): `recipient` is
@@ -1302,7 +1311,7 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
     ///      `delegateClaimAbility`, and while set the owner can't self-claim). Do
     ///      NOT "fix" this by pinning the recipient to `owner` — it would break the
     ///      multi-wallet use case.
-    function _claimFor(address owner, address caller, address recipient) internal returns (uint256) {
+    function _claimFor(address owner, address caller, address recipient, address feeTo, uint256 fee) internal returns (uint256) {
         if (recipient == address(0)) revert BadInput();
         uint256 currentRound = _checkClaimAuth(owner, caller);
 
@@ -1313,13 +1322,15 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
         _accrueDelegatorRewards(owner);
 
         uint256 totalRewards = unclaimedRewards[owner];
+        if (fee > totalRewards) revert BadInput();
         if (totalRewards > 0) {
             unclaimedRewards[owner] = 0;
             // No referral split here anymore: the 5% cut is taken eagerly at
             // credit time (`_creditReward`), so `unclaimedRewards[owner]` is
             // already net of it — and the referral's own cut sits in ITS bucket,
             // to be claimed the same way. Claim simply mints the whole net bucket.
-            _rewardMint(recipient, totalRewards);
+            if (fee > 0) _rewardMint(feeTo, fee);
+            _rewardMint(recipient, totalRewards - fee);
         }
 
         emit RewardsClaimed(owner, recipient, totalRewards, currentRound);
@@ -2013,8 +2024,10 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
             // delegate has NOT predicted yet) activate immediately, so a delegation
             // made BEFORE the prediction is correctly in that round's snapshot —
             // the common, documented case. `_unsettledPredictionCount[delegate]
-            // [today] > 0` iff the delegate predicted this round (a same-round
-            // settle is impossible, so the count can only have grown);
+            // [today] > 0` iff the delegate predicted this round: the engine never
+            // finalizes a prediction inside its own round (SatoriEngine.
+            // _scorePreviousPrediction, _scoreAdapterPrediction), so the count can
+            // only have grown;
             // `_flushPool(delegate)` above already folded any DUE pending, so a
             // non-zero pending here is this round's today+1 bucket.
             uint24 activation = today;
@@ -2158,10 +2171,10 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
     uint256 internal constant LOY_RENORM_FLOOR = 1 << 96;
     uint256 internal constant LOY_RENORM_SHIFT = 32;
 
-    /// @dev FOLD LAG, in rounds. Round `r`'s outcome is not knowable at `r + 1`:
-    ///      in the band-2 (ABC) case scoring compares the first TWO stream
-    ///      values after the prediction, so such a round settles at `r + 2` at
-    ///      the earliest.
+    /// @dev FOLD LAG, in rounds. Nothing settles before `r + 1`, and the default
+    ///      game's ABC band compares the first TWO values after the prediction,
+    ///      which its stream writes at each round's first touch, so the default
+    ///      game's round `r` settles at `r + 2` at the earliest.
     ///      Freezing `q` on literal first crossing therefore froze it at ZERO for
     ///      almost every round and loyalty never grew.
     ///      NOTE: LOY_LAG = 4 is unreviewed since the scoring bands changed.
@@ -2171,8 +2184,8 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
     ///      "whenever it happens to be settled" — both the score-time denominator
     ///      and the claim walk must fold to the SAME point or they disagree and
     ///      conservation breaks. 4 rounds gives two rounds of slack over the
-    ///      normal settle at `r + 2`; a round still unsettled by then simply
-    ///      freezes at its partial `q`, which is the intended graceful
+    ///      default game's settle at `r + 2`; a round still unsettled by then
+    ///      simply freezes at its partial `q`, which is the intended graceful
     ///      degradation for slow-cadence streams (design §5) and errs low.
     uint256 internal constant LOY_LAG = 4;
 

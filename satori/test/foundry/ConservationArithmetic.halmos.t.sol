@@ -149,6 +149,7 @@ contract ConservationArithmeticHalmos is Test {
     //   else { prod = userScore*stake; bountyNum = prod > room ? room : prod; }
     //   _adapterBountyPaid = paid + bountyNum;
     //   share = mulDiv(pot, num, denom);   // denom == bt
+    //   _payBounty: capped at pot - claimed (shared with the binary rail)
     // ============================================================
 
     /// @dev Mirrors SatoriBounties.sol lines 885-887. stake==0 short-circuits to 0
@@ -189,11 +190,34 @@ contract ConservationArithmeticHalmos is Test {
         assert(newPaid <= bt);
     }
 
-    // NOTE: the final BOUNTY step `floor(pot * bountyNum / bt) <= pot` (given the
-    // proven bountyNum <= bt) is the same OUT-OF-SCOPE symbolic-divisor division
-    // documented above; left to the Foundry bounty invariant. The attackable
-    // clamp half (bountyNum <= bt, Sigma paid <= bt, no overflow/brick) IS proven
-    // by check_bountyNumNeverExceedsRoom + check_bountyPaidNeverExceedsTotal.
+    /// @dev Mirrors SatoriBounties._payBounty's cap. Returns the new `claimed`.
+    function _payCapped(uint256 pot, uint256 claimed, uint256 share)
+        internal pure returns (uint256)
+    {
+        if (claimed >= pot) return claimed;
+        if (share > pot - claimed) share = pot - claimed;
+        if (share == 0) return claimed;
+        return claimed + share;
+    }
+
+    /// PROOF: whatever share the division produces, and whatever was claimed
+    /// before (a reclaim sets claimed = pot), a payout never takes claimed past
+    /// the pot, never reverts, and never lowers claimed. For ALL symbolic inputs,
+    /// on both rails.
+    function check_payNeverExceedsPot(uint256 pot, uint256 claimed, uint256 share)
+        public pure
+    {
+        uint256 c = _payCapped(pot, claimed, share);
+        assert(c >= claimed);
+        if (claimed <= pot) assert(c <= pot);
+        else assert(c == claimed);
+    }
+
+    // NOTE: `floor(pot * bountyNum / bt) <= pot` is the same OUT-OF-SCOPE
+    // symbolic-divisor division documented above, and no longer needed for the
+    // pot bound: check_payNeverExceedsPot proves Sigma paid <= pot from the cap
+    // alone. check_bountyNumNeverExceedsRoom + check_bountyPaidNeverExceedsTotal
+    // still prove the attackable clamp half (no overflow/brick).
 
     // REMOVED: check_bountyFeeSplitConserves. The bounty PAYOUT fee (once
     // fee = share*feeBps/20000, predictorAmount = share - fee in
