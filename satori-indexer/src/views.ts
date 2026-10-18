@@ -520,6 +520,20 @@ export function roundBudget(db: Database.Database, round: number) {
   return { round, budgetWei: row?.budgetWei ?? null, frozenAtBlock: row?.block ?? null };
 }
 
+/// The off-chain (Merkle lane) emission dial in force for `round`: the latest
+/// OffchainBudgetSet made in an EARLIER round, since a change applies from the
+/// round after the one it was set in. 0 when none was ever set (the contract's
+/// default). `history` is every change, oldest first.
+export function offchainBudget(db: Database.Database, round: number) {
+  const row = db.prepare(
+    'SELECT budget_wei AS budgetWei, round_set AS roundSet, block FROM offchain_budget WHERE round_set < ? ORDER BY round_set DESC, block DESC, log_index DESC LIMIT 1'
+  ).get(round) as { budgetWei: string; roundSet: number; block: number } | undefined;
+  const history = db.prepare(
+    'SELECT round_set AS roundSet, budget_wei AS budgetWei, block, tx FROM offchain_budget ORDER BY block ASC, log_index ASC'
+  ).all();
+  return { round, budgetWei: row?.budgetWei ?? '0', setInRound: row?.roundSet ?? null, block: row?.block ?? null, history };
+}
+
 /// Who this account delegates to (null when it does not), and the inbound power
 /// it holds as a delegate (latest newDelegatePower naming it).
 export function delegation(db: Database.Database, account: string) {

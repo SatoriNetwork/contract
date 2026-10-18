@@ -6,8 +6,9 @@ import "../next/SatoriUUPS.sol";
 /// TEST-ONLY. A UUPS-installable child implementation whose delegation-sync
 /// hooks REVERT in-body. Installed on a child's own proxy via `upgradeTo` to
 /// exercise SatoriHub.onTokenTransfer's per-child try/catch resilience
-/// (ChildSyncFailed) — proving a child upgraded to a catastrophically buggy
-/// implementation cannot brick token transfers or the sibling child's sync.
+/// (ChildSyncFailed) — proving a child upgraded to an implementation whose sync
+/// reverts with a reason cannot brick token transfers. A reasonless failure is
+/// not swallowed: it reverts the transfer (DelegationSyncGas.test.js).
 /// Replaces the old `setChild(0/1, RevertingChild)` wholesale-swap mechanism
 /// (removed with setChild, audit F3): the realistic failure mode is now a bad
 /// in-place upgrade, which this reproduces exactly (same proxy, same address).

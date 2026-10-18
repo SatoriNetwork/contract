@@ -707,6 +707,24 @@ describe("SatoriToken (constitution)", function () {
       expect(await token.balanceOf(bob.address)).to.equal(10n);
     });
 
+    // Out of gas reaches the catch with no revert data, and the sender chooses
+    // the gas, so treating it as a hook failure would let anyone skip the hook.
+    it("a hook that runs out of gas reverts the transfer instead of being skipped", async function () {
+      await token.connect(controller).markParticipated(alice.address);
+      await hookMock.setMode(3);
+      await expect(token.connect(alice).transfer(bob.address, 10n, { gasLimit: 500_000 }))
+        .to.be.revertedWithCustomError(token, "HookFailedWithoutReason");
+      expect(await token.balanceOf(bob.address)).to.equal(0n);
+    });
+
+    it("a hook that fails with no revert data reverts the transfer", async function () {
+      await token.connect(controller).markParticipated(alice.address);
+      await hookMock.setMode(2);
+      await expect(token.connect(alice).transfer(bob.address, 10n))
+        .to.be.revertedWithCustomError(token, "HookFailedWithoutReason");
+      expect(await token.balanceOf(bob.address)).to.equal(0n);
+    });
+
     it("markParticipated is controller-only, monotonic, emits once", async function () {
       await expect(token.connect(alice).markParticipated(alice.address))
         .to.be.revertedWithCustomError(token, "Unauthorized");

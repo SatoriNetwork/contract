@@ -31,7 +31,9 @@ async function main() {
   // DIFFERENT registry, voting or games contract would otherwise silently mix
   // two deployments' rows, since nothing else in the fingerprint would change.
   const a = cfg.addresses;
-  const fingerprint = `${chainId}:${a.token}:${a.engine}:${a.rewards}:${a.bounties}:${a.registry}:${a.voting}:${a.games}`;
+  // Bump when a new event is indexed: rows for it exist only from a rescan.
+  const SCHEMA = 2;
+  const fingerprint = `s${SCHEMA}:${chainId}:${a.token}:${a.engine}:${a.rewards}:${a.bounties}:${a.registry}:${a.voting}:${a.games}`;
   const prev = getMeta(db, 'fingerprint');
   if (prev !== null && prev !== fingerprint) {
     console.warn('[indexer] deployment fingerprint changed — resetting dataset');

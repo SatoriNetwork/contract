@@ -29,12 +29,12 @@ const fix = () => deploySplitCompatFixture(2000);
 
 describe("Capability flags (progressive rollout)", () => {
   // Every gated entry point + the contract whose CapabilityDisabled error fires.
-  // Args are dummies on purpose: the capability gate is the FIRST statement in
-  // each function, so it reverts before any other validation runs.
+  // Args are dummies on purpose: the capability gate runs before any other
+  // validation in each function.
   function gatedCalls(f, caller) {
     const hub = f.hub.connect(caller);
     const bounties = f.bounties.connect(caller);
-    const addr = f.owner.address; // any nonzero address
+    const addr = f.owner.address; // nonzero and not the caller: for the two delegation gates, 0 or the caller is an exit, which is never gated
     const tok = f.token.target;
     return {
       [CAP.CREATE_STREAM]: { c: f.hub, call: () => hub.createSimpleDataStream("x", addr) },
@@ -137,6 +137,152 @@ describe("Capability flags (progressive rollout)", () => {
     // ...but a sibling capability stays closed.
     await expect(f.hub.connect(stranger).delegatePredictionPower(f.owner.address))
       .to.be.revertedWithCustomError(f.hub, "CapabilityDisabled");
+  });
+});
+
+describe("Capability flags gate joining, never leaving", () => {
+  const { ethers } = require("hardhat");
+  const { time } = require("@nomicfoundation/hardhat-network-helpers");
+  const { deploySplitFixture } = require("./splitFixture");
+
+  const ROUND = 86400;
+  const E = (n) => ethers.parseEther(String(n));
+  const BIT = (i) => 1 << i;
+  const LANE_A = 0;
+  const LOCK_INDEFINITE = 2n ** 24n - 1n;
+  const FAR_FUTURE = 4102444800n;
+  const RELAY_DELEGATE_PREDICTION = 3;
+  const NO_PERMIT = { value: 0n, deadline: 0n, signature: "0x" };
+  const abi = ethers.AbiCoder.defaultAbiCoder();
+  const full = () => deploySplitFixture();
+
+  async function nextRound() {
+    const t = await time.latest();
+    await time.increaseTo(Math.floor(t / ROUND) * ROUND + ROUND + 1);
+  }
+
+  async function approvedGame({ hub, registry, games, voting, owner }) {
+    const rc = await (await hub.connect(owner)["createSimpleDataStream(string,address,uint24)"]("A", owner.address, 1440)).wait();
+    const streamId = rc.logs.map((l) => { try { return registry.interface.parseLog(l); } catch { return null; } })
+      .find((p) => p && p.name === "DataStreamCreated").args.streamId;
+    const gameId = await games.binaryGameByStream(streamId);
+    await voting.connect(owner).setGameApproved(gameId, true);
+    return { streamId, gameId };
+  }
+
+  async function relayUndelegate(hub, user, relayer) {
+    const req = {
+      user: user.address, action: RELAY_DELEGATE_PREDICTION,
+      data: abi.encode(["address"], [ethers.ZeroAddress]),
+      fee: 0n, relayer: relayer.address, nonce: await hub.relayNonces(user.address), deadline: FAR_FUTURE,
+    };
+    const chainId = (await ethers.provider.getNetwork()).chainId;
+    const domain = { name: "SatoriHub", version: "1", chainId, verifyingContract: await hub.getAddress() };
+    const types = { RelayRequest: [
+      { name: "user", type: "address" }, { name: "action", type: "uint8" }, { name: "data", type: "bytes" },
+      { name: "fee", type: "uint256" }, { name: "relayer", type: "address" },
+      { name: "nonce", type: "uint256" }, { name: "deadline", type: "uint256" },
+    ] };
+    return hub.connect(relayer).relay(req, await user.signTypedData(domain, types, req), NO_PERMIT);
+  }
+
+  it("with prediction delegation off, a delegator still leaves (to 0, to itself, by relay) and its tokens move again", async () => {
+    const { token, hub, rewards, owner, signers } = await loadFixture(full);
+    const [, alice, bob, dave, carol, relayer, sink] = signers;
+    await rewards.connect(owner).setCapabilities(BIT(CAP.DELEGATE_PREDICTION));
+    for (const u of [alice, bob, dave]) {
+      await token.connect(owner).transfer(u.address, E(100));
+      await hub.connect(u).delegatePredictionPower(carol.address);
+      expect(await token.lockUntil(u.address, LANE_A)).to.equal(LOCK_INDEFINITE);
+    }
+
+    await rewards.connect(owner).setCapabilities(0);
+    await hub.connect(alice).delegatePredictionPower(ethers.ZeroAddress);
+    await hub.connect(bob).delegatePredictionPower(bob.address);
+    await relayUndelegate(hub, dave, relayer);
+
+    expect((await rewards.predictionDelegateInfo(carol.address)).power).to.equal(0n);
+    // Nothing left in the pool carol predicts with.
+    expect(await rewards.getPredictionPower(carol.address))
+      .to.equal((await token.balanceOf(carol.address)) + (await rewards.unclaimedRewards(carol.address)));
+    await nextRound();
+    await nextRound();
+    for (const u of [alice, bob, dave]) {
+      expect((await rewards.predictionDelegateInfo(u.address)).delegate).to.equal(ethers.ZeroAddress);
+      await token.connect(u).transfer(sink.address, E(100));
+    }
+    expect(await token.balanceOf(sink.address)).to.equal(E(300));
+  });
+
+  it("with prediction delegation off, joining, switching and returning are still refused", async () => {
+    const { token, hub, rewards, owner, signers } = await loadFixture(full);
+    const [, alice, bob, dave, carol, erin] = signers;
+    await rewards.connect(owner).setCapabilities(BIT(CAP.DELEGATE_PREDICTION));
+    for (const u of [alice, bob, dave]) await token.connect(owner).transfer(u.address, E(100));
+    await hub.connect(alice).delegatePredictionPower(carol.address);
+    await hub.connect(bob).delegatePredictionPower(carol.address);
+
+    await rewards.connect(owner).setCapabilities(0);
+    await expect(hub.connect(dave).delegatePredictionPower(carol.address))
+      .to.be.revertedWithCustomError(hub, "CapabilityDisabled");
+    await expect(hub.connect(alice).delegatePredictionPower(erin.address))
+      .to.be.revertedWithCustomError(hub, "CapabilityDisabled");
+    // Same round, same delegate: the return door that bit 5 on lets through.
+    await hub.connect(bob).delegatePredictionPower(ethers.ZeroAddress);
+    await expect(hub.connect(bob).delegatePredictionPower(carol.address))
+      .to.be.revertedWithCustomError(hub, "CapabilityDisabled");
+  });
+
+  it("with prediction delegation off, a delegator still votes and keeps its delegate", async () => {
+    const f = await loadFixture(full);
+    const { token, hub, rewards, owner, signers } = f;
+    const [, alice, carol] = signers;
+    const { gameId } = await approvedGame(f);
+    await token.connect(owner).transfer(alice.address, E(100));
+    await hub.connect(alice).delegatePredictionPower(carol.address);
+
+    await rewards.connect(owner).setCapabilities(BIT(CAP.VOTE));
+    await hub.connect(alice).vote(gameId, E(10));
+    expect((await rewards.predictionDelegateInfo(alice.address)).delegate).to.equal(carol.address);
+    expect((await rewards.predictionDelegateInfo(carol.address)).power).to.equal(E(90));
+  });
+
+  it("with claim delegation off, an owner still revokes (to 0 or to itself) and claims its own rewards", async () => {
+    const { token, hub, engine, rewards, registry, games, voting, owner, signers } = await loadFixture(full);
+    const [, alice, bob, carol, dave] = signers;
+    await token.connect(owner).transfer(bob.address, E(100));
+    await token.connect(owner).transfer(carol.address, E(50));
+
+    // Bob earns a reward on a weighted game.
+    const { streamId, gameId } = await approvedGame({ hub, registry, games, voting, owner });
+    await hub.connect(carol).vote(gameId, E(10));
+    await nextRound();
+    await registry.connect(owner).setValue(streamId, 100);
+    await engine.connect(bob).predictMultipleWithPayloads([{ gameId, payload: "0x01" }]);
+    await nextRound();
+    await registry.connect(owner).setValue(streamId, 110);
+    await nextRound();
+    await registry.connect(owner).setValue(streamId, 120);
+    await engine.connect(carol).settlePrediction(bob.address, gameId);
+    const owed = await rewards.unclaimedRewards(bob.address);
+    expect(owed).to.be.gt(0n);
+
+    await hub.connect(bob).delegateClaimAbility(dave.address);
+    await hub.connect(alice).delegateClaimAbility(dave.address);
+    await rewards.connect(owner).setCapabilities(BIT(CAP.DELEGATE_PREDICTION));
+    await expect(hub.connect(bob)["claim()"]()).to.be.revertedWithCustomError(rewards, "ClaimDelegatedAway");
+
+    await hub.connect(bob).delegateClaimAbility(ethers.ZeroAddress);
+    await hub.connect(alice).delegateClaimAbility(alice.address);
+    await expect(hub.connect(dave).claimFor(bob.address, dave.address))
+      .to.be.revertedWithCustomError(rewards, "Unauthorized");
+    const before = await token.balanceOf(bob.address);
+    await hub.connect(bob)["claim()"]();
+    expect((await token.balanceOf(bob.address)) - before).to.equal(owed);
+    await expect(hub.connect(alice)["claim()"]()).to.not.be.reverted;
+
+    await expect(hub.connect(bob).delegateClaimAbility(dave.address))
+      .to.be.revertedWithCustomError(hub, "CapabilityDisabled");
   });
 });
 

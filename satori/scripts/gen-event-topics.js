@@ -25,7 +25,7 @@ const CONSUMED = {
   SatoriRewards: [
     'ReferralPaid', 'ReferralSet', 'RewardSplit', 'DelegatorRewardsAccrued', 'RewardsClaimed',
     'RoundBudgetFrozen', 'PredictionDelegated', 'PredictionUndelegated', 'DelegatePowerSynced',
-    'ClaimDelegated', 'ClaimUndelegated',
+    'ClaimDelegated', 'ClaimUndelegated', 'OffchainBudgetSet',
   ],
   SatoriVoting: ['Voted', 'GameApprovedSet', 'VotesMoved'],
   SatoriRegistry: [

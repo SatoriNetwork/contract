@@ -213,6 +213,15 @@ export function openDb(dbPath: string): Database.Database {
     );
     CREATE INDEX IF NOT EXISTS idx_round_budget_round ON round_budget (round);
 
+    CREATE TABLE IF NOT EXISTS offchain_budget (
+      block     INTEGER NOT NULL,
+      log_index INTEGER NOT NULL,
+      tx        TEXT NOT NULL,
+      round_set INTEGER NOT NULL,
+      budget_wei TEXT NOT NULL,
+      PRIMARY KEY (block, log_index)
+    );
+
     -- kind: delegated, undelegated, synced.
     CREATE TABLE IF NOT EXISTS delegation (
       block     INTEGER NOT NULL,
@@ -464,6 +473,7 @@ export const EVENT_TABLES = [
   'referral_set',
   'unclaimed_ledger',
   'round_budget',
+  'offchain_budget',
   'delegation',
   'data_stream_created',
   'game_created',

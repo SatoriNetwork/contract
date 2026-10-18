@@ -80,9 +80,11 @@ export function DelegationTab() {
       setPredictorFeeLocked(Number(pfStored) !== 0);
       const pred = predInfo.delegate;
       const inPred = predInfo.power;
-      const claim = claimInfo.delegate;
+      // A bare address, unlike predictionDelegateInfo's struct. Yourself
+      // means no delegate: SatoriRewards lets the owner claim either way.
+      const claim: string = claimInfo;
       const p = pred === ZERO ? '' : pred;
-      const c = claim === ZERO ? '' : claim;
+      const c = claim === ZERO || claim.toLowerCase() === address.toLowerCase() ? '' : claim;
       setPredDelegate(p);
       setClaimDelegate(c);
       setPredInput(p);

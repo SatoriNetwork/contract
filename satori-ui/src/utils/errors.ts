@@ -48,6 +48,7 @@ const COPY: Record<string, string> = {
   EmptyStream:         'Stream has no values yet. Wait for its first update.',
   FeeTooHigh:          'Fee exceeds the cap (1440 SATORI).',
   Locked:              'Your tokens are locked. Wait for the lock window to clear.',
+  HookFailedWithoutReason: 'The transfer ran out of gas while updating a delegation. Try again with a higher gas limit.',
   MintIsPaused:        'SATORI mint is paused. Try again after the pause expires.',
   NotChild:            'Only child contracts can call this.',
   NotRewards:          'Only the rewards contract can call this.',

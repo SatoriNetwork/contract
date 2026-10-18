@@ -1789,7 +1789,8 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
         if (from != address(0)) {
             address predDelegate = predictionDelegateInfo[from].delegate;
             if (predDelegate != address(0)) {
-                uint96 left = predictionDelegateInfo[predDelegate].power - uint96(value);
+                uint96 had = predictionDelegateInfo[predDelegate].power;
+                uint96 left = had > value ? had - uint96(value) : 0;
                 predictionDelegateInfo[predDelegate].power = left;
                 emit DelegatePowerSynced(predDelegate, from, value, uint24(_currentRound()), left);
             }
@@ -1881,9 +1882,23 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
 
         // Close out the current active period, if any.
         if (previousDelegate != address(0)) {
-            uint96 prevLeft = predictionDelegateInfo[previousDelegate].power - uint96(power);
+            // Take back what this delegator put into the delegate's power (its
+            // join balance plus every synced receipt), not its live balance: a
+            // receipt the hook never saw was never added, and subtracting it
+            // would trap the last delegator out.
+            uint256 recorded = power;
+            uint256 periods = _delegationPeriods[delegator].length;
+            if (periods > 0) {
+                DelegationPeriod storage open = _delegationPeriods[delegator][periods - 1];
+                if (open.endRound == 0) {
+                    uint256 n = open.checkpoints.length;
+                    recorded = n > 0 ? open.checkpoints[n - 1].value : open.startBalance;
+                }
+            }
+            uint96 had = predictionDelegateInfo[previousDelegate].power;
+            uint96 prevLeft = had > recorded ? had - uint96(recorded) : 0;
             predictionDelegateInfo[previousDelegate].power = prevLeft;
-            emit PredictionUndelegated(delegator, previousDelegate, power, prevLeft);
+            emit PredictionUndelegated(delegator, previousDelegate, had - prevLeft, prevLeft);
 
             // Flush so any activation that should have already happened is
             // reflected in the pool before we subtract this delegator's slice.

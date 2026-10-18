@@ -64,6 +64,7 @@ export const rewardsIface = iface('SatoriRewards', [
   'DelegatorRewardsAccrued',
   'RewardsClaimed',
   'RoundBudgetFrozen',
+  'OffchainBudgetSet',
   // A delegate's inbound power is the latest newDelegatePower naming it; a
   // delegator's delegate is its latest Delegated (or none after Undelegated).
   'PredictionDelegated',
@@ -158,6 +159,7 @@ export const TOPICS = {
   delegatorRewardsAccrued: rewardsIface.getEvent('DelegatorRewardsAccrued')!.topicHash,
   rewardsClaimed: rewardsIface.getEvent('RewardsClaimed')!.topicHash,
   roundBudgetFrozen: rewardsIface.getEvent('RoundBudgetFrozen')!.topicHash,
+  offchainBudgetSet: rewardsIface.getEvent('OffchainBudgetSet')!.topicHash,
   predictionDelegated: rewardsIface.getEvent('PredictionDelegated')!.topicHash,
   predictionUndelegated: rewardsIface.getEvent('PredictionUndelegated')!.topicHash,
   delegatePowerSynced: rewardsIface.getEvent('DelegatePowerSynced')!.topicHash,

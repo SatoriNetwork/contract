@@ -26,10 +26,15 @@ in `SatoriHub` (`CAP_*`) and read at the matching bit by
 | 2 | Community stream adapters | `registerCommunityAdapter` |
 | 3 | Community game adapters | `registerCommunityGameAdapter` |
 | 4 | Bounties | `SatoriBounties.fundBounty`, `SatoriBounties.stakeBountyToken` |
-| 5 | Prediction-power delegation | `delegatePredictionPower` |
-| 6 | Claim delegation | `delegateClaimAbility` |
+| 5 | Prediction-power delegation | `delegatePredictionPower` to a delegate (leaving is never gated) |
+| 6 | Claim delegation | `delegateClaimAbility` to a delegate (revoking is never gated) |
 | 7 | Voting | `vote` |
 | 8+ | *unused* | — |
+
+A flag gates joining a feature, never leaving it. Switching bit 5 or 6 off
+stops new delegations, but undelegating and revoking a claim delegate always
+work: delegation locks the delegator's balance, and a claim delegate blocks the
+owner's own claim, so a gate on leaving would strand them behind a toggle.
 
 Vote bounties and vote delegation used to hold ids here. Both features were
 removed with burn voting and their ids were **reclaimed**, not retired — see
@@ -140,7 +145,11 @@ and is superseded.
 disabled (default OFF) while the admin is always allowed; every one of the eight live
 gated entry points reverts `CapabilityDisabled` for a non-admin when its flag is off;
 the admin bypasses an off flag; and enabling exactly one bit opens exactly that
-feature. The shared fixture (`deploySplitFixture`) sets `0xff` after wiring — bits
+feature. A second block checks that clearing bits 5 and 6 never blocks leaving:
+delegators undelegate (directly, to themselves, by relay) and can move their
+tokens again, a delegator still votes and keeps its delegate, and an owner
+revokes its claim delegate and claims for itself. Joining, switching and the
+same-round return stay refused. The shared fixture (`deploySplitFixture`) sets `0xff` after wiring — bits
 0..7, every one of which gates something, which is harmless to
 set — so the rest of the suite exercises a full-featured environment; production
 launches gated.

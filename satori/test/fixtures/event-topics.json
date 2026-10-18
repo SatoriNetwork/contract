@@ -103,6 +103,10 @@
     "ClaimUndelegated": {
       "signature": "event ClaimUndelegated(address indexed delegator)",
       "topic": "0x819163f94693dd691e2295d9180610ee441a2394b6a5314edfe6043eb8bfb3d7"
+    },
+    "OffchainBudgetSet": {
+      "signature": "event OffchainBudgetSet(uint256 newOffchainBudget, uint256 roundSet, address indexed setter)",
+      "topic": "0x032c04a6e8c878762fe1b67bd12c7b6fc609f2b6349dbff1102dced8e5c0658b"
     }
   },
   "SatoriVoting": {

@@ -462,7 +462,12 @@ contract SatoriHub is IEngineGateway, SatoriUUPS {
     function onTokenTransfer(address from, address to, uint256 value) external {
         if (msg.sender != address(token)) revert Unauthorized();
         try rewards.syncPredictionDelegation(from, to, value) {}
-        catch { emit ChildSyncFailed(address(rewards), from, to, value); }
+        catch {
+            // Empty is treated as out of gas: pass it up empty so SatoriToken
+            // reverts the transfer rather than skipping the sync.
+            assembly ("memory-safe") { if iszero(returndatasize()) { revert(0, 0) } }
+            emit ChildSyncFailed(address(rewards), from, to, value);
+        }
     }
 
     /// The general lanes' shared cap. Asks the TOKEN for the arithmetic rather
@@ -588,7 +593,6 @@ contract SatoriHub is IEngineGateway, SatoriUUPS {
     function initializeDefaultStream() external {
         if (defaultStreamInitialized) revert AlreadySet();
         defaultStreamInitialized = true;
-        token.markParticipated(address(this));
         uint32 defId = registry.createSimpleDataStream(address(this), "Satori Predictions", address(this), 1440);
         if (defId != DEFAULT_STREAM_ID) revert DefaultStreamNotFirst();
         games.createGame(address(this), DEFAULT_STREAM_ID, 0, "", "Satori Predictions");
@@ -824,23 +828,25 @@ contract SatoriHub is IEngineGateway, SatoriUUPS {
     }
 
     function _delegatePredictionPower(address user, address delegate) private {
-        _requireCapabilityFor(CAP_DELEGATE_PREDICTION, user);
         // The participation mark is set inside rewards.delegatePredictionPower, on
         // the delegator only, so BOTH this entry and burnForVote's internal
         // re-delegation mark identically. See there.
         if (delegate == user) delegate = address(0);
 
-        // Allowed-delegator gate. AFTER the self-delegation normalisation and
-        // scoped to `delegate != 0`, so an EXIT is never gated — neither
-        // undelegation nor self-delegation (which became one).
+        // Capability and allowed-delegator gates. AFTER the self-delegation
+        // normalisation and scoped to `delegate != 0`, so an EXIT is never
+        // gated — neither undelegation nor self-delegation (which became one).
+        // Delegating locks the whole balance until the delegator leaves, so a
+        // gate on leaving would freeze it.
         //
-        // Deliberately on this entry point rather than in SatoriRewards:
+        // Both sit on this entry point rather than in SatoriRewards:
         // `burnForVote` undelegates and re-delegates the caller around the burn,
-        // and that restore is involuntary from the caller's point of view. If the
-        // gate lived in the child, a grandfathered delegator (one already in
-        // place when the nomination was made) would find that VOTING evicted
-        // them — voiding the never-evicts rule in practice.
+        // and that restore is involuntary from the caller's point of view. A
+        // delegator already in place when the nomination was made, or when the
+        // capability was switched off, must be able to vote and keep its place;
+        // in the child, either gate would refuse the restore.
         if (delegate != address(0)) {
+            _requireCapabilityFor(CAP_DELEGATE_PREDICTION, user);
             address allowed = allowedDelegator[delegate];
             if (allowed != address(0) && allowed != user) revert DelegatorNotAllowed();
         }
@@ -886,7 +892,9 @@ contract SatoriHub is IEngineGateway, SatoriUUPS {
     }
 
     function delegateClaimAbility(address delegate) external {
-        _requireCapability(CAP_DELEGATE_CLAIM);
+        // Revoking (to 0 or to yourself) is never gated: while a delegate is
+        // set, SatoriRewards refuses the owner's own claim.
+        if (delegate != address(0) && delegate != msg.sender) _requireCapability(CAP_DELEGATE_CLAIM);
         // Deliberately NOT marked: claim delegation never touches prediction
         // power or balances, so the transfer hook (which syncs prediction
         // delegation only) has nothing to do for a claim delegator. Marking them

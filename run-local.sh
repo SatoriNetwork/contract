@@ -45,7 +45,7 @@ ACC2=0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC
 
 echo "==> stopping anything already running"
 pkill -f "hardhat node" 2>/dev/null || true
-pkill -f "react-scripts start" 2>/dev/null || true
+pkill -f "$ROOT/satori-ui/node_modules/react-scripts/scripts/start.js" 2>/dev/null || true
 sleep 2
 
 echo "==> hardhat node on $BIND:$RPC_PORT"
@@ -93,5 +93,5 @@ cat <<EOF
 
   "+1 round" in the header advances the chain a full round (12h).
 
-  stop:  pkill -f 'hardhat node'; pkill -f 'react-scripts start'
+  stop:  pkill -f 'hardhat node'; pkill -f '$ROOT/satori-ui/node_modules/react-scripts/scripts/start.js'
 EOF

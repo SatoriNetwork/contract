@@ -158,7 +158,7 @@ const CHAINS: Record<number, ChainConfig> = {
     // whenever the token changes. `lens`/`merkle` deploy after the adapters, so
     // re-read them from satori/deployments/localhost.json whenever deploy.js
     // changes what deploys before them.
-    token: "0x82E436F31d73BbF6b0BFf190D527679242eDb6af",
+    token: "0xe1b5eCC0f585831EC04fD14E6B6C9be5fc9c891a",
     airdrop: "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
     engine: "0x0DCd1Bf9A1b36cE34237eEaFef220932846BCD82",
     hub: "0x0B306BF915C4d645ff596e518fAf3F9669b97016",

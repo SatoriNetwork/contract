@@ -233,6 +233,7 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
     error BadInput();
     error BudgetExceeded();
     error Locked();
+    error HookFailedWithoutReason();
     error ControllerNotSet();
     error AirdropNotSet();
     error NotHomeChain();
@@ -561,7 +562,9 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
 
     /// Rejects a codeless hook: a call to one reverts via the extcodesize check
     /// OUTSIDE the try/catch in `_update`, which would brick participant
-    /// transfers. A hook that merely reverts is still caught at call time.
+    /// transfers. A hook that reverts with a reason is caught at call time; one
+    /// that fails without a reason (out of gas, or no onTokenTransfer) reverts
+    /// every transfer that runs it.
     function setHook(address newHook) external onlyWiring {
         if (hookFrozen) revert Frozen();
         if (newHook != address(0) && newHook.code.length == 0) revert BadInput();
@@ -648,9 +651,11 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
         emit ControllerFrozen(controller);
     }
 
-    /// Freezing at `address(0)` is the safe end state. Freezing a LIVE hook is
-    /// permanent: `_update` catches a reverting hook, but a frozen bad one can
-    /// never be removed. Allowed — a permanent hook is a legitimate end state.
+    /// Freezing at `address(0)` ends the delegation sync for good: receipts to
+    /// delegators never reach their delegate's power. Freezing a live hook is
+    /// permanent too: `_update` swallows a hook that reverts with a reason, but
+    /// one that fails without a reason blocks every transfer that runs it. Freeze
+    /// only a hook whose sync works and can still be upgraded.
     function freezeHook() external onlyFreeze {
         hookFrozen = true;
         emit HookFrozen(hook);
@@ -838,7 +843,16 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
         // never mutates state; it only decides whether to run the hook.
         if (h != address(0) && ((_userState[from] | _userState[to]) & _HOOK_GATE_MASK != 0)) {
             try ITransferHook(h).onTokenTransfer(from, to, value) {}
-            catch { emit TransferHookFailed(from, to, value); }
+            catch {
+                // Out of gas arrives with no revert data, and the sender picks the
+                // gas, so swallowing it would let anyone skip the delegation sync.
+                // SatoriHub.onTokenTransfer passes its own empty failures up for
+                // this check; keep the two in step.
+                uint256 size;
+                assembly ("memory-safe") { size := returndatasize() }
+                if (size == 0) revert HookFailedWithoutReason();
+                emit TransferHookFailed(from, to, value);
+            }
         }
     }
 }

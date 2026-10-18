@@ -6,9 +6,11 @@
 //   try satoriRewards.syncPredictionDelegation(from,to,value) {}
 //   catch { emit ChildSyncFailed(address(satoriRewards), from, to, value); }
 //
-// The load-bearing promise on this IMMUTABLE token: when a sync REVERTS,
-// (a) the transfer still lands, and (b) a ChildSyncFailed(child, from, to, value)
-// event records the soft desync.
+// The load-bearing promise on this IMMUTABLE token: when a sync REVERTS WITH A
+// REASON, (a) the transfer still lands, and (b) a ChildSyncFailed(child, from,
+// to, value) event records the soft desync. A failure with no revert data (out of
+// gas) is not swallowed: it reverts the transfer, so no sender can skip a sync by
+// picking the gas. That side is tested in test/next/DelegationSyncGas.test.js.
 //
 // BURN VOTING SHRANK THE HOOK. There used to be a second arm here —
 // `satoriVoting.syncVoteDelegation(from,to,value)` — because vote weight

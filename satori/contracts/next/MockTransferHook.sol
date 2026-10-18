@@ -14,6 +14,8 @@ contract MockTransferHook {
 
     function onTokenTransfer(address from, address to, uint256 value) external {
         if (mode == 1) revert("hook revert");
+        if (mode == 2) revert();
+        if (mode == 3) while (true) {}
         calls += 1;
         lastFrom = from;
         lastTo = to;

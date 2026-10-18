@@ -193,6 +193,11 @@
       "type": "error"
     },
     {
+      "inputs": [],
+      "name": "HookFailedWithoutReason",
+      "type": "error"
+    },
+    {
       "inputs": [
         {
           "internalType": "address",

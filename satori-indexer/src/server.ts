@@ -1,7 +1,7 @@
 import express from 'express';
 import type Database from 'better-sqlite3';
 import { Indexer } from './indexer';
-import { leaderboard, sentiment, bountyPairs, referrals, referredBy, predictionOutcomes, lastPredictions, streams, streamValues, games, gameVotes, namedAdapterId, curveConfig, rewardsLedger, roundBudget, delegation } from './views';
+import { leaderboard, sentiment, bountyPairs, referrals, referredBy, predictionOutcomes, lastPredictions, streams, streamValues, games, gameVotes, namedAdapterId, curveConfig, rewardsLedger, roundBudget, offchainBudget, delegation } from './views';
 import { EVENT_TABLES } from './db';
 
 // Read-only JSON API. Public data, GET-only, permissive CORS (the dapp is a
@@ -198,6 +198,12 @@ export function makeServer(
     const r = Number(req.params.round);
     if (!Number.isInteger(r) || r < 0) { res.status(400).json({ error: 'bad round' }); return; }
     res.json(roundBudget(db, r));
+  });
+
+  app.get('/rounds/:round/offchain-budget', (req, res) => {
+    const r = Number(req.params.round);
+    if (!Number.isInteger(r) || r < 0) { res.status(400).json({ error: 'bad round' }); return; }
+    res.json(offchainBudget(db, r));
   });
 
   app.get('/referrals/:address', (req, res) => {

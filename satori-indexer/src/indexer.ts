@@ -239,7 +239,7 @@ export class Indexer {
           topics: [[
             TOPICS.referralPaid, TOPICS.referralSet,
             TOPICS.rewardSplit, TOPICS.delegatorRewardsAccrued, TOPICS.rewardsClaimed,
-            TOPICS.roundBudgetFrozen,
+            TOPICS.roundBudgetFrozen, TOPICS.offchainBudgetSet,
             TOPICS.predictionDelegated, TOPICS.predictionUndelegated, TOPICS.delegatePowerSynced,
           ]],
           fromBlock: cursor, toBlock: chunkEnd,
@@ -320,6 +320,9 @@ export class Indexer {
     const roundBudget = this.db.prepare(
       'INSERT OR REPLACE INTO round_budget (block, log_index, tx, round, budget_wei) VALUES (?,?,?,?,?)');
     for (const r of b.roundBudget) roundBudget.run(...r);
+    const offchainBudget = this.db.prepare(
+      'INSERT OR REPLACE INTO offchain_budget (block, log_index, tx, round_set, budget_wei) VALUES (?,?,?,?,?)');
+    for (const r of b.offchainBudget) offchainBudget.run(...r);
     const delegation = this.db.prepare(
       'INSERT OR REPLACE INTO delegation (block, log_index, tx, kind, delegator, delegate, power_wei, activation_round, new_delegate_power) VALUES (?,?,?,?,?,?,?,?,?)');
     for (const r of b.delegation) delegation.run(...r);
@@ -401,6 +404,7 @@ interface DecodedBatch {
   referralSet: unknown[][];
   ledger: unknown[][];
   roundBudget: unknown[][];
+  offchainBudget: unknown[][];
   delegation: unknown[][];
   voted: unknown[][];
   gameApproved: unknown[][];
@@ -408,7 +412,7 @@ interface DecodedBatch {
 }
 const emptyBatch = (): DecodedBatch => ({
   scored: [], made: [], funded: [], poolState: [], cleaned: [], referral: [], referralSet: [],
-  ledger: [], roundBudget: [], delegation: [],
+  ledger: [], roundBudget: [], offchainBudget: [], delegation: [],
   voided: [], unrecoverable: [], displaced: [],
   streamCreated: [], namedAdapterSet: [], namedStreamCreated: [],
   gameCreated: [], gameNameUpdated: [], gameAuthorityTransferred: [],
@@ -423,7 +427,7 @@ const countBatch = (b: DecodedBatch) =>
   b.gameCreated.length + b.gameNameUpdated.length + b.gameAuthorityTransferred.length +
   b.streakThreshold.length + b.curveConfig.length +
   b.nameUpdated.length + b.providerChanged.length + b.referralSet.length +
-  b.ledger.length + b.roundBudget.length + b.delegation.length +
+  b.ledger.length + b.roundBudget.length + b.offchainBudget.length + b.delegation.length +
   b.voted.length + b.gameApproved.length + b.voteMoved.length;
 
 function decodeInto(
@@ -548,6 +552,9 @@ function decodeInto(
     } else if (t0 === TOPICS.roundBudgetFrozen) {
       const a = rewardsIface.decodeEventLog('RoundBudgetFrozen', log.data, log.topics);
       batch.roundBudget.push([...head, Number(a.round), a.budget.toString()]);
+    } else if (t0 === TOPICS.offchainBudgetSet) {
+      const a = rewardsIface.decodeEventLog('OffchainBudgetSet', log.data, log.topics);
+      batch.offchainBudget.push([...head, Number(a.roundSet), a.newOffchainBudget.toString()]);
     } else if (t0 === TOPICS.predictionDelegated) {
       const a = rewardsIface.decodeEventLog('PredictionDelegated', log.data, log.topics);
       batch.delegation.push([...head, 'delegated', String(a.delegator).toLowerCase(), String(a.delegate).toLowerCase(),
