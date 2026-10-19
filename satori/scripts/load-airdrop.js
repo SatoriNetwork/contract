@@ -40,8 +40,11 @@
 // Loading mints nothing and opens nothing. The sequence is:
 //   1. load every batch (this script, as the loader);
 //   2. check the table on chain, for as long as that takes;
-//   3. `token.freezeAirdrop()` (the freeze authority) closes the table and pins
-//      the door here, both for good;
+//   3. `token.freezeAirdrop(airdrop, loadedTotal)` (the freeze authority, with
+//      the address and total it checked) closes the table and pins the door
+//      here, both for good. The token refuses it if either has moved since, or
+//      if the total is over the cap. Run this script with an empty batch `{}`
+//      to print that call and its calldata for the table as it stands;
 //   4. `finalizeAirdropLoading()` (the loader) opens claims.
 // From that block every recipient can claim their whole allocation. Finalize
 // reverts AirdropNotFrozen until step 3 is done, so the order cannot be
@@ -73,7 +76,7 @@ const AIRDROP_ABI = [
 const TOKEN_ABI = [
   'function airdrop() view returns (address)',
   'function airdropFrozen() view returns (bool)',
-  'function airdropMinted() view returns (uint256)',
+  'function freezeAirdrop(address expectedAirdrop, uint256 expectedLoadedTotal)',
 ];
 const SAFE_ABI = [
   'function nonce() view returns (uint256)',
@@ -140,8 +143,8 @@ async function main() {
     retry(() => airdrop.token()),
   ]);
   const token = new ethers.Contract(tokenAddr, TOKEN_ABI, provider);
-  const [door, frozen, minted] = await Promise.all([
-    retry(() => token.airdrop()), retry(() => token.airdropFrozen()), retry(() => token.airdropMinted()),
+  const [door, frozen] = await Promise.all([
+    retry(() => token.airdrop()), retry(() => token.airdropFrozen()),
   ]);
   // Finalize implies the freeze, so this one check also covers a finalized table.
   if (frozen) {
@@ -170,23 +173,14 @@ async function main() {
   console.log(`\n  airdrop        ${airdropAddr}`);
   console.log(`  loader         ${admin}`);
   console.log(`  cap            ${ethers.formatEther(cap)} SATORI`);
-  console.log(`  loaded so far  ${ethers.formatEther(loadedTotal)} SATORI`);
-  console.log(`  minted so far  ${ethers.formatEther(minted)} SATORI\n`);
+  console.log(`  loaded so far  ${ethers.formatEther(loadedTotal)} SATORI\n`);
 
   console.log(`  batch: ${entries.length} recipient(s), ${ethers.formatEther(total)} SATORI total`);
   for (const e of entries) console.log(`    ${e.addr}  ${ethers.formatEther(e.wei)}`);
 
-  // No SatoriAirdrop can mint before its finalize, and finalize needs the
-  // freeze, so anything minted now came through some other pointer the wiring
-  // key set. It eats the cap the table has to fit under.
-  if (minted > 0n) {
-    problems.push(`${ethers.formatEther(minted)} SATORI was already minted through the airdrop door, ` +
-      'outside any finalized airdrop; find out how before loading or freezing');
-  }
-  if (total + loadedTotal + minted > cap) {
-    problems.push(`batch would take the table past the cap ` +
-      `(${ethers.formatEther(total)} + ${ethers.formatEther(loadedTotal)} loaded + ` +
-      `${ethers.formatEther(minted)} minted > ${ethers.formatEther(cap)})`);
+  if (total + loadedTotal > cap) {
+    problems.push(`batch would take the table past the cap, and the freeze would refuse it ` +
+      `(${ethers.formatEther(total)} + ${ethers.formatEther(loadedTotal)} loaded > ${ethers.formatEther(cap)})`);
   }
 
   if (problems.length) {
@@ -194,12 +188,28 @@ async function main() {
     for (const p of problems) console.error(`    - ${p}`);
     process.exit(1);
   }
+
+  const printFreeze = (t) => {
+    console.log(`    token.freezeAirdrop(${airdropAddr}, ${t})   (${ethers.formatEther(t)} SATORI)`);
+    console.log(`    to   ${tokenAddr}`);
+    console.log(`    data ${token.interface.encodeFunctionData('freezeAirdrop', [airdropAddr, t])}`);
+  };
+  if (entries.length === 0) {
+    console.log('\n  No rows: the freeze call for the table as it stands now. Check the table first;');
+    console.log('  the freeze authority sends this, and the token refuses it if the table moves.');
+    printFreeze(loadedTotal);
+    console.log('');
+    return;
+  }
   console.log('\n  checks passed: addresses valid, no duplicates, none already allocated, cap respected, ' +
     'token points here.');
 
   const iface = new ethers.Interface(AIRDROP_ABI);
   const data = iface.encodeFunctionData('loadAirdropBatch',
     [entries.map((e) => e.addr), entries.map((e) => e.wei)]);
+
+  console.log('\n  If this is the last batch, the freeze call once it lands is:');
+  printFreeze(loadedTotal + total);
 
   if (!process.env.LOAD) {
     console.log('\n  PLAN ONLY. To send:');
@@ -285,10 +295,31 @@ async function main() {
     console.log(`    ${ok ? 'ok  ' : 'FAIL'} ${e.addr}  ${ethers.formatEther(got)}`);
   }
   console.log(bad === 0
-    ? '\n  all allocations present. Once the LAST batch is in and the whole table checks out: ' +
-      'token.freezeAirdrop (closes the table for good), then finalizeAirdropLoading.'
+    ? '\n  all allocations present. Once the LAST batch is in and the whole table checks out, ' +
+      'freeze (closes the table for good), then finalizeAirdropLoading.'
     : `\n  ${bad} still absent after 90s — the inner call reverted (check the Safe's ExecutionSuccess vs the revert selector).`);
   if (bad) process.exit(1);
+
+  // Polled, like the allocations above: a lagging node reads the old total.
+  // `>=`, not `==`: a concurrent load can only add to it.
+  const want = loadedTotal + total;
+  let loadedNow = 0n;
+  const until = Date.now() + 90_000;
+  while (Date.now() < until) {
+    loadedNow = await retry(() => airdrop.airdropLoadedTotal());
+    if (loadedNow >= want) break;
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+  if (loadedNow < want) {
+    console.log(`\n  the loaded total still reads ${loadedNow}, below ${want}; run again with {} for the freeze call.`);
+  } else {
+    if (loadedNow > want) {
+      console.log(`\n  WARNING: the loaded total is ${loadedNow}, more than this batch accounts for (${want}):` +
+        ' something else changed the table. Check it again before the freeze.');
+    }
+    console.log('\n  freeze call for the table as it stands now:');
+    printFreeze(loadedNow);
+  }
 }
 
 main().catch((e) => { console.error('\n  ERR:', e.shortMessage ?? e.message); process.exit(1); });

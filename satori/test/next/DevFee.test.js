@@ -204,9 +204,11 @@ describe("SatoriToken — the dev fee is a share of what was minted", function (
 
   describe("what is NOT charged", function () {
     it("the airdrop is outside the fee entirely", async function () {
-      await token.connect(governor).setAirdrop(bob.address); // bob stands in for SatoriAirdrop
+      const table = await (await ethers.getContractFactory("MockAirdropTable")).deploy(await token.getAddress());
+      await token.connect(governor).setAirdrop(await table.getAddress());
+      await token.connect(governor).freezeAirdrop(await table.getAddress(), 0n);
       const before = await token.devFeeCeiling();
-      await token.connect(bob).airdropMint(alice.address, ethers.parseEther("1000"));
+      await table.mint(alice.address, ethers.parseEther("1000"));
       expect(await token.devFeeCeiling()).to.equal(before);          // unchanged
       expect(await token.totalRewardsMinted()).to.equal(INITIAL_MINT); // untouched
     });

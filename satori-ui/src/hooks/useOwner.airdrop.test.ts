@@ -2,15 +2,16 @@ import { renderHook, act, waitFor } from '@testing-library/react';
 import { ethers } from 'ethers';
 import { useOwner } from './useOwner';
 
-/// Nothing on-chain caps the airdrop table, and the freeze closes it and pins
-/// the door for good. So the hook checks both before it sends, on uncached reads.
+/// The freeze closes the airdrop table and pins the door for good, and the token
+/// refuses it over the cap or when the table moved. The hook checks the same
+/// before it sends, on uncached reads, so the owner sees why.
 
 const AIRDROP = '0x' + '66'.repeat(20);
 const OTHER = '0x' + '77'.repeat(20);
 const E = (n: number) => ethers.parseEther(String(n));
 
 let mockContracts: any;
-let chain: { loaded: bigint; cap: bigint; frozen: boolean; door: string; minted: bigint };
+let chain: { loaded: bigint; cap: bigint; frozen: boolean; door: string };
 
 jest.mock('./useContracts', () => ({ useContracts: () => ({ contracts: mockContracts }) }));
 jest.mock('./useWallet', () => ({ useWallet: () => ({ address: '0x' + '44'.repeat(20) }) }));
@@ -25,7 +26,7 @@ beforeEach(() => {
   // The page-data load has nothing to read here and logs its failure; the
   // actions under test do not depend on it.
   jest.spyOn(console, 'error').mockImplementation(() => {});
-  chain = { loaded: E(1199000), cap: E(1200000), frozen: false, door: AIRDROP, minted: BigInt(0) };
+  chain = { loaded: E(1199000), cap: E(1200000), frozen: false, door: AIRDROP };
   mockContracts = {
     reads: {
       airdrop: {
@@ -36,7 +37,6 @@ beforeEach(() => {
       token: {
         airdropFrozen: jest.fn(async () => chain.frozen),
         airdrop: jest.fn(async () => chain.door),
-        airdropMinted: jest.fn(async () => chain.minted),
       },
     },
     cached: { round: {}, live: {} },
@@ -75,15 +75,6 @@ describe('loadAirdropBatch', () => {
     expect(mockContracts.airdrop.loadAirdropBatch).toHaveBeenCalledWith([OTHER], [E(1000)]);
   });
 
-  it('counts airdrop already minted through the door against the cap', async () => {
-    chain.minted = E(1);
-    const r = await hook();
-    const res = await call(() => r.current.loadAirdropBatch([{ address: OTHER, amountSatori: '1000' }]));
-    expect(res.ok).toBe(false);
-    expect(res.error).toMatch(/already minted through the airdrop door/);
-    expect(mockContracts.airdrop.loadAirdropBatch).not.toHaveBeenCalled();
-  });
-
   it('refuses when the door points at another contract: those rows would not pay', async () => {
     chain.door = OTHER;
     const r = await hook();
@@ -107,7 +98,7 @@ describe('freezeAirdrop', () => {
   it('refuses when the door no longer points at this airdrop', async () => {
     chain.door = OTHER;
     const r = await hook();
-    const res = await call(() => r.current.freezeAirdrop());
+    const res = await call(() => r.current.freezeAirdrop(chain.loaded));
     expect(res).toEqual({ ok: false, error: 'The airdrop door no longer points at this airdrop; reload.' });
     expect(mockContracts.token.freezeAirdrop).not.toHaveBeenCalled();
   });
@@ -115,26 +106,33 @@ describe('freezeAirdrop', () => {
   it('refuses an empty table', async () => {
     chain.loaded = BigInt(0);
     const r = await hook();
-    const res = await call(() => r.current.freezeAirdrop());
+    const res = await call(() => r.current.freezeAirdrop(BigInt(0)));
     expect(res.ok).toBe(false);
     expect(res.error).toMatch(/empty for good/);
     expect(mockContracts.token.freezeAirdrop).not.toHaveBeenCalled();
   });
 
-  it('refuses a table over the ceiling: after the freeze it could never be fixed', async () => {
-    chain.loaded = E(1200000);
-    chain.minted = E(1);
+  it('refuses when the table holds anything but the total that was checked', async () => {
     const r = await hook();
-    const res = await call(() => r.current.freezeAirdrop());
+    const res = await call(() => r.current.freezeAirdrop(chain.loaded - BigInt(1)));
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('The table holds 1199000.0 SATORI, not the 1198999.999999999999999999 you checked. Check it again before freezing.');
+    expect(mockContracts.token.freezeAirdrop).not.toHaveBeenCalled();
+  });
+
+  it('refuses a table over the ceiling: the token would refuse it too', async () => {
+    chain.loaded = E(1200000) + BigInt(1);
+    const r = await hook();
+    const res = await call(() => r.current.freezeAirdrop(chain.loaded));
     expect(res.ok).toBe(false);
     expect(res.error).toMatch(/Over the ceiling/);
     expect(mockContracts.token.freezeAirdrop).not.toHaveBeenCalled();
   });
 
-  it('sends when the door points here and the table holds something', async () => {
+  it('sends the door and the checked total when the door points here and the table holds something', async () => {
     const r = await hook();
-    const res = await call(() => r.current.freezeAirdrop());
+    const res = await call(() => r.current.freezeAirdrop(chain.loaded));
     expect(res.ok).toBe(true);
-    expect(mockContracts.token.freezeAirdrop).toHaveBeenCalledTimes(1);
+    expect(mockContracts.token.freezeAirdrop).toHaveBeenCalledWith(AIRDROP, E(1199000));
   });
 });

@@ -196,10 +196,9 @@ async function main() {
       const base = await hub.BASE_EMISSION_PER_ROUND();
       return e.rate === base && e.prevRate === base && e.banked === 0n;
     }],
-    // A PLACEHOLDER pending the real figure (owner, 2026-09-11). Pinned anyway:
-    // it lives in the non-upgradeable token, so a deploy freezes it, and a
-    // deploy that ships the wrong cap is a redeploy to fix.
-    ["AIRDROP_TOTAL_SUPPLY == 1,200,000 (placeholder)", async () =>
+    // It lives in the non-upgradeable token: a deploy that ships another
+    // figure is a redeploy to fix.
+    ["AIRDROP_TOTAL_SUPPLY == 1,200,000", async () =>
       (await token.AIRDROP_TOTAL_SUPPLY()) === ethers.parseEther("1200000")],
     // SatoriAirdrop reads the ceiling THROUGH the token, so this can only fail
     // if the pointer is wrong — which is exactly what it is here to catch.

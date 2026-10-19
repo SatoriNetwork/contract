@@ -70,12 +70,9 @@ export interface OwnerData {
   emissionSplitHolder: string;   // holds setOffchainBudget (the dial)
   airdropHolder: string;         // SatoriAirdrop.airdropAuthority — loadAirdropBatch / finalizeAirdropLoading
   airdropLoadedTotal: bigint;    // SatoriAirdrop.airdropLoadedTotal — sum of every loaded allocation
-  // The token's mint ceiling for the airdrop. Nothing on-chain checks the loaded
-  // total against it: an over-loaded table locks the last claimers out.
+  // The token's mint ceiling for the airdrop. token.freezeAirdrop refuses a
+  // loaded total over it; loading does not.
   airdropCap: bigint;            // SatoriAirdrop.AIRDROP_TOTAL_SUPPLY (read through to the token)
-  // token.airdropMinted(). Before finalize no SatoriAirdrop can mint, so anything
-  // here came through some other pointer the wiring key set, and eats the cap.
-  airdropMinted: bigint;
   airdropLoadingFinalized: boolean; // SatoriAirdrop.airdropLoadingFinalized — claims open
   // The token's airdrop door. finalizeAirdropLoading refuses (AirdropNotFrozen)
   // unless the door points at this airdrop AND is frozen. An emptied wiring
@@ -198,7 +195,7 @@ export function useOwner() {
       // fallback. ZERO means the dapp has no airdrop contract for this chain
       // (a stack that predates it); the Admin row hides on zero.
       let airdropHolder = ZERO, airdropLoadedTotal = BigInt(0), airdropCap = BigInt(0), airdropLoadingFinalized = false;
-      let airdropPointsHere = false, airdropFrozen = false, freezeAuthority = ZERO, airdropMinted = BigInt(0);
+      let airdropPointsHere = false, airdropFrozen = false, freezeAuthority = ZERO;
       try {
         const [holder, loaded, cap, finalized] = await Promise.all([
           contracts.cached.round.airdrop.airdropAuthority(),
@@ -212,16 +209,14 @@ export function useOwner() {
         airdropLoadingFinalized = Boolean(finalized);
       } catch (e) { console.warn('airdrop reads failed:', e); }
       try {
-        const [pointer, frozen, freezer, minted] = await Promise.all([
+        const [pointer, frozen, freezer] = await Promise.all([
           contracts.cached.live.token.airdrop(),
           contracts.cached.live.token.airdropFrozen(),
           contracts.cached.round.token.freezeAuthority(),
-          contracts.cached.live.token.airdropMinted(),
         ]);
         airdropPointsHere = String(pointer).toLowerCase() === String(contracts.reads.airdrop.target).toLowerCase();
         airdropFrozen = Boolean(frozen);
         freezeAuthority = freezer;
-        airdropMinted = BigInt(minted);
       } catch (e) { console.warn('token airdrop-door reads failed:', e); }
 
       let emissionStatus: EmissionStatus | null = null;
@@ -274,7 +269,7 @@ export function useOwner() {
         offchainReporter,
         emissionSplitHolder,
         airdropHolder, airdropLoadedTotal, airdropCap, airdropLoadingFinalized,
-        airdropPointsHere, airdropFrozen, freezeAuthority, airdropMinted,
+        airdropPointsHere, airdropFrozen, freezeAuthority,
         governor, pendingGovernor,
         curveFloor, curveTopGrad, curveBotGrad, curveTopShift,
         dustTarget,
@@ -468,16 +463,15 @@ export function useOwner() {
       catch { return { ok: false as const, error: `Invalid amount for ${e.address}` }; }
       addrs.push(e.address);
     }
-    let loaded: bigint, cap: bigint, frozen: boolean, door: string, minted: bigint;
+    let loaded: bigint, cap: bigint, frozen: boolean, door: string;
     try {
-      const [l, c, f, d, m] = await Promise.all([
+      const [l, c, f, d] = await Promise.all([
         contracts.reads.airdrop.airdropLoadedTotal(),
         contracts.reads.airdrop.AIRDROP_TOTAL_SUPPLY(),
         contracts.reads.token.airdropFrozen(),
         contracts.reads.token.airdrop(),
-        contracts.reads.token.airdropMinted(),
       ]);
-      loaded = BigInt(l); cap = BigInt(c); frozen = Boolean(f); door = String(d); minted = BigInt(m);
+      loaded = BigInt(l); cap = BigInt(c); frozen = Boolean(f); door = String(d);
     } catch (e) {
       return { ok: false as const, error: explainError(e) };
     }
@@ -488,42 +482,46 @@ export function useOwner() {
       return { ok: false as const, error: 'The token\'s airdrop door does not point at this airdrop, so rows loaded here would not pay. If it points at a corrected airdrop, update this page\'s address book.' };
     }
     const batch = amounts.reduce((a, b) => a + b, BigInt(0));
-    if (minted + loaded + batch > cap) {
+    if (loaded + batch > cap) {
       return {
         ok: false as const,
-        error: `Over the cap: ${ethers.formatEther(loaded)} SATORI already loaded${minted > BigInt(0) ? ` and ${ethers.formatEther(minted)} already minted through the airdrop door` : ''} plus ${ethers.formatEther(batch)} in this batch is more than ${ethers.formatEther(cap)}. The last claimers would find the airdrop's mint ceiling already reached.`,
+        error: `Over the cap: ${ethers.formatEther(loaded)} SATORI already loaded plus ${ethers.formatEther(batch)} in this batch is more than ${ethers.formatEther(cap)}. The freeze would refuse this table.`,
       };
     }
     return run(() => contracts.airdrop.loadAirdropBatch(addrs, amounts));
   }, [contracts, run]);
 
-  /// Freeze-authority-gated, permanent: pins the token's airdrop door to the
-  /// contract it points at now and closes that contract's table. Load every
-  /// batch and check the table first.
-  const freezeAirdrop = useCallback(async () => {
+  /// Freeze-authority-gated, permanent: pins the token's airdrop door to this
+  /// airdrop and closes its table. `checkedTotal` is the loaded total the
+  /// operator checked and typed in; the token refuses the freeze if the table
+  /// holds anything else when it lands. Load every batch and check it first.
+  const freezeAirdrop = useCallback(async (checkedTotal: bigint) => {
     if (!contracts) return { ok: false as const, error: 'Not connected' };
-    let door: string, loaded: bigint, cap: bigint, minted: bigint;
+    let door: string, loaded: bigint, cap: bigint;
     try {
-      const [d, l, c, m] = await Promise.all([
+      const [d, l, c] = await Promise.all([
         contracts.reads.token.airdrop(),
         contracts.reads.airdrop.airdropLoadedTotal(),
         contracts.reads.airdrop.AIRDROP_TOTAL_SUPPLY(),
-        contracts.reads.token.airdropMinted(),
       ]);
-      door = String(d); loaded = BigInt(l); cap = BigInt(c); minted = BigInt(m);
+      door = String(d); loaded = BigInt(l); cap = BigInt(c);
     } catch (e) {
       return { ok: false as const, error: explainError(e) };
     }
-    if (door.toLowerCase() !== String(contracts.reads.airdrop.target).toLowerCase()) {
+    const here = String(contracts.reads.airdrop.target);
+    if (door.toLowerCase() !== here.toLowerCase()) {
       return { ok: false as const, error: 'The airdrop door no longer points at this airdrop; reload.' };
+    }
+    if (loaded !== checkedTotal) {
+      return { ok: false as const, error: `The table holds ${ethers.formatEther(loaded)} SATORI, not the ${ethers.formatEther(checkedTotal)} you checked. Check it again before freezing.` };
     }
     if (loaded === BigInt(0)) {
       return { ok: false as const, error: 'Nothing is loaded. Freezing an empty table would leave this airdrop empty for good.' };
     }
-    if (minted + loaded > cap) {
-      return { ok: false as const, error: 'Over the ceiling: the table cannot all be paid. Fix it with a corrected airdrop and setAirdrop before freezing; after the freeze it never can be.' };
+    if (loaded > cap) {
+      return { ok: false as const, error: 'Over the ceiling: the token refuses to freeze a table it cannot pay in full. Fix it with a corrected airdrop and setAirdrop.' };
     }
-    return run(() => contracts.token.freezeAirdrop());
+    return run(() => contracts.token.freezeAirdrop(here, loaded));
   }, [contracts, run]);
 
   /// Loader-gated, one-shot: opens claims at once.

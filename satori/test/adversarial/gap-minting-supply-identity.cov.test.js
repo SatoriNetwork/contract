@@ -34,7 +34,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { time, impersonateAccount, setBalance } = require("@nomicfoundation/hardhat-network-helpers");
-const { deploySatoriFixture, pack1, VOTE } = require("../fixtures");
+const { deploySatoriFixture, pack1, VOTE, freezeStandingAirdrop } = require("../fixtures");
 
 const ROUND = 86400; // timeUnitSeconds (24h)
 const E = (n) => ethers.parseEther(String(n));
@@ -245,7 +245,7 @@ describe("[gap] minting — absolute supply==minted conservation identity", func
     );
 
     // Claims open at finalize; each claim pays the whole allocation.
-    await token.connect(owner).freezeAirdrop();
+    await freezeStandingAirdrop(token, owner);
     await airdrop.connect(owner).finalizeAirdropLoading();
     await airdrop.connect(alice).claimAirdrop();
     await airdrop.connect(bob).claimAirdrop();

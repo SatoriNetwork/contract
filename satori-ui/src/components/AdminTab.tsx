@@ -32,6 +32,7 @@ export function AdminTab() {
   const [airdropInput, setAirdropInput] = useState('');
   const [airdropAction, setAirdropAction] = useState<ActionState>(null);
   const [freezeAction, setFreezeAction] = useState<ActionState>(null);
+  const [freezeTotalInput, setFreezeTotalInput] = useState('');
   const [finalizeAction, setFinalizeAction] = useState<ActionState>(null);
 
   const [busy, setBusy] = useState<string | null>(null);
@@ -138,14 +139,18 @@ export function AdminTab() {
   // frozen anywhere.
   const frozenHere = data.airdropFrozen && data.airdropPointsHere;
   const tableClosed = data.airdropFrozen || data.airdropLoadingFinalized;
-  const overCap = data.airdropLoadedTotal + (data.airdropLoadingFinalized ? BigInt(0) : data.airdropMinted) > data.airdropCap;
+  const overCap = data.airdropLoadedTotal > data.airdropCap;
+  // The total the freeze commits to is the one the operator checked, typed in,
+  // not the one this page last read: a row loaded after the check must make the
+  // freeze refuse, and it would match a page read taken after it.
+  let checkedTotal: bigint | null = null;
+  try { if (freezeTotalInput.trim()) checkedTotal = ethers.parseEther(freezeTotalInput.trim()); } catch { checkedTotal = null; }
   const amber = 'block mt-1 text-amber-600 dark:text-amber-400';
   const loadedLine = (testId: string) => (
     <span className="block mt-1" data-testid={testId}>
       Loaded {fmtSatori(data.airdropLoadedTotal)} of {fmtSatori(data.airdropCap)} SATORI.
       {overCap && <span className={amber} data-testid={`${testId}-over`}>
-        Over the ceiling: the token will not mint past it, so the last claimers could not claim.
-        {data.airdropFrozen ? ' The table is closed, so this can no longer be fixed.' : ' Rows cannot be edited: fix it by deploying a corrected airdrop and pointing the token at it (setAirdrop) before the freeze.'}
+        Over the ceiling: the token refuses to freeze a table it cannot pay in full. Rows cannot be edited: fix it by deploying a corrected airdrop and pointing the token at it (setAirdrop).
       </span>}
     </span>
   );
@@ -319,7 +324,7 @@ export function AdminTab() {
         />
         <Row
           title="Load Airdrop Batch"
-          subtitle={<>Seed airdrop allocations (loader-gated, on the SatoriAirdrop contract). One entry per line: <span className="font-mono">address, amount</span> (amount in SATORI). Nothing is claimable until the airdrop is finalized; from then on, each recipient can claim their whole allocation at once. The contract does not cap the loaded total: keep it at or under 1,200,000 SATORI (this page refuses a batch that would go over), or the last claimers could not claim. Loading closes for good at the freeze.
+          subtitle={<>Seed airdrop allocations (loader-gated, on the SatoriAirdrop contract). One entry per line: <span className="font-mono">address, amount</span> (amount in SATORI). Nothing is claimable until the airdrop is finalized; from then on, each recipient can claim their whole allocation at once. The freeze refuses a table over the {fmtSatori(data.airdropCap)} SATORI ceiling, so keep the total at or under it (this page refuses a batch that would go over). Loading closes for good at the freeze.
             {tableClosed && <span className={amber} data-testid="airdrop-load-closed">The table is closed ({data.airdropLoadingFinalized ? 'finalized' : 'the airdrop door is frozen'}): nothing more can be loaded.</span>}
             {!tableClosed && !data.airdropPointsHere && <span className={amber} data-testid="airdrop-load-elsewhere">The token&apos;s airdrop door does not point at this airdrop, so rows loaded here would not pay. If it points at a corrected airdrop, update this page&apos;s address book.</span>}</>}
           summary={<span className="text-xs text-gray-500">loader only</span>}
@@ -333,15 +338,16 @@ export function AdminTab() {
             subtitle={<>Pins the token&apos;s airdrop door to this SatoriAirdrop and closes its table. <strong>Permanent.</strong> After the freeze nothing more can be loaded, and a wrong table can no longer be fixed by pointing the token at a corrected airdrop. So load every batch and check the table first: freezing too early leaves this airdrop short, or empty, for good. Finalizing needs this first. Freeze authority (on the token): <span className="font-mono">{shortAddress(data.freezeAuthority)}</span>.
               {loadedLine('airdrop-freeze-loaded')}
               {!data.airdropFrozen && !data.airdropPointsHere && <span className={amber}>The token&apos;s airdrop door does not point at this page&apos;s airdrop.</span>}
-              {!data.airdropFrozen && data.airdropLoadedTotal === BigInt(0) && <span className={amber} data-testid="airdrop-freeze-empty">Nothing is loaded yet: load the table before freezing.</span>}</>}
+              {!data.airdropFrozen && data.airdropLoadedTotal === BigInt(0) && <span className={amber} data-testid="airdrop-freeze-empty">Nothing is loaded yet: load the table before freezing.</span>}
+              {!data.airdropFrozen && <span className="block mt-1" data-testid="airdrop-freeze-exact">Type the loaded total you checked, in SATORI to the last digit. The freeze commits to it and refuses if the table now holds anything else. On chain now: <span className="font-mono">{ethers.formatEther(data.airdropLoadedTotal)}</span>.</span>}</>}
             summary={<span className="text-xs font-medium text-gray-500" data-testid="airdrop-freeze-state">
               {!data.airdropFrozen ? 'not frozen' : data.airdropPointsHere ? 'frozen' : 'frozen elsewhere'}
             </span>}
-            input={null}
+            input={data.airdropFrozen ? null : <input type="text" value={freezeTotalInput} onChange={(e) => setFreezeTotalInput(e.target.value)} placeholder="checked total, e.g. 1031413.66029502" className="w-full bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded px-3 py-2 text-sm font-mono" data-testid="input-freeze-total" disabled={busy !== null || !owner.isFreezeAuthority} />}
             action={freezeAction}
-            onSave={() => wrap('freeze', setFreezeAction, () => owner.freezeAirdrop(),
+            onSave={() => checkedTotal !== null && wrap('freeze', setFreezeAction, () => owner.freezeAirdrop(checkedTotal as bigint),
               'Airdrop door frozen and the table closed. The loader can now finalize.')}
-            saving={busy === 'freeze'} disabled={!owner.isFreezeAuthority || data.airdropFrozen || !data.airdropPointsHere || data.airdropLoadedTotal === BigInt(0) || overCap}
+            saving={busy === 'freeze'} disabled={!owner.isFreezeAuthority || data.airdropFrozen || !data.airdropPointsHere || data.airdropLoadedTotal === BigInt(0) || overCap || checkedTotal === null}
             saveLabel="Freeze" saveTestId="btn-freeze-airdrop"
             danger
           />

@@ -1,7 +1,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { loadFixture, impersonateAccount, setBalance } = require("@nomicfoundation/hardhat-network-helpers");
-const { deploySatoriFixtureNoFee, deploySatoriFixtureOpts, pack1, VOTE } = require("../fixtures");
+const { deploySatoriFixtureNoFee, deploySatoriFixtureOpts, pack1, VOTE, freezeStandingAirdrop } = require("../fixtures");
 const {
   BASE, T0, grossUp, rewardsSigner, issuedOf, issueTo, advanceRound, eventsNamed,
 } = require("./emissionHelpers");
@@ -152,6 +152,7 @@ describe("Issued counter — what counts toward the emission steps", function ()
     expect(await token.devFeeMinted()).to.be.gt(devBefore);
     expect(dev.delta, "mintDevFee").to.equal(0n);
 
+    await freezeStandingAirdrop(token, owner);
     const airdropAddr = await token.airdrop();
     await impersonateAccount(airdropAddr);
     await setBalance(airdropAddr, E(1));

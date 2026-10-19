@@ -40,7 +40,7 @@ const COPY: Record<string, string> = {
   BadRewardsAddress:   'Bad rewards address.',
   BadVotingAddress:    'Bad voting address.',
   // Shared by the token's rewardMint and airdropMint.
-  BudgetExceeded:      'The mint would exceed its cap: the reward budget, or the airdrop\'s 1,200,000 SATORI ceiling.',
+  BudgetExceeded:      'Over a cap: the reward budget, or the airdrop\'s 1,200,000 SATORI ceiling (which the freeze also checks the loaded table against).',
   DelegateActive:      'Your current delegate has already predicted this round. Wait for the next round.',
   Delegated:           'Your prediction power is delegated. Undelegate first to predict yourself.',
   DuplicatePrediction: 'You already predicted on this stream this round, or within the last 24 hours on a named stream.',
@@ -158,6 +158,7 @@ const COPY: Record<string, string> = {
   // ---- split-core additions (SatoriToken / SatoriEngine / SatoriHub) ----
   AlreadySet:               'This one-time setting has already been configured.',
   AirdropNotSet:            'The token has no airdrop contract set, so there is nothing to freeze.',
+  AirdropChanged:           'The airdrop door or its table changed since it was checked. Reload and check the table again before freezing.',
   Frozen:                   'This setting is frozen for good and can no longer be changed.',
 
   // ---- SatoriAirdrop.sol ----
@@ -166,7 +167,7 @@ const COPY: Record<string, string> = {
   LengthMismatch:           'Addresses and amounts do not line up.',
   AirdropLoadingClosed:     'The airdrop table is closed (frozen or finalized): nothing more can be loaded.',
   ClaimsNotOpen:            'Airdrop claims are not open yet. They open when the airdrop is finalized.',
-  AirdropNotFrozen:         'The token\'s airdrop door must be frozen to this airdrop before it can be finalized.',
+  AirdropNotFrozen:         'The token\'s airdrop door must be frozen to this airdrop first: finalize, and any airdrop mint, wait for the freeze.',
   BountyParamsInvalid:      'Bounty parameters are invalid.',
   ControllerNotSet:         'The token controller is not wired yet. Try again after setup completes.',
   CrosschainLimit:          'That would mint more SATORI on the home chain than has actually been bridged out of it.',

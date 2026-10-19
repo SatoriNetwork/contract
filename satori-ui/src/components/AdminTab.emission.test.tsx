@@ -35,7 +35,7 @@ beforeEach(() => {
       protocolFeePerRound: E(127), platformFeeRecipient: ADMIN, emissionRatePerRound: E(846.62),
       currentRound: 3, offchainBudget: BigInt(0), onChainRewardCeiling: BigInt(0), merkleReserveCeiling: BigInt(0),
       defaultStreamInitialized: true, airdropLoadedTotal: BigInt(0), airdropCap: E(1200000), airdropLoadingFinalized: false,
-      airdropPointsHere: true, airdropFrozen: false, freezeAuthority: ADMIN, airdropMinted: BigInt(0),
+      airdropPointsHere: true, airdropFrozen: false, freezeAuthority: ADMIN,
       emission: {
         rateNow: E(846.62), rateNext: E(846.62), rateAfterStep: E(523.24),
         ratioWad: BigInt('618033988749894848'), stepsTaken: 0,
@@ -83,6 +83,7 @@ it('is disabled for a wallet that is not the holder', () => {
 
 describe('airdrop: load, freeze the door, then finalize', () => {
   const btn = (id: string) => screen.getByTestId(id) as HTMLButtonElement;
+  const typeChecked = (v: string) => fireEvent.change(screen.getByTestId('input-freeze-total'), { target: { value: v } });
   const typeBatch = () => fireEvent.change(screen.getByTestId('input-load-airdrop'), { target: { value: '0x00000000000000000000000000000000000000bb, 5' } });
   beforeEach(() => {
     mockOwner.data.airdropHolder = ADMIN;
@@ -151,16 +152,17 @@ describe('airdrop: load, freeze the door, then finalize', () => {
   it('warns when the table is over the ceiling', () => {
     mockOwner.data.airdropLoadedTotal = E(1200001);
     render(<AdminTab />);
-    expect(screen.getByTestId('airdrop-freeze-loaded-over').textContent).toMatch(/last claimers could not claim/);
+    expect(screen.getByTestId('airdrop-freeze-loaded-over').textContent).toMatch(/refuses to freeze a table it cannot pay in full/);
     expect(screen.getByTestId('airdrop-finalize-loaded-over')).toBeTruthy();
     expect(btn('btn-freeze-airdrop').disabled).toBe(true);
   });
 
-  it('counts airdrop minted outside this table against the ceiling before finalize', () => {
-    Object.assign(mockOwner.data, { airdropLoadedTotal: E(1200000), airdropMinted: E(1) });
+  it('a table exactly at the ceiling is not over it', () => {
+    mockOwner.data.airdropLoadedTotal = E(1200000);
     render(<AdminTab />);
-    expect(screen.getByTestId('airdrop-freeze-loaded-over')).toBeTruthy();
-    expect(btn('btn-freeze-airdrop').disabled).toBe(true);
+    expect(screen.queryByTestId('airdrop-freeze-loaded-over')).toBeNull();
+    typeChecked('1200000');
+    expect(btn('btn-freeze-airdrop').disabled).toBe(false);
   });
 
   it('freeze is shut with nothing loaded', () => {
@@ -173,6 +175,7 @@ describe('airdrop: load, freeze the door, then finalize', () => {
   it('finalize is shut, with the reason, until the door is frozen', () => {
     render(<AdminTab />);
     expect(screen.getByTestId('airdrop-freeze-state').textContent).toBe('not frozen');
+    typeChecked('1000');
     expect(btn('btn-freeze-airdrop').disabled).toBe(false);
     expect(btn('btn-finalize-airdrop').disabled).toBe(true);
     expect(screen.getByTestId('airdrop-finalize-blocked').textContent).toBe('Freeze the airdrop door first.');
@@ -221,11 +224,21 @@ describe('airdrop: load, freeze the door, then finalize', () => {
     expect(btn('btn-freeze-airdrop').disabled).toBe(true);
   });
 
-  it('the freeze button sends freezeAirdrop', async () => {
+  it('freeze stays shut until the checked total is typed, and shows the exact total on chain', () => {
+    mockOwner.data.airdropLoadedTotal = E(1000) + BigInt(1);
+    render(<AdminTab />);
+    expect(screen.getByTestId('airdrop-freeze-exact').textContent).toMatch(/On chain now: 1000\.000000000000000001\./);
+    expect(btn('btn-freeze-airdrop').disabled).toBe(true);
+    typeChecked('not a number');
+    expect(btn('btn-freeze-airdrop').disabled).toBe(true);
+  });
+
+  it('the freeze button sends the total the operator typed, not the one the page read', async () => {
     mockOwner.freezeAirdrop = jest.fn().mockResolvedValue({ ok: true });
     render(<AdminTab />);
+    typeChecked('999.5');
     fireEvent.click(btn('btn-freeze-airdrop'));
     expect(await screen.findByText(/Airdrop door frozen/)).toBeTruthy();
-    expect(mockOwner.freezeAirdrop).toHaveBeenCalledTimes(1);
+    expect(mockOwner.freezeAirdrop).toHaveBeenCalledWith(E(999.5));
   });
 });

@@ -35,10 +35,9 @@ contract SatoriAirdrop {
     /// Per-recipient allocation. Written once per recipient, never edited,
     /// never removed.
     mapping(address => uint256) public airdropAllocation;
-    /// Running sum of every loaded allocation. Nothing on-chain checks it
-    /// against the ceiling: the loader verifies `<= AIRDROP_TOTAL_SUPPLY()`
-    /// off-chain as it loads, because an over-loaded table does not over-mint
-    /// (the token cap holds) but it does lock out the last claimers.
+    /// Running sum of every loaded allocation. The token's `freezeAirdrop`
+    /// reads it: the freeze passes the total that was checked, and refuses a
+    /// total over the cap.
     uint256 public airdropLoadedTotal;
     /// Set once by `finalizeAirdropLoading`: claims open.
     bool public airdropLoadingFinalized;

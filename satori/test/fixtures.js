@@ -431,7 +431,17 @@ async function onChainGrossNow(satori) {
   return (await satori.emissionRateNow()) - (await satori.devRateNow());
 }
 
+// token.freezeAirdrop takes the door and the table total it was checked at.
+// For tests that are not about that check: freeze the standing door at its
+// standing total.
+async function freezeStandingAirdrop(token, signer) {
+  const door = await token.airdrop();
+  const table = await ethers.getContractAt("SatoriAirdrop", door);
+  return token.connect(signer).freezeAirdrop(door, await table.airdropLoadedTotal());
+}
+
 module.exports = {
+  freezeStandingAirdrop,
   onChainGrossNow,
   deploySatoriFixture,
   deploySatoriFixtureNoFee,

@@ -12,6 +12,13 @@ interface ITransferHook {
     function onTokenTransfer(address from, address to, uint256 value) external;
 }
 
+/// SatoriAirdrop closes its loading once `airdropFrozen` is set, so the total
+/// read at the freeze is the table that pays.
+interface IAirdropTable {
+    function token() external view returns (address);
+    function airdropLoadedTotal() external view returns (uint256);
+}
+
 interface IBridgeAuthority {
     /// `view` is load-bearing: it compiles to STATICCALL, so a hostile registry
     /// cannot reenter the token through this call.
@@ -48,10 +55,9 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
         0x4200000000000000000000000000000000000028;
 
     uint256 public constant ROUND_REWARD_BUDGET = 1440 ether;
-    /// Ceiling over ALL airdropped tokens; it bites at MINT time, so an
-    /// over-loaded table pays early claimers and strands the last ones. Cannot
-    /// be raised without redeploying (immutable), so set generously; the true
-    /// figure is expected over a million and pinned lower before D5.
+    /// Ceiling over ALL airdropped tokens. `freezeAirdrop` refuses a table over
+    /// it and nothing mints before the freeze, so a table that freezes is paid
+    /// in full. A table that needs more takes a new token.
     uint256 public constant AIRDROP_TOTAL_SUPPLY = 1_200_000 ether;
     /// MUST equal `SatoriHub.BASE_EMISSION_PER_ROUND`, the hub's deploy-time
     /// default rate (mirrored constant, pinned by a lockstep test — the token
@@ -236,6 +242,8 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
     error HookFailedWithoutReason();
     error ControllerNotSet();
     error AirdropNotSet();
+    error AirdropNotFrozen();
+    error AirdropChanged();
     error NotHomeChain();
     error CrosschainLimit();
     error Frozen();
@@ -446,6 +454,7 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
     }
 
     function airdropMint(address to, uint256 amount) external onlyAirdrop {
+        if (!airdropFrozen) revert AirdropNotFrozen();
         if (airdropMinted + amount > AIRDROP_TOTAL_SUPPLY) revert BudgetExceeded();
         airdropMinted += amount;
         airdropMintedTo[to] += amount;
@@ -661,14 +670,21 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
         emit HookFrozen(hook);
     }
 
-    /// Pins the airdrop lane to the standing SatoriAirdrop contract, which has
-    /// no upgrade path — after this the airdrop schedule is set in stone.
-    /// Refuses an unset pointer, which would close the lane with nothing
-    /// behind it.
-    function freezeAirdrop() external onlyFreeze onlyHomeChain {
-        if (airdrop == address(0)) revert AirdropNotSet();
+    /// Pins the airdrop door, and with it the table that pays. Takes the door
+    /// and table total that were checked, so a `setAirdrop` or a loaded row
+    /// that lands while the freeze is queued makes it revert instead of
+    /// standing for good.
+    function freezeAirdrop(address expectedAirdrop, uint256 expectedLoadedTotal)
+        external onlyFreeze onlyHomeChain
+    {
+        address door = airdrop;
+        if (door == address(0)) revert AirdropNotSet();
+        if (door != expectedAirdrop) revert AirdropChanged();
+        if (IAirdropTable(door).token() != address(this)) revert BadInput();
+        if (IAirdropTable(door).airdropLoadedTotal() != expectedLoadedTotal) revert AirdropChanged();
+        if (expectedLoadedTotal > AIRDROP_TOTAL_SUPPLY) revert BudgetExceeded();
         airdropFrozen = true;
-        emit AirdropFrozen(airdrop);
+        emit AirdropFrozen(door);
     }
 
     function freezeBridgeAuthority() external onlyFreeze {

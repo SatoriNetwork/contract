@@ -45,7 +45,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { time, impersonateAccount, setBalance } = require("@nomicfoundation/hardhat-network-helpers");
-const { deploySatoriFixtureOpts } = require("../fixtures");
+const { deploySatoriFixtureOpts, freezeStandingAirdrop } = require("../fixtures");
 const { deployMerkleProxied } = require("../next/splitFixture");
 
 const E = (n) => ethers.parseEther(String(n));
@@ -473,7 +473,7 @@ describe("[adv] ADMIN / AUTH / LIFECYCLE / EMERGENCY — full privileged surface
       await expect(airdrop.connect(owner).finalizeAirdropLoading())
         .to.be.revertedWithCustomError(airdrop, "AirdropNotFrozen");
 
-      await token.connect(owner).freezeAirdrop();
+      await freezeStandingAirdrop(token, owner);
       await expect(airdrop.connect(owner).loadAirdropBatch([bob.address], [E(100000)]))
         .to.be.revertedWithCustomError(airdrop, "AirdropLoadingClosed");
       await airdrop.connect(owner).finalizeAirdropLoading();
@@ -500,7 +500,7 @@ describe("[adv] ADMIN / AUTH / LIFECYCLE / EMERGENCY — full privileged surface
     it("an airdrop claim NEVER touches the reward cap counters (separate lane)", async function () {
       const { satori, airdrop, token } = await deployStack(owner, publisher);
       await airdrop.connect(owner).loadAirdropBatch([alice.address], [E(500000)]);
-      await token.connect(owner).freezeAirdrop();
+      await freezeStandingAirdrop(token, owner);
       await airdrop.connect(owner).finalizeAirdropLoading();
 
       const rmintBefore = await satori.totalRewardsMinted();
@@ -522,6 +522,9 @@ describe("[adv] ADMIN / AUTH / LIFECYCLE / EMERGENCY — full privileged surface
       await impersonateAccount(airdropAddr);
       await setBalance(airdropAddr, E(100));
       const ad = await ethers.getSigner(airdropAddr);
+      await expect(token.connect(ad).airdropMint(alice.address, 1n))
+        .to.be.revertedWithCustomError(token, "AirdropNotFrozen");
+      await freezeStandingAirdrop(token, owner);
       await expect(token.connect(ad).airdropMint(alice.address, TOTAL + 1n))
         .to.be.revertedWithCustomError(token, "BudgetExceeded");
     });

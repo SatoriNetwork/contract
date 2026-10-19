@@ -1,7 +1,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
-const { deploySatoriFixture, pack1, VOTE } = require("../fixtures");
+const { deploySatoriFixture, pack1, VOTE, freezeStandingAirdrop } = require("../fixtures");
 const { deployMerkleProxied } = require("../next/splitFixture");
 
 /**
@@ -61,9 +61,6 @@ async function loadRates(satori) {
 // of the fee's 15%, with ONE floor over the whole product — which is the hub's
 // own arithmetic, and not the same as `e` copies of a floored per-round share.
 const genCap = (e) => (RATE * e * 8500n) / 10000n;
-// AIRDROP_TOTAL_SUPPLY — a placeholder pending the real figure, so this
-// mirror is only a convenience; assertions that matter read the contract.
-const AIRDROP_TOTAL = E("1200000");
 // Burn-voting amounts. `vote` DESTROYS the tokens it spends, so these sims burn
 // a small seed to give each game weight and a tiny amount per churn vote — big
 // enough to move weight, small enough that a user's prediction power (balance +
@@ -167,7 +164,7 @@ describe("ADV precision / long-horizon accumulation drift", function () {
     await airdrop.connect(owner).loadAirdropBatch(
       dropRecipients.map((r) => r.address), dropAmts
     );
-    await token.connect(owner).freezeAirdrop();
+    await freezeStandingAirdrop(token, owner);
     await airdrop.connect(owner).finalizeAirdropLoading();
 
     // bootstrap eligibility — every game gets burnt weight
@@ -530,7 +527,7 @@ describe("ADV precision / long-horizon accumulation drift", function () {
     for (let i = 0; i < recips.length; i++) {
       expect(await airdrop.claimableAirdrop(recips[i].address), `shut r${i}`).to.equal(0n);
     }
-    await token.connect(owner).freezeAirdrop();
+    await freezeStandingAirdrop(token, owner);
     await airdrop.connect(owner).finalizeAirdropLoading();
 
     // 40 checkpoints across ~5 years with jitter. At each, a random subset of

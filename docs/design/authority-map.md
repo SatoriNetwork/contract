@@ -71,9 +71,11 @@ second carve-out until 2026-10-07, when the airdrop moved into its own contract
 (`docs/issues/airdrop-own-contract.md`). It is now a role on `SatoriAirdrop`,
 seeded at construction with `REWARDS_ADMIN`, rotated by its holder, recalled by
 `appointAuthority`, with no admin fallback. Still the only operational power that
-can put tokens somewhere: loading has no on-chain cap check, so an over-allocation
-turns the cap into a claim race. Loading closes at the token's `freezeAirdrop`
-(`loadAirdropBatch` reverts `AirdropLoadingClosed` once `airdropFrozen`), so the
+can put tokens somewhere: loading has no on-chain cap check, but the token's
+`freezeAirdrop(airdrop, loadedTotal)` refuses a total over the cap, or one that
+moved since the check, so an over-allocation is never frozen or paid. Loading
+closes at the token's `freezeAirdrop` (`loadAirdropBatch` reverts
+`AirdropLoadingClosed` once `airdropFrozen`), so the
 table checked before the freeze is exactly what pays; freeze only after the last
 batch is loaded and checked, because a freeze before loading would leave this
 airdrop empty for good. What is left is `finalizeAirdropLoading`, which opens
@@ -188,11 +190,13 @@ controller: the hub is upgradeable, the airdrop contract is not, and the point o
 the split pointer is that the airdrop can be frozen (`freezeAirdrop`) without
 freezing anything else. Until the freeze, `wiringAuthority` can re-point it at a
 successor contract, which is how a corrected table or new airdrop behaviour
-ships, and also how a hostile wiring key could mint the unminted airdrop cap.
-`freezeAirdrop` (one-way) ends that: after it no key, no hub upgrade and no
-redeployed airdrop contract can mint airdrop beyond the frozen contract's table,
-because the freeze also closes that table. Claims cannot open before the freeze:
-finalize requires `airdropFrozen`.
+ships. Re-pointing alone mints nothing: `airdropMint` reverts `AirdropNotFrozen`
+until the freeze, and `freezeAirdrop(airdrop, loadedTotal)` (one-way) pins only
+the door and table total the freeze authority checked, reverting if either has
+moved. After it no key, no hub upgrade and no redeployed airdrop contract can
+mint airdrop beyond the frozen contract's table, because the freeze also closes
+that table. Claims cannot open before the freeze: finalize requires
+`airdropFrozen`.
 
 ## 12. `deployer` — dead after deploy
 
@@ -218,10 +222,10 @@ annoy?"
 | Role | Worst it can do | Steal? |
 |---|---|---|
 | `rootAuthority` | point any slot at itself, then do anything below | **yes, in two steps** |
-| `wiringAuthority` | re-point the controller and drain banked mint headroom; until `freezeAirdrop`, re-point the airdrop door and mint the unminted airdrop cap | **yes** |
+| `wiringAuthority` | re-point the controller and drain banked mint headroom; until `freezeAirdrop`, re-point the airdrop door (which mints nothing unless the freeze authority freezes it) | **yes** |
 | `upgradeAuthority` | upgrade any contract to anything | **yes** |
 | `rootPublisher` | direct the whole accrued Merkle reserve to itself | **yes, within its lane** |
-| `airdropAuthority` (on `SatoriAirdrop`) | over-allocate the airdrop before the freeze — no on-chain cap check, so the overage becomes a claim race; or never finalize, so nobody can claim | **yes** |
+| `airdropAuthority` (on `SatoriAirdrop`) | allocate to itself before the freeze, which the pre-freeze check has to catch (a row added after the check makes the freeze revert, and a total over the cap cannot freeze at all); or never finalize, so nobody can claim | **yes** |
 | `emissionAuthority` (hub; falls back to `admin`) | raise emission to the 1,440/round ceiling (dilution), or wind it down to dust (ratio 0 reverts) | no — it cannot mint or redirect; its reach is the size of future emission |
 | `emissionSplitAuthority` | starve either scoring lane; set the ceiling the root publisher pays out of | no — denial, but it sizes someone else's theft |
 | `admin` | switch every game off; toggle capabilities | no — denial |

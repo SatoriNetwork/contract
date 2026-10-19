@@ -4,16 +4,15 @@ pragma solidity ^0.8.20;
 import "forge-std/Test.sol";
 import "../../contracts/next/SatoriToken.sol";
 import "../../contracts/SatoriAirdrop.sol";
-import "../../contracts/libraries/SatoriTypes.sol";
 
 /**
  * @title Airdrop stateful-invariant handler
- * @notice Loads (loader == this handler) an airdrop table that sums to EXACTLY
+ * @notice Loads (loader == this handler) an airdrop table that sums to 90% of
  *         AIRDROP_TOTAL_SUPPLY, then lets the fuzzer empty and refill the
  *         token's wiring slot, re-point the token's airdrop door at a decoy
- *         and back, load more rows into either contract, freeze the door,
- *         finalize, and have recipients claim through all three doors — before
- *         and after finalize. The airdrop needs only the token and its own
+ *         and back, or at itself to mint, load more rows into either contract,
+ *         freeze the door, finalize, and have recipients claim through all
+ *         three doors — before and after finalize. The airdrop needs only the token and its own
  *         contract: the token's `airdrop` pointer is the whole wiring.
  */
 contract AirdropHandler is Test {
@@ -21,6 +20,9 @@ contract AirdropHandler is Test {
     SatoriAirdrop public airdrop;
     /// A corrected-table stand-in the door can be pointed at instead.
     SatoriAirdrop public decoy;
+    uint256 public immutable CAP;
+    uint256 public immutable seededTotal;
+    /// The seeded recipients, then every late row that landed in `airdrop`.
     address[] public actors;
     mapping(address => uint256) public originalAllocation;
 
@@ -30,6 +32,10 @@ contract AirdropHandler is Test {
     bool public ghostMintedWhileShut;
     /// Ghost: a load landed after the freeze.
     bool public ghostLoadedAfterFreeze;
+    /// Ghost: the handler minted through the door as a wallet would.
+    bool public ghostRogueMinted;
+    /// Ghost: a claim on the finalized table reverted while something was owed.
+    bool public ghostUnpaidClaim;
     /// Ghosts: each table's loaded total when the door was first frozen.
     uint256 public airdropTotalAtFreeze;
     uint256 public decoyTotalAtFreeze;
@@ -42,10 +48,12 @@ contract AirdropHandler is Test {
         airdrop = new SatoriAirdrop(address(token), address(this));
         decoy = new SatoriAirdrop(address(token), address(this));
         token.setAirdrop(address(airdrop));
+        CAP = token.AIRDROP_TOTAL_SUPPLY();
 
-        // Five recipients whose allocations sum to EXACTLY the cap (the last
-        // absorbs the rounding remainder).
-        uint256 total = SatoriTypes.AIRDROP_TOTAL_SUPPLY;
+        // Five recipients whose allocations sum to 90% of the cap (the last
+        // absorbs the rounding remainder), so late rows can fit or overflow.
+        uint256 total = CAP - CAP / 10;
+        seededTotal = total;
         uint256 n = 5;
         address[] memory who = new address[](n);
         uint256[] memory amt = new uint256[](n);
@@ -82,10 +90,14 @@ contract AirdropHandler is Test {
         try token.setAirdrop(toDecoy ? address(decoy) : address(airdrop)) {} catch {}
     }
 
-    /// @notice The freeze authority pins the door wherever it points now.
+    /// @notice The freeze authority pins the door wherever it points now, at
+    ///         the table total it reads there.
     function freeze() external {
         bool wasFrozen = token.airdropFrozen();
-        try token.freezeAirdrop() {
+        address door = token.airdrop();
+        uint256 total;
+        try IAirdropTable(door).airdropLoadedTotal() returns (uint256 t) { total = t; } catch {}
+        try token.freezeAirdrop(door, total) {
             if (!wasFrozen) {
                 airdropTotalAtFreeze = airdrop.airdropLoadedTotal();
                 decoyTotalAtFreeze = decoy.airdropLoadedTotal();
@@ -102,17 +114,38 @@ contract AirdropHandler is Test {
     }
 
     /// @notice The loader adds a row to either table at any time; it may land
-    ///         only before the freeze. The new rows never claim, so the
-    ///         actors' allocations always fit under the cap.
+    ///         only before the freeze. Up to a fifth of the cap, so some rows
+    ///         fit the headroom and some take the table over it. A row that
+    ///         lands in `airdrop` becomes a claimer.
     function load(bool intoDecoy, uint256 seed, uint256 amount) external {
         SatoriAirdrop target = intoDecoy ? decoy : airdrop;
         bool frozen = token.airdropFrozen();
         address[] memory who = new address[](1);
         uint256[] memory amt = new uint256[](1);
         who[0] = address(uint160(uint256(keccak256(abi.encode("late", seed)))));
-        amt[0] = bound(amount, 1, SatoriTypes.AIRDROP_TOTAL_SUPPLY);
+        amt[0] = bound(amount, 1, CAP / 5);
         try target.loadAirdropBatch(who, amt) {
             if (frozen) ghostLoadedAfterFreeze = true;
+            if (!intoDecoy) {
+                actors.push(who[0]);
+                originalAllocation[who[0]] = amt[0];
+            }
+        } catch {}
+    }
+
+    /// Records a claim that reverted on the finalized table while `who` was
+    /// still owed: a stranded claimer.
+    function _checkPaid(bool ok, address who) private {
+        if (!ok && !_shut() && airdrop.claimableAirdrop(who) > 0) ghostUnpaidClaim = true;
+    }
+
+    /// @notice The wiring authority points the door at this handler, which
+    ///         has no table, and mints through it.
+    function rogue(uint256 seed, uint256 amount) external {
+        try token.setAirdrop(address(this)) {} catch {}
+        if (token.airdrop() != address(this)) return;
+        try token.airdropMint(actors[seed % actors.length], bound(amount, 1, CAP)) {
+            ghostRogueMinted = true;
         } catch {}
     }
 
@@ -121,10 +154,13 @@ contract AirdropHandler is Test {
         bool shut = _shut();
         uint256 before = token.airdropMinted();
         vm.prank(a);
+        bool ok;
         try airdrop.claimAirdrop() {
+            ok = true;
             if (shut) ghostMintedWhileShut = true;
         } catch {}
         if (shut && token.airdropMinted() != before) ghostMintedWhileShut = true;
+        _checkPaid(ok, a);
     }
 
     function claimFor(uint256 callerSeed, uint256 actorSeed) external {
@@ -132,10 +168,13 @@ contract AirdropHandler is Test {
         bool shut = _shut();
         uint256 before = token.airdropMinted();
         vm.prank(address(uint160(uint256(keccak256(abi.encode("sponsor", callerSeed))))));
+        bool ok;
         try airdrop.claimAirdropFor(a) {
+            ok = true;
             if (shut) ghostMintedWhileShut = true;
         } catch {}
         if (shut && token.airdropMinted() != before) ghostMintedWhileShut = true;
+        _checkPaid(ok, a);
     }
 
     /// @notice A sweep over two (possibly equal) recipients and a stranger.
@@ -147,10 +186,14 @@ contract AirdropHandler is Test {
         list[2] = address(0xdead);
         bool shut = _shut();
         uint256 before = token.airdropMinted();
+        bool ok;
         try airdrop.claimAirdropForMany(list) {
+            ok = true;
             if (shut) ghostMintedWhileShut = true;
         } catch {}
         if (shut && token.airdropMinted() != before) ghostMintedWhileShut = true;
+        _checkPaid(ok, list[0]);
+        _checkPaid(ok, list[1]);
     }
 }
 
@@ -170,11 +213,24 @@ contract AirdropInvariantTest is Test {
         targetContract(address(handler));
     }
 
-    // The library mirror the suites size tables with MUST equal the token's
-    // enforced ceiling; the airdrop contract itself reads the token's.
-    function test_capMirrorsLockstep() public view {
-        assertEq(handler.token().AIRDROP_TOTAL_SUPPLY(), SatoriTypes.AIRDROP_TOTAL_SUPPLY);
-        assertEq(handler.airdrop().AIRDROP_TOTAL_SUPPLY(), SatoriTypes.AIRDROP_TOTAL_SUPPLY);
+    function test_airdropReadsTheTokensCap() public view {
+        assertEq(handler.airdrop().AIRDROP_TOTAL_SUPPLY(), handler.token().AIRDROP_TOTAL_SUPPLY());
+    }
+
+    // The owner's figure (2026-10-19). The token cannot change it after deploy.
+    function test_capIsOwnersFigure() public view {
+        assertEq(handler.CAP(), 1_200_000 ether);
+    }
+
+    // The rogue action does what INV-A8 needs it to: the door moves to a
+    // table-less handler, which can neither mint nor be frozen.
+    function test_rogueDoorNeitherMintsNorFreezes() public {
+        handler.rogue(0, 1 ether);
+        assertEq(handler.token().airdrop(), address(handler));
+        assertEq(handler.token().airdropMinted(), 0);
+        handler.freeze();
+        assertFalse(handler.token().airdropFrozen());
+        assertFalse(handler.ghostRogueMinted());
     }
 
     // Finalize waits for the freeze, and the handler's doors pay in the same
@@ -187,8 +243,9 @@ contract AirdropInvariantTest is Test {
         handler.finalize();
         assertTrue(handler.airdrop().airdropLoadingFinalized());
         for (uint256 i = 0; i < handler.actorsLength(); i++) handler.claim(i);
-        assertEq(handler.token().airdropMinted(), SatoriTypes.AIRDROP_TOTAL_SUPPLY);
+        assertEq(handler.token().airdropMinted(), handler.seededTotal());
         assertFalse(handler.ghostMintedWhileShut());
+        assertFalse(handler.ghostUnpaidClaim());
     }
 
     // The wiring action does what INV-A6 needs it to: an emptied slot does not
@@ -213,11 +270,35 @@ contract AirdropInvariantTest is Test {
         assertEq(a.airdropLoadedTotal(), before + 1 ether);
         assertEq(d.airdropLoadedTotal(), 1 ether);
         handler.freeze();
+        assertTrue(handler.token().airdropFrozen());
         handler.load(false, 3, 1 ether);
         handler.load(true, 4, 1 ether);
         assertEq(a.airdropLoadedTotal(), before + 1 ether);
         assertEq(d.airdropLoadedTotal(), 1 ether);
         assertFalse(handler.ghostLoadedAfterFreeze());
+    }
+
+    // A late row that fits the headroom is paid in full with the rest, and
+    // the stranded-claimer ghost has something to watch.
+    function test_lateRowsArePaidInFull() public {
+        handler.load(false, 7, 1 ether);
+        handler.freeze();
+        handler.finalize();
+        for (uint256 i = 0; i < handler.actorsLength(); i++) handler.claim(i);
+        assertEq(handler.token().airdropMinted(), handler.seededTotal() + 1 ether);
+        assertFalse(handler.ghostUnpaidClaim());
+    }
+
+    // A late row that takes the table over the cap leaves it unfreezable, so
+    // it never opens and nobody is stranded.
+    function test_freezeRefusesAnOverCapTable() public {
+        uint256 cap = handler.CAP();
+        handler.load(false, 8, cap / 5);
+        assertGt(handler.airdrop().airdropLoadedTotal(), cap);
+        handler.freeze();
+        assertFalse(handler.token().airdropFrozen());
+        handler.finalize();
+        assertFalse(handler.airdrop().airdropLoadingFinalized());
     }
 
     // A door frozen at the decoy closes this contract's table too, and it can
@@ -235,7 +316,7 @@ contract AirdropInvariantTest is Test {
 
     // INV-A1: cumulative airdrop minted never exceeds the pre-committed cap.
     function invariant_airdropWithinCap() public view {
-        assertLe(handler.token().airdropMinted(), SatoriTypes.AIRDROP_TOTAL_SUPPLY);
+        assertLe(handler.token().airdropMinted(), handler.CAP());
     }
 
     // INV-A2: solvency, all-or-nothing — each recipient's cumulative claim is
@@ -302,5 +383,23 @@ contract AirdropInvariantTest is Test {
         if (!handler.token().airdropFrozen()) return;
         assertEq(handler.airdrop().airdropLoadedTotal(), handler.airdropTotalAtFreeze(), "table changed after the freeze");
         assertEq(handler.decoy().airdropLoadedTotal(), handler.decoyTotalAtFreeze(), "decoy table changed after the freeze");
+    }
+
+    // INV-A8: nothing mints before the freeze, through any door, and a frozen
+    //         table fits the cap, so every row it holds can be paid in full.
+    function invariant_nothingMintsBeforeTheFreeze() public view {
+        SatoriToken t = handler.token();
+        assertFalse(handler.ghostRogueMinted(), "a door minted before the freeze");
+        if (!t.airdropFrozen()) {
+            assertEq(t.airdropMinted(), 0, "minted before the freeze");
+            return;
+        }
+        assertLe(SatoriAirdrop(t.airdrop()).airdropLoadedTotal(), handler.CAP(), "frozen table over the cap");
+    }
+
+    // INV-A9: no claimer is stranded: a claim on the finalized table never
+    //         reverts while something is still owed.
+    function invariant_noClaimerStranded() public view {
+        assertFalse(handler.ghostUnpaidClaim(), "a claimer was owed but could not claim");
     }
 }

@@ -11,8 +11,7 @@ const GEN = (BUDGET * (10000n - DEV_BPS)) / 10000n;  // 1224 — 85% of it; the 
 // is saturated at the HUB, which holds its lane to 85% of its own per-round
 // rate. The token's 1440 is deliberately the looser of the two.
 let INITIAL_MINT, DEV_GENESIS;
-// Read from the contract: the cap is a placeholder pending the real
-// figure, so a literal here would only have to be chased again.
+// Read from the contract, the one place the cap is set.
 let AIRDROP_CAP;
 const INDEFINITE = 2 ** 24 - 1;
 
@@ -181,13 +180,19 @@ describe("SatoriToken (constitution)", function () {
   // ------------------------------------------------------------------
   describe("airdrop mint (one-shot cap)", function () {
     // The airdrop door is gated on `token.airdrop` — the SatoriAirdrop contract
-    // in production — never on the controller. `devRecipient` stands in for it
-    // here: any address the wiring authority points the slot at.
-    let airdropSigner;
+    // in production — never on the controller, and opens only once frozen.
+    // MockAirdropTable stands in for it: it reports a table total of 0 and
+    // mints whatever it is asked, so the cap is the only thing in its way.
+    let table;
     beforeEach(async function () {
       await withController();
-      airdropSigner = devRecipient;
-      await token.connect(governor).setAirdrop(airdropSigner.address);
+      table = await (await ethers.getContractFactory("MockAirdropTable")).deploy(await token.getAddress());
+      await token.connect(governor).setAirdrop(await table.getAddress());
+      await token.connect(governor).freezeAirdrop(await table.getAddress(), 0n);
+    });
+
+    it("the cap is the owner's 1,200,000 SATORI (2026-10-19), fixed for the token's life", async function () {
+      expect(AIRDROP_CAP).to.equal(ethers.parseEther("1200000"));
     });
 
     it("the airdrop contract reads the cap THROUGH the token, so the two cannot disagree", async function () {
@@ -199,16 +204,16 @@ describe("SatoriToken (constitution)", function () {
     });
 
     it("mints up to exactly the cap with per-recipient tracking, then never again", async function () {
-      await token.connect(airdropSigner).airdropMint(alice.address, AIRDROP_CAP / 2n);
-      await token.connect(airdropSigner).airdropMint(bob.address, AIRDROP_CAP / 2n);
+      await table.mint(alice.address, AIRDROP_CAP / 2n);
+      await table.mint(bob.address, AIRDROP_CAP / 2n);
       expect(await token.airdropMintedTo(alice.address)).to.equal(AIRDROP_CAP / 2n);
       expect(await token.airdropMinted()).to.equal(AIRDROP_CAP);
-      await expect(token.connect(airdropSigner).airdropMint(carol.address, 1n))
+      await expect(table.mint(carol.address, 1n))
         .to.be.revertedWithCustomError(token, "BudgetExceeded");
     });
 
     it("is independent of the reward ceiling", async function () {
-      await token.connect(airdropSigner).airdropMint(alice.address, AIRDROP_CAP);
+      await table.mint(alice.address, AIRDROP_CAP);
       expect(await token.totalRewardsMinted()).to.equal(INITIAL_MINT); // unchanged
       await time.increase(ROUND);
       await token.connect(controller).rewardMint(bob.address, GEN); // general lane still available

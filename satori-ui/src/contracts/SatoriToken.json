@@ -24,6 +24,16 @@
     },
     {
       "inputs": [],
+      "name": "AirdropChanged",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "AirdropNotFrozen",
+      "type": "error"
+    },
+    {
+      "inputs": [],
       "name": "AirdropNotSet",
       "type": "error"
     },
@@ -1397,7 +1407,18 @@
       "type": "function"
     },
     {
-      "inputs": [],
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "expectedAirdrop",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "expectedLoadedTotal",
+          "type": "uint256"
+        }
+      ],
       "name": "freezeAirdrop",
       "outputs": [],
       "stateMutability": "nonpayable",

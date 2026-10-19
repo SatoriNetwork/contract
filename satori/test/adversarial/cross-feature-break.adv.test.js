@@ -54,7 +54,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
-const { deploySatoriFixtureNoFee, pack1, VOTE, warmUpLoyalty } = require("../fixtures");
+const { deploySatoriFixtureNoFee, pack1, VOTE, warmUpLoyalty, freezeStandingAirdrop } = require("../fixtures");
 const { TEST_PLATFORM_FEE_RECIPIENT, TEST_MARKETING_FEE_RECIPIENT, deployMerkleProxied } = require("../next/splitFixture");
 
 const E = (n) => ethers.parseEther(String(n));
@@ -286,7 +286,7 @@ describe("CROSS-FEATURE break hunt — all new features live at once", function 
     expect(await airdrop.airdropLoadedTotal()).to.equal(E(1500));
     await expect(airdrop.connect(grace).claimAirdrop())
       .to.be.revertedWithCustomError(airdrop, "ClaimsNotOpen");
-    await token.connect(owner).freezeAirdrop();
+    await freezeStandingAirdrop(token, owner);
     await airdrop.connect(owner).finalizeAirdropLoading();
     await INV("after-airdrop-load");
 
@@ -814,7 +814,7 @@ describe("CROSS-FEATURE targeted attacks — sharp-edge boundaries", function ()
     // Load, freeze and finalize an airdrop, then run the maxed dial for years
     // so the reserve squeezes the on-chain lane hard.
     await airdrop.connect(owner).loadAirdropBatch([alice.address], [E(5000)]);
-    await token.connect(owner).freezeAirdrop();
+    await freezeStandingAirdrop(token, owner);
     await airdrop.connect(owner).finalizeAirdropLoading();
     await time.increase(Number(1825n * 24n * 3600n * 2n));
 
