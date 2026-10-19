@@ -2,8 +2,19 @@
   "contractName": "CoinedAdapter",
   "abi": [
     {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "coined_",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "nonpayable",
+      "type": "constructor"
+    },
+    {
       "inputs": [],
-      "name": "InvalidTarget",
+      "name": "InvalidProvider",
       "type": "error"
     },
     {
@@ -15,6 +26,19 @@
       "inputs": [],
       "name": "ValueOverflow",
       "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "coined",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
     },
     {
       "inputs": [],

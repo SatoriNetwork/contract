@@ -19,7 +19,8 @@
 //   VOTING_PERIOD_SECONDS     proof governor voting period                  [default: 604800 (7d)]
 //                       Both voting paths ALWAYS deploy; the lock governor's
 //                       proposer starts as GOVERNOR and moves in handoff.js.
-//   COINED_ADDRESS      the Coined contract named streams coin their names on.
+//   COINED_ADDRESS      the Coined contract named streams coin their names on,
+//                       and the one CoinedAdapter reads prices from.
 //                       REQUIRED on every real network (Coined launches on Base
 //                       Sepolia before Satori); hardhat/localhost default to a
 //                       MockCoined deployed here.
@@ -27,6 +28,7 @@
 const hre = require("hardhat");
 const fs = require("fs");
 const path = require("path");
+const { checkCoined } = require("./coined-probe");
 
 const ethers = hre.ethers;
 const PLACEHOLDER_PLATFORM = "0x000000000000000000000000000000000000dEaD";
@@ -108,6 +110,7 @@ async function main() {
   if (coinedAddress && (await ethers.provider.getCode(coinedAddress)) === "0x") {
     throw new Error(`COINED_ADDRESS ${coinedAddress} has no code on '${net}' — deploy Coined first.`);
   }
+  if (coinedAddress) await checkCoined(ethers.provider, coinedAddress);
 
   console.log(`Deploying Satori (split) to '${net}' as ${deployer.address}`);
   console.log(`  governor=${governor} rewardsAdmin=${rewardsAdmin}`);
@@ -237,9 +240,11 @@ async function main() {
 
   // 6. adapters at canonical ids 1..5. Order of the register calls fixes the
   //    ids, so keep it (Chainlink=1, Uniswap=2, Custom=3, Coined=4, Named=5).
-  //    Chainlink / Uniswap / Coined read ESTABLISHED on-chain oracles — they are
-  //    first-party and only manipulable by manipulating the oracle itself, so
-  //    they register as OFFICIAL (registerAdapter, admin-only, no fee).
+  //    Chainlink / Uniswap / Coined are first-party code, so they register as
+  //    OFFICIAL (registerAdapter, admin-only, no fee). That vouches for the code,
+  //    not the source. Before approving a game, check the feed or pool a
+  //    Chainlink or Uniswap stream names, and that a Coined term is deep enough
+  //    that holding a move into the next block costs more than the game pays.
   //    Only Custom takes a community-SUPPLIED source, so it registers via the
   //    permissionless community path (registerCommunityAdapter, which charges
   //    streamBurn — hence the approve below) and is flagged isCommunity=true.
@@ -247,14 +252,14 @@ async function main() {
   const chainlink = await deploy("ChainlinkV3Adapter");
   const uniswap = await deploy("UniswapV3Adapter");
   const custom = await deploy("CustomAdapter");
-  const coined = await deploy("CoinedAdapter");
   A.coined = coinedAddress ?? await (await deploy("MockCoined")).getAddress();
+  const coinedAdapter = await deploy("CoinedAdapter", A.coined);
   const named = await deploy("NamedStreamAdapter", A.engine, A.registry, A.coined);
   await (await token.approve(A.hub, ethers.MaxUint256)).wait();
   await (await hub.registerAdapter(await chainlink.getAddress(), "Chainlink V3")).wait();
   await (await hub.registerAdapter(await uniswap.getAddress(), "Uniswap V3")).wait();
   await (await hub.registerCommunityAdapter(await custom.getAddress(), "Custom")).wait();
-  await (await hub.registerAdapter(await coined.getAddress(), "Coined")).wait();
+  await (await hub.registerAdapter(await coinedAdapter.getAddress(), "Coined")).wait();
   const NAMED_ADAPTER_ID = 5;
   await (await hub.registerAdapter(await named.getAddress(), "Named")).wait();
   // Must precede initializeDefaultStream: setNamedAdapterId requires nextStreamId == 1.
@@ -262,7 +267,7 @@ async function main() {
   A.chainlinkAdapter = await chainlink.getAddress();
   A.uniswapAdapter = await uniswap.getAddress();
   A.customAdapter = await custom.getAddress();
-  A.coinedAdapter = await coined.getAddress();
+  A.coinedAdapter = await coinedAdapter.getAddress();
   A.namedAdapter = await named.getAddress();
 
   // 6.5. read-only lens (computed views for the dapp/indexers, incl.
@@ -462,6 +467,8 @@ async function main() {
     ["registry.namedAdapterId == 5 → NamedStreamAdapter", async () =>
       Number(await registry.namedAdapterId()) === NAMED_ADAPTER_ID
       && eq(await registry.adapter(NAMED_ADAPTER_ID), A.namedAdapter)],
+    ["registry.adapter(4) == CoinedAdapter, reading COINED_ADDRESS", async () =>
+      eq(await registry.adapter(4), A.coinedAdapter) && eq(await coinedAdapter.coined(), A.coined)],
     // Behavioural: the wired address answers like Coined (idOf is its id rule,
     // bytes left-aligned for names up to 32 bytes), not merely the one passed in.
     ["namedAdapter.coined answers like Coined", async () => {

@@ -96,7 +96,7 @@ const COPY: Record<string, string> = {
   PoolNotReady:             'The Uniswap pool has no price observations yet.',
   BadFeeTier:               'Unsupported Uniswap fee tier.',
   PoolTooYoung:             'The Uniswap pool is too young for a reliable TWAP. Try again later.',
-  // CoinedAdapter (ValueOverflow / InvalidTarget above are shared by selector).
+  // CoinedAdapter (ValueOverflow / InvalidProvider above are shared by selector).
   UnknownTerm:              'That Coined term does not exist.',
   // Named streams: NameTaken and NamedStreamConfig are the registry's; the other
   // two are NamedStreamAdapter's (its InvalidProvider shares the registry's selector).

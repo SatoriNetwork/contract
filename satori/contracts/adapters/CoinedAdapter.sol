@@ -6,24 +6,40 @@ import "../interfaces/IStreamAdapterUIDescriptor.sol";
 
 /**
  * @title CoinedAdapter
- * @notice Streams a Coined term's current price into Satori.
- * @dev `config = abi.encode(bytes32 term)`. Reads the spot mark, not an
- *      average: the direction of a smoothed series is visible before it
- *      happens, so an average would hand ABC predictors free wins (a naive
- *      "it keeps heading toward spot" bettor wins ~85% on a 12h EMA sampled
- *      hourly, ~50% on spot). Coined's lagged quotes already make a flash
- *      pump at the pull cost the pumper.
+ * @notice Streams a Coined term's price as its block opened, from the one Coined
+ *         it was deployed against.
+ * @dev `config = abi.encode(bytes32 term)`.
+ *      The block-open supply, not the live one: Coined has no fee, so a buy, a
+ *      pull and a sell in one block would write any value for about a wei. Not
+ *      min(live, open) either: that still lets a holder's same-block sale write
+ *      a low value. A trade held into the next block does move the read.
+ *      A spot read, not an average: an average's next step is visible before it
+ *      happens, which hands ABC predictors free wins.
  */
 interface IValues {
-    /// wei per unit, premiums folded in
-    function priceOf(bytes32 name) external view returns (uint256);
+    /// units outstanding as the current block began
+    function openOf(bytes32 name) external view returns (uint256);
     function exists(bytes32 name) external view returns (bool);
 }
 
 contract CoinedAdapter is IStreamAdapter, IStreamAdapterUIDescriptor {
-    error InvalidTarget();
+    error InvalidProvider();
     error UnknownTerm();
     error ValueOverflow();
+
+    /// Coined's Curve.priceAt, (units + VIRTUAL_SUPPLY) / K, copied: Curve is
+    /// internal to Coined. Must equal Coined's Curve.sol; CoinedAdapterPump.test.js
+    /// checks it against Coined's build, and scripts/coined-probe.js against
+    /// COINED_ADDRESS before deploy.js writes anything.
+    uint256 internal constant K = 500_000;
+    uint256 internal constant VIRTUAL_SUPPLY = 1_000e18;
+
+    address public immutable coined;
+
+    constructor(address coined_) {
+        if (coined_ == address(0)) revert InvalidProvider();
+        coined = coined_;
+    }
 
     function readValue(address values, bytes calldata config)
         external
@@ -31,16 +47,17 @@ contract CoinedAdapter is IStreamAdapter, IStreamAdapterUIDescriptor {
         override
         returns (int232)
     {
+        if (values != coined) revert InvalidProvider();
         bytes32 term = abi.decode(config, (bytes32));
-        uint256 price = IValues(values).priceOf(term);
+        uint256 price = (IValues(coined).openOf(term) + VIRTUAL_SUPPLY) / K;
         if (price > uint256(int256(type(int232).max))) revert ValueOverflow();
         return int232(int256(price));
     }
 
     function validate(address values, bytes calldata config) external view override {
-        if (values == address(0)) revert InvalidTarget();
+        if (values != coined) revert InvalidProvider();
         bytes32 term = abi.decode(config, (bytes32));
-        if (!IValues(values).exists(term)) revert UnknownTerm();
+        if (!IValues(coined).exists(term)) revert UnknownTerm();
     }
 
     // ---- IStreamAdapterUIDescriptor (UI only; never called by core/registry) ----
@@ -52,7 +69,7 @@ contract CoinedAdapter is IStreamAdapter, IStreamAdapterUIDescriptor {
 
     /// @inheritdoc IStreamAdapterUIDescriptor
     function configSchema() external pure override returns (string memory) {
-        return '{"version":1,"fields":[{"name":"term","type":"bytes32","label":"Term id"}]}';
+        return '{"version":1,"fields":[{"key":"term","type":"bytes32","label":"Term id"}]}';
     }
 
     /// @inheritdoc IStreamAdapterUIDescriptor
