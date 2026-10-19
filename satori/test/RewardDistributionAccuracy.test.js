@@ -254,11 +254,13 @@ describe("Reward Distribution Accuracy", function () {
     // test/next/DevFee.test.js): gross = ROUND_REWARD_BUDGET − devRateNow
     // (offchainBudget = 0 here), so at genesis tier 1 gross = 720 − 144 = 576.
     // This game was the only one predicted in round 1, so it is the entire round
-    // denominator and takes the whole 576, which then splits 1:2:4.
+    // denominator and takes the whole 576. It is not the default game, so each
+    // winner is paid its weight over BOTH sides' 10 units (B4): 1:2:4 tenths,
+    // and carol's 3 tenths are not minted.
     // The hub's per-round emission, not the token's 1440 envelope.
     const gross = (await satori.emissionRateNow()) - (await satori.devRateNow());
     const payablePool = gross;
-    const totalCorrectWeight = UNIT * 7n;
+    const bothSidesWeight = UNIT * 10n;
 
     // Referral eager-credit model: every scoring reward is skimmed 5%
     // (REFERRAL_BPS = 500 bps) at CREDIT time and routed to the earner's
@@ -267,10 +269,10 @@ describe("Reward Distribution Accuracy", function () {
     // credit; the earner nets amount − cut.
     const netScore = (raw) => raw - (raw * 500n) / 10000n; // subtract floor(raw*500/10000) skim
 
-    // Raw (pre-skim) scoring shares split 1:2:4 out of the payable pool.
-    const aliceScore = (UNIT * 1n * payablePool) / totalCorrectWeight;
-    const bobScore = (UNIT * 2n * payablePool) / totalCorrectWeight;
-    const daveScore = (UNIT * 4n * payablePool) / totalCorrectWeight;
+    // Raw (pre-skim) scoring shares: 1, 2 and 4 tenths of the payable pool.
+    const aliceScore = (UNIT * 1n * payablePool) / bothSidesWeight;
+    const bobScore = (UNIT * 2n * payablePool) / bothSidesWeight;
+    const daveScore = (UNIT * 4n * payablePool) / bothSidesWeight;
 
     const expectedAliceReward = netScore(aliceScore);
     const expectedBobReward = netScore(bobScore);
@@ -288,14 +290,15 @@ describe("Reward Distribution Accuracy", function () {
     expect(daveReward).to.be.closeTo(expectedDaveReward, tolerance);
     expect(carolReward).to.equal(expectedCarolReward);
 
-    // Conservation still holds EXACTLY at the total level: the 5% skimmed from
-    // each earner lands in the MARKETING_FEE_RECIPIENT bucket (zero/self
-    // referral), so earners' claims + that bucket account for the whole round
-    // budget. Include the marketing bucket in the sum so the invariant remains
-    // exact — documenting where the 5% went rather than weakening the check.
+    // Conservation holds EXACTLY at the total level: the 5% skimmed from each
+    // earner lands in the MARKETING_FEE_RECIPIENT bucket (zero/self referral),
+    // so earners' claims + that bucket account for the winners' 7 tenths of
+    // the round budget. Include the marketing bucket in the sum so the
+    // invariant remains exact — documenting where the 5% went rather than
+    // weakening the check.
     const marketingBucket = await rewards.unclaimedRewards(await rewards.marketingFeeRecipient());
     const totalDistributed = aliceReward + bobReward + carolReward + daveReward + marketingBucket;
-    expect(totalDistributed).to.be.closeTo(payablePool, RAW_TOLERANCE);
+    expect(totalDistributed).to.be.closeTo((payablePool * 7n) / 10n, RAW_TOLERANCE);
 
     // Log the results for verification
     console.log("\n=== Reward Distribution Results ===");
@@ -304,7 +307,7 @@ describe("Reward Distribution Accuracy", function () {
     console.log(`Carol reward: ${ethers.formatEther(carolReward)} (expected: ${ethers.formatEther(expectedCarolReward)})`);
     console.log(`Dave reward: ${ethers.formatEther(daveReward)} (expected: ${ethers.formatEther(expectedDaveReward)})`);
     console.log(`Marketing (referral skim) bucket: ${ethers.formatEther(marketingBucket)}`);
-    console.log(`Total distributed (earners + marketing): ${ethers.formatEther(totalDistributed)} (expected: ${ethers.formatEther(payablePool)})`);
+    console.log(`Total distributed (earners + marketing): ${ethers.formatEther(totalDistributed)} (expected: ${ethers.formatEther((payablePool * 7n) / 10n)})`);
     console.log(`Difference: ${totalDistributed - (payablePool)} wei`);
   });
 });

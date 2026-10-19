@@ -143,7 +143,7 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
         return _effectivePredictorFee(predictorFeeStored[predictor]);
     }
 
-    uint32 internal constant DEFAULT_STREAM_ID = 1;
+    uint32 internal constant DEFAULT_GAME_ID = 1;
 
     // ===== Per-round budget =====
     //
@@ -1744,7 +1744,8 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
 
     /**
      * @notice Compute the exact reward for a user on a specific game/round/direction.
-     * @dev Uses final totalWeight — always proportionally correct.
+     * @dev The totals are final: the engine scores a prediction only after its
+     *      round ends. Every game-round credits at most its slice.
      */
     function _computeReward(
         uint32 gameId,
@@ -1767,17 +1768,28 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
         // (`totalWeight`/`userWeight` keep round R's divisor; it cancels in
         // userWeight/totalWeight, so its index is moot.)
         // Pool sizing (shared helper): the game's share of the round budget.
-        // Nothing is
-        // skimmed on the way — the whole slice reaches this game's predictors.
+        // Nothing is skimmed on the way.
         uint256 streamPool = _streamPoolPostCut(gameId, round);
         if (streamPool == 0) return 0;
-        // Named games are pari-mutuel: a side is paid only in proportion to
-        // what the OTHER side committed, so a crowd that merely agrees with
-        // itself (the counter is self-referential) draws nothing. UP pool +
-        // DOWN pool still == streamPool.
+        uint256 other = direction == 1 ? (_packedW & DIR_HALF_MASK) : (_packedW >> 128);
         if (named) {
-            uint256 other = direction == 1 ? (_packedW & DIR_HALF_MASK) : (_packedW >> 128);
+            // Pari-mutuel: a side is paid only in proportion to what the OTHER
+            // side committed, so a crowd that merely agrees with itself (the
+            // counter is self-referential) draws nothing. UP pool + DOWN pool
+            // still == streamPool.
             streamPool = (streamPool * other) / (totalWeight + other);
+        } else if (gameId != DEFAULT_GAME_ID) {
+            // Each prediction is scored on the values after its own hour, so an
+            // UP and a DOWN made at different hours of one round can both win:
+            // divide by both sides, or the round pays up to twice its slice.
+            // The default game keeps its own side, and so its winners the whole
+            // slice, because all its predictors of a round read one pair of
+            // values: its stream is written once a round at hour round*24,
+            // before any prediction (SatoriEngine.flushDefaultStream), and its
+            // target puts it in the ABC band (SatoriEngine._scorePreviousPrediction),
+            // which scores on the first two values after the prediction. Change
+            // either and it becomes a game like this.
+            totalWeight += other;
         }
         return (streamPool * userWeight) / totalWeight;
     }

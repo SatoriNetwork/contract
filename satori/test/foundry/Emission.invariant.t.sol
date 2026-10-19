@@ -9,7 +9,7 @@ import "./Conservation.invariant.t.sol";
 contract EmissionInvariantTest is ConservationInvariantTest {
     function setUp() public override {
         super.setUp();
-        bytes4[] memory s = new bytes4[](14);
+        bytes4[] memory s = new bytes4[](16);
         s[0] = Handler.setEmissionRatio.selector;
         s[1] = Handler.bumpIssued.selector;
         s[2] = Handler.syncEmission.selector;
@@ -24,6 +24,8 @@ contract EmissionInvariantTest is ConservationInvariantTest {
         s[11] = Handler.transferTokens.selector;
         s[12] = Handler.updateAdapterValue.selector;
         s[13] = Handler.voteAdapterStreamGame.selector;
+        s[14] = Handler.writeSplitStream.selector;
+        s[15] = Handler.splitRoundScenario.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: s}));
     }
 

@@ -629,6 +629,10 @@ contract SatoriEngine is SatoriUUPS {
         uint256 supply = token.totalSupply();
         uint256 deployed = uint256(_roundState[today - 1].deployedBalance);
         int232 ratio = supply == 0 ? int232(0) : int232(int256((deployed * 1e18) / supply));
+        // One value a round, at hour round*24, before any prediction of the
+        // round: with the default game in the ABC band, all its predictors of a
+        // round read the same two values, which is why SatoriRewards._computeReward
+        // may pay its winners the whole slice.
         satoriRegistry.setValueForRound(DEFAULT_STREAM_ID, ratio, uint24(today));
         defaultStreamLastFlushedRound = today;
         // Platform fee is no longer accrued here: it is the immutable token's
@@ -1155,6 +1159,8 @@ contract SatoriEngine is SatoriUUPS {
         uint256 tgtMinutes = uint256(satoriGames.targetMinutes(gameId));
 
         int232 anchor; int232 post; bool found; bool anchorEvicted;
+        // The default game must stay in this band: SatoriRewards._computeReward
+        // pays its winners the whole slice because of it (see flushDefaultStream).
         if (cadSeconds <= SatoriTypes.TIME_UNIT_SECONDS && tgtMinutes < 24 * (cadSeconds / 60)) {
             // ABC.
             (anchor, post, found, anchorEvicted) =

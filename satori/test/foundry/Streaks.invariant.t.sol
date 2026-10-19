@@ -35,10 +35,10 @@ contract StreaksInvariantTest is Test {
     function invariant_streakBoundedByElapsedRounds() public view {
         uint256 maxStreak = handler.satori().getCurrentRound() - handler.satori().deploymentRound() + 1;
         uint256 n = handler.touchedAddressesLength();
-        uint32 streamCount = uint32(handler.registry().getDataStreamCount());
+        uint32 gameCount = uint32(handler.games().gameCount());
         for (uint256 i = 0; i < n; i++) {
             address a = handler.touchedAddresses(i);
-            for (uint32 s = 1; s <= streamCount; s++) {
+            for (uint32 s = 1; s <= gameCount; s++) {
                 // `streaks` lives on the ENGINE (the prediction state/logic
                 // half of the split), not on the hub facade.
                 uint256 streak = handler.engine().streaks(a, s);
@@ -67,10 +67,10 @@ contract StreaksInvariantTest is Test {
     // ------------------------------------------------------------------
     function invariant_streakOnlyForwardOrResetToZero() public {
         uint256 n = handler.touchedAddressesLength();
-        uint32 streamCount = uint32(handler.registry().getDataStreamCount());
+        uint32 gameCount = uint32(handler.games().gameCount());
         for (uint256 i = 0; i < n; i++) {
             address a = handler.touchedAddresses(i);
-            for (uint32 s = 1; s <= streamCount; s++) {
+            for (uint32 s = 1; s <= gameCount; s++) {
                 uint256 cur = handler.engine().streaks(a, s);
                 uint256 prev = lastStreak[a][s];
                 if (cur != 0) {

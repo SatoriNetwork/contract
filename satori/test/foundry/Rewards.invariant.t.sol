@@ -259,4 +259,24 @@ contract RewardsInvariantTest is Test {
             }
         }
     }
+
+    // INV-R5: no binary (game, round) credits more than its slice, and no
+    //         round credits more than its budget. On games other than the
+    //         default both sides can win one round (B4).
+    function invariant_binaryGameRoundWithinSlice() public view {
+        uint256 n = handler.binaryCreditPairsLength();
+        for (uint256 i = 0; i < n; i++) {
+            (uint32 g, uint256 r) = handler.binaryCreditPair(i);
+            assertLe(handler.ghostBinaryCredited(g, r), handler.gameSlice(g, r),
+                "a binary game-round credited more than its slice");
+            assertLe(handler.ghostRoundCredited(r), handler.roundBudget(r),
+                "a round credited more than its budget");
+        }
+    }
+
+    // INV-R6: nothing is scored inside its own round, where the round's
+    //         totals are still growing (B3).
+    function invariant_noScoreInsideOwnRound() public view {
+        assertEq(handler.ghostScoredInOwnRound(), 0, "a prediction was scored inside its own round");
+    }
 }

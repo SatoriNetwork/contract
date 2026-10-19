@@ -216,9 +216,11 @@ describe("Named streams (prediction-flow counter, hourly snapshot, daily game)",
     await satori.connect(alice).vote(gid, VOTE);
 
     // Pin to 23:00:05 so the second prediction at 00:30 is a NEW round yet
-    // inside the first prediction's 24h window.
+    // inside the first prediction's 24h window (the next day's, if the suite's
+    // clock is already past today's).
     const now = await time.latest();
-    await time.increaseTo(Math.floor(now / DAY) * DAY + DAY - HOUR + 5);
+    const pin = Math.floor(now / DAY) * DAY + DAY - HOUR + 5;
+    await time.increaseTo(pin > now ? pin : pin + DAY);
     await predict(alice, gid, UP);
     await time.increase(90 * 60);
     await expect(predict(alice, gid, UP)).to.be.revertedWithCustomError(engine, "DuplicatePrediction");

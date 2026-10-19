@@ -52,7 +52,8 @@ interface ISatoriRewards {
      *      accumulator), and credits the predictor's share through the
      *      referral-skimming credit path. No deferred-walk machinery.
      *      `named` is the engine's settle-time `streamScoringInfo` read: a named
-     *      game pays pari-mutuel.
+     *      game pays pari-mutuel. Other games divide by both sides' total,
+     *      except the default game, which divides by its own side's.
      */
     function scoreCorrectPrediction(
         address user,

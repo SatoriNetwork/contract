@@ -185,12 +185,43 @@ contract Handler is Test {
     // reward numerator.
     mapping(uint32 => mapping(uint256 => bool)) public ghostPredicted;
 
+    // Binary games on 2-hour streams this handler writes: the band where an
+    // UP and a DOWN of one round can both win, and where a round's values can
+    // all land inside it. splitGameId is approved, so votes give it a SATORI
+    // slice; bountyGameId is never approved, so it stays unweighted and only
+    // pays bounties. Created after the adapter games, so ids 3-5 hold.
+    uint32 public splitStreamId;
+    uint32 public splitGameId;
+    uint32 public bountyStreamId;
+    uint32 public bountyGameId;
+    uint256 public lastSplitRound;
+    uint256 internal _roundBudgetSlot;
+
+    // Ghost: SATORI credited per (binary game, prediction round) and per
+    // round, from RewardSplit. Rewards credits a game-round at most its slice.
+    mapping(uint32 => mapping(uint256 => uint256)) public ghostBinaryCredited;
+    mapping(uint32 => mapping(uint256 => uint256)) public ghostBinaryCreditCount;
+    mapping(uint256 => uint256) public ghostRoundCredited;
+    mapping(uint32 => mapping(uint256 => bool)) internal _binaryCreditSeen;
+    uint32[] internal _binaryCreditGames;
+    uint256[] internal _binaryCreditRounds;
+
+    // Ghost: predictions scored inside their own round. The engine leaves a
+    // prediction pending until its round ends, so this stays 0. Counted from
+    // PredictionScored at the end of an action, which misses a score in an
+    // action that then crosses midnight, so splitRoundScenario also checks
+    // its in-round settles directly.
+    uint256 public ghostScoredInOwnRound;
+    bytes32 internal constant PREDICTION_SCORED = keccak256("PredictionScored(address,uint32,uint256,bool,uint256,uint256)");
+
     // Counters for shrinking failure analysis.
     uint256 public callCount_transfer;
     uint256 public callCount_vote;
     /// Successes only — proves this action is not the no-op it used to be.
     uint256 public callCount_voteAdapterStreamGame;
     uint256 public callCount_predict;
+    uint256 public callCount_splitWrite;
+    uint256 public callCount_splitScenario;
     uint256 public callCount_delegate;
     uint256 public callCount_undelegate;
     uint256 public callCount_claim;
@@ -475,6 +506,35 @@ contract Handler is Test {
         // current round) can pass once advanceTime + updateAdapterValue run.
         // updateValue pulls mockStream.value() (100) into the history ring.
         try registry.updateValue(adapterStreamId) {} catch {}
+
+        splitStreamId = satori.createSimpleDataStream("fuzz-2h", address(this), uint24(120));
+        splitGameId = games.binaryGameByStream(splitStreamId);
+        vm.prank(rewards.admin());
+        voting.setGameApproved(splitGameId, true);
+        bountyStreamId = satori.createSimpleDataStream("fuzz-2h-bounty", address(this), uint24(120));
+        bountyGameId = games.binaryGameByStream(bountyStreamId);
+        _roundBudgetSlot = _layoutSlot("SatoriRewards", "_roundBudget");
+    }
+
+    /// What Rewards may credit game `g` in round `r`: the round's frozen
+    /// budget × the game's frozen votes ÷ all frozen votes.
+    function gameSlice(uint32 g, uint256 r) public view returns (uint256) {
+        uint256 denom = voting.roundDenominator(r);
+        if (denom == 0) return 0;
+        uint256 budget = uint256(vm.load(address(rewards), keccak256(abi.encode(r, _roundBudgetSlot))));
+        return budget * voting.getGameVotesAtRound(g, r) / denom;
+    }
+
+    function roundBudget(uint256 r) external view returns (uint256) {
+        return uint256(vm.load(address(rewards), keccak256(abi.encode(r, _roundBudgetSlot))));
+    }
+
+    function binaryCreditPairsLength() external view returns (uint256) {
+        return _binaryCreditGames.length;
+    }
+
+    function binaryCreditPair(uint256 i) external view returns (uint32, uint256) {
+        return (_binaryCreditGames[i], _binaryCreditRounds[i]);
     }
 
     function _registerAdapterGame(uint32 gameId) internal {
@@ -574,13 +634,17 @@ contract Handler is Test {
             }
         }
         uint256 j;
+        uint256 nowRound = satori.getCurrentRound();
         for (uint256 i = 0; i < logs.length; i++) {
             Vm.Log memory l = logs[i];
+            if (l.emitter == address(engine) && l.topics.length == 4 && l.topics[0] == PREDICTION_SCORED
+                && uint256(l.topics[3]) >= nowRound) ghostScoredInOwnRound++;
             if (l.emitter != address(rewards) || l.topics.length == 0 || l.topics[0] != REWARD_SPLIT) continue;
             address predictor = address(uint160(uint256(l.topics[1])));
             uint256 round = uint256(l.topics[3]);
             (uint256 u, uint256 d,) = abi.decode(l.data, (uint256, uint256, uint256));
             if (d != 0 && _roundWeightSnapshot(predictor, round) == 0) d = 0;
+            _noteBinaryCredit(uint32(uint256(l.topics[2])), round, u + d);
             while (j < nNotes && notes[j] != u + d) j++;
             if (j == nNotes) {
                 ghostSplitMismatch++;
@@ -590,6 +654,44 @@ contract Handler is Test {
                 if (d != 0) ghostSplitsWithDelegatorShare++;
             }
         }
+    }
+
+    function _noteBinaryCredit(uint32 g, uint256 r, uint256 amount) internal {
+        ghostBinaryCredited[g][r] += amount;
+        ghostBinaryCreditCount[g][r]++;
+        ghostRoundCredited[r] += amount;
+        if (!_binaryCreditSeen[g][r]) {
+            _binaryCreditSeen[g][r] = true;
+            _binaryCreditGames.push(g);
+            _binaryCreditRounds.push(r);
+        }
+    }
+
+    /// The binary games predict/settle pick from: the default, the adapter
+    /// stream's binary game, and the two 2-hour games.
+    function _binaryGame(uint256 seed) internal view returns (uint32) {
+        uint256 k = seed % 4;
+        return k == 2 ? splitGameId : k == 3 ? bountyGameId : uint32(1 + k);
+    }
+
+    function _predictAs(address actor, uint32 gameId, uint8 direction) internal {
+        SatoriTypes.PredictionRequestWithPayload[] memory reqs =
+            new SatoriTypes.PredictionRequestWithPayload[](1);
+        reqs[0] = SatoriTypes.PredictionRequestWithPayload({
+            gameId: gameId,
+            payload: abi.encodePacked(direction)
+        });
+        uint256 round = satori.getCurrentRound();
+        vm.prank(actor);
+        try engine.predictMultipleWithPayloads(reqs) {
+            ghostPredicted[gameId][round] = true;
+            callCount_predict++;
+        } catch {}
+    }
+
+    function _splitWriteAt(uint32 streamId, uint256 ts, int232 value) internal {
+        if (ts > block.timestamp) vm.warp(ts);
+        try registry.setValue(streamId, value) { callCount_splitWrite++; } catch {}
     }
 
     // ===== Fuzz call surface =====
@@ -711,25 +813,97 @@ contract Handler is Test {
         address actor = _actor(actorSeed);
         // Constrain direction to 1 or 2 (UP/DOWN); 0 is reserved.
         direction = uint8(1 + (uint256(direction) % 2));
-        uint32 streamId = uint32(1 + (streamSeed % 2));
-        SatoriTypes.PredictionRequestWithPayload[] memory reqs =
-            new SatoriTypes.PredictionRequestWithPayload[](1);
-        reqs[0] = SatoriTypes.PredictionRequestWithPayload({
-            gameId: streamId,
-            payload: abi.encodePacked(direction)
-        });
-        uint256 round = satori.getCurrentRound();
-        vm.prank(actor);
-        try engine.predictMultipleWithPayloads(reqs) {
-            ghostPredicted[streamId][round] = true;
-            callCount_predict++;
-        } catch {}
+        _predictAs(actor, _binaryGame(streamSeed), direction);
     }
 
     function settlePrediction(uint256 actorSeed, uint256 streamSeed) external trackIssued {
         address user = _actor(actorSeed);
-        uint32 streamId = uint32(1 + (streamSeed % 2));
-        try engine.settlePrediction(user, streamId) {} catch {}
+        try engine.settlePrediction(user, _binaryGame(streamSeed)) {} catch {}
+    }
+
+    /// The provider writes the 2-hour stream. The registry refuses a write
+    /// sooner than one cadence after the last, so most calls land only after
+    /// advanceTime.
+    function writeSplitStream(uint256 streamSeed, int232 value) external trackIssued {
+        uint32 sid = streamSeed % 2 == 0 ? splitStreamId : bountyStreamId;
+        try registry.setValue(sid, int232(bound(int256(value), 1, 1e18))) { callCount_splitWrite++; } catch {}
+    }
+
+    /// One round on a 2-hour game where an UP at 01:00 and a DOWN at 13:00
+    /// both win, a DOWN at 01:00 loses, and settles are tried inside the
+    /// round and again after midnight. A random walk is unlikely to find this
+    /// ordering. An odd voteSeed plays splitGameId with vote weight (a SATORI
+    /// slice; an in-round win then reverts on its own); an even one plays
+    /// bountyGameId with a bounty the winners boost once they hold a streak,
+    /// the case where an in-round settle could pay against a partial total.
+    /// That variant always uses actors 0-2, so from its second run on the
+    /// winners hold the streak a boost needs.
+    function splitRoundScenario(uint256 actorSeed, uint256 voteSeed) external trackIssued {
+        bool weighted = voteSeed % 2 == 1;
+        if (!weighted) actorSeed = 0;
+        address up = _actor(actorSeed % 5);
+        address down = _actor(actorSeed % 5 + 1);
+        address loser = _actor(actorSeed % 5 + 2);
+        uint32 g = weighted ? splitGameId : bountyGameId;
+        uint32 sid = weighted ? splitStreamId : bountyStreamId;
+        uint256 day = block.timestamp / 1 days + 1;
+        if (weighted) {
+            // Weight on the game before the round's first predictor freezes it.
+            uint256 spendable = satoriToken.balanceOf(down) / 4;
+            if (spendable > 0) {
+                uint256 amount = bound(voteSeed, 1, spendable);
+                vm.prank(down);
+                try satori.vote(g, amount) {
+                    ghostBurned += amount;
+                    callCount_vote++;
+                } catch {}
+            }
+        } else {
+            _splitBounty(loser, up, down);
+        }
+        lastSplitRound = day;
+        _splitWriteAt(sid, day * 1 days + 1 hours, 1000);
+        _predictAs(up, g, 1);
+        _predictAs(loser, g, 2);
+        _splitWriteAt(sid, day * 1 days + 3 hours, 1100);
+        _splitWriteAt(sid, day * 1 days + 5 hours, 1200);
+        try engine.settlePrediction(up, g) {} catch {}
+        try engine.settlePrediction(loser, g) {} catch {}
+        if (engine.predictions(up, g, day).scored) ghostScoredInOwnRound++;
+        if (engine.predictions(loser, g, day).scored) ghostScoredInOwnRound++;
+        _splitWriteAt(sid, day * 1 days + 13 hours, 1300);
+        _predictAs(down, g, 2);
+        _splitWriteAt(sid, day * 1 days + 15 hours, 1200);
+        _splitWriteAt(sid, day * 1 days + 17 hours, 1100);
+        vm.warp((day + 1) * 1 days + 5 minutes);
+        try engine.settlePrediction(up, g) {} catch {}
+        try engine.settlePrediction(down, g) {} catch {}
+        try engine.settlePrediction(loser, g) {} catch {}
+        callCount_splitScenario++;
+    }
+
+    function _splitBounty(address funder, address up, address down) internal {
+        uint256 burn = lens.bountyBurn();
+        if (satoriToken.balanceOf(funder) < burn && satoriToken.balanceOf(deployer) >= burn) {
+            vm.prank(deployer);
+            satoriToken.transfer(funder, burn);
+        }
+        if (bountyToken.balanceOf(funder) >= 150 ether) {
+            vm.prank(funder);
+            try bounties.fundBounty(bountyGameId, address(bountyToken), 150 ether, 100 ether) {
+                ghostBountyFunded[bountyGameId][address(bountyToken)] += 150 ether;
+                callCount_fundBounty++;
+            } catch {}
+        }
+        address[2] memory stakers = [up, down];
+        for (uint256 i = 0; i < 2; i++) {
+            if (bountyToken.balanceOf(stakers[i]) < 100 ether) continue;
+            uint256 before = bountyToken.balanceOf(address(bounties));
+            vm.prank(stakers[i]);
+            try bounties.stakeBountyToken(address(bountyToken), 100 ether) {
+                ghostBountyStaked[address(bountyToken)] += bountyToken.balanceOf(address(bounties)) - before;
+            } catch {}
+        }
     }
 
     function claim(uint256 actorSeed) external trackIssued {
