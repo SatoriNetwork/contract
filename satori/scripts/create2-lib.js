@@ -37,8 +37,8 @@ const FACTORY = "0x4e59b44847b379578588920cA78FbF26c0B4956C";
 /// v2 (2026-09-01): the v1 Base Sepolia deploy built a full, correctly-seeded
 /// stack but aborted before writing the address book, on a post-condition that
 /// was stale rather than a real wiring fault (dev fee 86.4 -> 144, see
-/// deploy.js). deploy.js refuses to re-run against a live token because it would
-/// orphan the first stack's children, so the redeploy takes a new salt. The v1
+/// deploy.js). deploy.js then refused to re-run against an existing token, so
+/// the redeploy took a new salt. The v1
 /// token at 0xC3f1c785c4cd3215F1d692dC1F7448Db22B899fc is abandoned on Base
 /// Sepolia and must not be referenced by the dapp.
 const SALT_STRING = "satori.token.v2";

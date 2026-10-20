@@ -83,8 +83,9 @@ module.exports = {
       accounts: ACCOUNTS,
       // A full deploy is ~40 sequential transactions. On 2026-08-21 one of them
       // failed with "replacement transaction underpriced" partway through the
-      // wiring block, stranding a half-wired stack whose token had already spent
-      // its one-shot setController/setHook.
+      // wiring block, stranding a half-wired stack. (deploy.js now adopts the
+      // token on a rerun: setController and setHook can be set again until
+      // frozen.)
       //
       // That error means a SECOND transaction was submitted on a nonce the RPC
       // still had in flight — the same read-after-write lag `live-reads-lib.js`
@@ -110,17 +111,21 @@ module.exports = {
     base: {
       url: process.env.BASE_RPC_URL || "https://mainnet.base.org",
       chainId: 8453,
-      accounts: ACCOUNTS
+      accounts: ACCOUNTS,
+      // Same pin and reason as baseSepolia. 0.1 gwei is far above Base's usual
+      // base fee; raise DEPLOY_GAS_PRICE_WEI if it ever is not.
+      gasPrice: Number(process.env.DEPLOY_GAS_PRICE_WEI || 100000000),
     },
 
     // ---------------------------------------------------------------------
     // Superchain chains — REMOTE, BRIDGE-ONLY SATORI ONLY.
     //
     // Never run scripts/deploy.js against these. That script builds the full
-    // playable stack, and there is exactly one game, on Base. The only script
-    // that belongs here is scripts/deploy-remote-token.js, which deploys the
-    // token alone at the same CREATE2 address, with every emission path closed
-    // by the token's own HOME_CHAIN_ID gate.
+    // playable stack, and there is exactly one game, on Base. The scripts that
+    // belong here are scripts/deploy-remote-token.js, which deploys the token
+    // alone at the same CREATE2 address, with every emission path closed by the
+    // token's own HOME_CHAIN_ID gate, and scripts/deploy-safe.js, which creates
+    // the root Safe at the same address so the copy's slots have an owner.
     //
     // Public endpoints are defaults so a dry run needs no setup; they are
     // rate-limited, so set the matching *_RPC_URL for a real deploy.

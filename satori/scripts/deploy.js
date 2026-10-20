@@ -6,25 +6,41 @@
 //
 // Config via env (all addresses must be real — the SatoriRewards constructor
 // rejects the old 0xdEaD/0xbEEF placeholders):
-//   GOVERNOR            seeds ALL SIX token authority slots (root, fee, upgrade,
-//                       wiring, appoint, freeze) plus the admin key.
-//                       handoff.js is what splits them apart.       [default: deployer]
-//   REWARDS_ADMIN       SatoriRewards admin (fee schedule) AND the SatoriAirdrop
-//                       loader (loadAirdropBatch / finalizeAirdropLoading)   [default: GOVERNOR]
-//   PLATFORM_FEE_RECIPIENT   platform fee sink (e.g. the splitter)           [REQUIRED]
+//   GOVERNOR            the token's root: seeds ALL SIX token authority slots
+//                       (root, fee, upgrade, wiring, appoint, freeze). It is a
+//                       constructor argument, so it is in the token's CREATE2
+//                       address and is root of every copy anyone deploys on any
+//                       chain. On Base it must be the association's Safe (M02):
+//                       the run stops after creating the token until the Safe
+//                       lends the deployer wiring and appoint, then is rerun.
+//                       handoff.js takes them back.                [default: deployer; refused on Base]
+//   SAFE_SALT_NONCE     the salt nonce GOVERNOR was created with (deploy-safe.js),
+//                       to prove the Safe can be created at the same address on
+//                       other chains                                         [default: 0]
+//   SIGNER_KEYS         testnet convenience: Safe owner keys to execute the
+//                       Safe's transaction from here instead of the Safe UI
+//   REWARDS_ADMIN       must be the deployer while it runs (it registers the
+//                       adapters); the SatoriRewards admin and the SatoriAirdrop
+//                       loader start there and handoff.js moves them  [default: deployer]
+//   PLATFORM_FEE_RECIPIENT   splitter A from deploy-splitters.js; read from its
+//                       splitters-<network>.json when unset. Off local chains
+//                       the tree is checked on chain before the token exists (M05).
 //   MARKETING_FEE_RECIPIENT  marketing wallet for un-referred referral cut   [REQUIRED]
 //   ROOT_PUBLISHER      SatoriMerkle root publisher                          [default: deployer]
 //                       NOT a switch: the merkle channel is ALWAYS deployed.
 //   ACTIVATION_WINDOW_BLOCKS  proof governor activation window              [default: 256]
 //   VOTING_PERIOD_SECONDS     proof governor voting period                  [default: 604800 (7d)]
 //                       Both voting paths ALWAYS deploy; the lock governor's
-//                       proposer starts as GOVERNOR and moves in handoff.js.
+//                       proposer starts as GOVERNOR.
 //   COINED_ADDRESS      the Coined contract named streams coin their names on,
 //                       and the one CoinedAdapter reads prices from.
 //                       REQUIRED on every real network (Coined launches on Base
 //                       Sepolia before Satori); hardhat/localhost default to a
 //                       MockCoined deployed here.
 //   OUT                 path to write the address book JSON                  [default: ./deployments/<network>.json]
+//                       written once the post-conditions pass; until then
+//                       progress is in <OUT minus .json>.partial.json, which a
+//                       rerun reads to adopt or verify what an earlier run built
 const hre = require("hardhat");
 const fs = require("fs");
 const path = require("path");
@@ -48,6 +64,10 @@ async function deploy(factory, ...args) {
   return c;
 }
 
+// SatoriHub.STREAM_BURN: the one fee the deploy pays (the Custom adapter's
+// registration). A Safe root lends exactly this; a post-condition re-reads it.
+const ADAPTER_FEE = ethers.parseEther("0.001");
+
 // On a live network every read that follows a write is eventually consistent — a
 // receipt is not a read barrier. Without this, a perfectly wired deploy can be
 // declared NOT safe by a lagging node, after the money is spent, with "redeploy"
@@ -55,13 +75,53 @@ async function deploy(factory, ...args) {
 // reasoning and docs/issues/closed/rpc-read-after-write-lag-on-live-networks.md.
 const { runChecks, waitForHead, readPolicy } = require("./live-reads-lib");
 const { ensureFactory, deployDeterministic, predictAddress, buildInitCode } = require("./create2-lib");
+const {
+  SAFE, predictSafe, rootPolicy, adoption, delegationCalls, delegated, encodeMultiSend, txBuilderBatch, validateInputs,
+  checkFeeTree,
+} = require("./deploy-lib");
+const { execViaSafe } = require("./safe-exec");
+const same = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
+
+/// Owners, threshold and whether createProxyWithNonce reproduces the address,
+/// or null when `addr` is not a Safe.
+async function readSafe(addr, saltNonce) {
+  if ((await ethers.provider.getCode(addr)) === "0x") return null;
+  const safe = new ethers.Contract(addr, [
+    "function getOwners() view returns (address[])", "function getThreshold() view returns (uint256)"], ethers.provider);
+  let owners, threshold;
+  try { [owners, threshold] = await Promise.all([safe.getOwners(), safe.getThreshold()]); }
+  catch { return null; }
+  // A module can act as the Safe with no signatures; the singleton is what the
+  // Safe runs (slot 0).
+  let modules = [];
+  try {
+    [modules] = await new ethers.Contract(addr, ["function getModulesPaginated(address,uint256) view returns (address[],address)"],
+      ethers.provider).getModulesPaginated("0x0000000000000000000000000000000000000001", 10);
+  } catch { modules = ["(unreadable)"]; }
+  const singleton = ethers.getAddress("0x" + (await ethers.provider.getStorage(addr, 0)).slice(26));
+  let reproducible = false;
+  try {
+    const factory = new ethers.Contract(SAFE.factory, ["function proxyCreationCode() pure returns (bytes)"], ethers.provider);
+    reproducible = same(predictSafe({ owners, threshold, saltNonce, proxyCreationCode: await factory.proxyCreationCode() }), addr);
+  } catch { /* no factory on this chain */ }
+  return { owners, threshold, reproducible, modules, singleton };
+}
 
 async function main() {
   const [deployer] = await ethers.getSigners();
   const net = hre.network.name;
 
   const governor = ethers.getAddress(process.env.GOVERNOR || deployer.address);
-  const rewardsAdmin = ethers.getAddress(process.env.REWARDS_ADMIN || governor);
+  // The deploy registers the adapters as the admin, so a run with another
+  // admin could not finish; handoff.js moves the admin afterwards.
+  if (process.env.REWARDS_ADMIN && !same(process.env.REWARDS_ADMIN, deployer.address)) {
+    throw new Error(`REWARDS_ADMIN must be the deployer while deploy.js runs (it registers the adapters). ` +
+      `Leave it unset and move the admin with handoff.js (NEW_ADMIN).`);
+  }
+  const rewardsAdmin = deployer.address;
+  const { holderWindow, holderPeriod, rootPublisher } = validateInputs(process.env);
+  const chainId = Number((await ethers.provider.getNetwork()).chainId);
+  const delegating = !same(governor, deployer.address);
 
   // PLATFORM_FEE_RECIPIENT is splitter A, and it becomes an `immutable` on a token
   // with no upgrade path — the one value in this system that can never be
@@ -72,9 +132,12 @@ async function main() {
   // winner would mean guessing which. This is the check the manual copy never had.
   const phase1Path = path.join(__dirname, "..", "deployments", `splitters-${net}.json`);
   let fromFile = null;
+  let splittersFile = null;
   if (fs.existsSync(phase1Path)) {
-    try { fromFile = ethers.getAddress(JSON.parse(fs.readFileSync(phase1Path, "utf8")).platformFeeRecipient); }
-    catch (e) { throw new Error(`${phase1Path} exists but is unreadable: ${e.message}`); }
+    try {
+      splittersFile = JSON.parse(fs.readFileSync(phase1Path, "utf8"));
+      fromFile = ethers.getAddress(splittersFile.platformFeeRecipient);
+    } catch (e) { throw new Error(`${phase1Path} exists but is unreadable: ${e.message}`); }
   }
   const fromEnv = (process.env.PLATFORM_FEE_RECIPIENT || "").trim()
     ? requireAddr("PLATFORM_FEE_RECIPIENT", process.env.PLATFORM_FEE_RECIPIENT, PLACEHOLDER_PLATFORM)
@@ -95,8 +158,64 @@ async function main() {
     );
   }
   const marketingFeeRecipient = requireAddr("MARKETING_FEE_RECIPIENT", process.env.MARKETING_FEE_RECIPIENT, PLACEHOLDER_MARKETING);
-  const rootPublisher = process.env.ROOT_PUBLISHER;
+  if (marketingFeeRecipient === ethers.ZeroAddress) throw new Error("MARKETING_FEE_RECIPIENT must not be the zero address");
   const localChain = net === "hardhat" || net === "localhost";
+
+  // The home chain is the chain this runs on: this script builds the playable
+  // stack. A bridge-only copy elsewhere is deploy-remote-token.js.
+  const homeChainId = BigInt(chainId);
+  const ctorArgs = [governor, platformFeeRecipient, homeChainId];
+  const tokenPredicted = predictAddress(ethers, await buildInitCode(hre, "SatoriToken", ctorArgs));
+  const tokenExists = (await ethers.provider.getCode(tokenPredicted)) !== "0x";
+
+  // The fee recipient becomes an immutable in the token: check on chain that it
+  // is the tree deploy-splitters.js built, matching its file and the operator's
+  // own PAYEE_* and SPLITTER_AUTHORITY_* inputs, running this repo's splitter
+  // code (M05). Re-read on a live network so a lagging node is not taken for a
+  // wrong tree; once the token exists its recipient is fixed, so it only warns.
+  // Local stacks pay a plain address.
+  if (!localChain) {
+    const fromEnvOrNull = (n) => ((process.env[n] || "").trim() ? requireAddr(n, process.env[n]) : null);
+    const expect = {
+      payees: [1, 2, 3, 4].map((i) => fromEnvOrNull(`PAYEE_${i}`)),
+      authorities: { C: fromEnvOrNull("SPLITTER_AUTHORITY_C"), B: fromEnvOrNull("SPLITTER_AUTHORITY_B") },
+    };
+    const Splitter = await ethers.getContractFactory("SatoriSplitterImmutable");
+    const runtimeFor = async (threshold) => ethers.provider.call({
+      data: (await Splitter.getDeployTransaction(deployer.address, ["0x0000000000000000000000000000000000000001",
+        "0x0000000000000000000000000000000000000002"], [5000n, 5000n], threshold)).data });
+    const pol = readPolicy(net);
+    let tree;
+    for (let attempt = 1; ; attempt++) {
+      tree = await checkFeeTree(ethers.provider, platformFeeRecipient, splittersFile, chainId, { expect, runtimeFor });
+      if (!tree.problems.length || attempt >= pol.attempts) break;
+      await new Promise((r) => setTimeout(r, pol.delayMs));
+    }
+    if (splittersFile?.rejected) tree.problems.push(`deploy-splitters.js rejected this tree: ${splittersFile.rejected.join("; ")}`);
+    else if (splittersFile && splittersFile.verified !== true) {
+      console.warn("  WARNING: deploy-splitters.js did not confirm this tree (a read lagged); it is checked here instead.");
+    }
+    if (tree.problems.length && !tokenExists) {
+      throw new Error(`PLATFORM_FEE_RECIPIENT ${platformFeeRecipient} is not the fee tree:\n  - ${tree.problems.join("\n  - ")}`);
+    }
+    for (const prob of tree.problems) console.warn(`  WARNING (the token's fee recipient is already fixed): ${prob}`);
+    if (!tree.problems.length) {
+      console.log("  fee tree checked: " +
+        Object.entries(tree.split).map(([a, bps]) => `${a} ${Number(bps) / 100}%`).join(", ") + "; " +
+        Object.entries(tree.branches).map(([l, b]) => `${l} authority ${b.authority}, threshold ${b.threshold} bps`).join("; "));
+    }
+  }
+
+  const saltNonce = BigInt((process.env.SAFE_SALT_NONCE || "0").trim());
+  const safeInfo = await readSafe(governor, saltNonce);
+  const rootRule = rootPolicy({ chainId, governor, deployer: deployer.address, safe: safeInfo, local: localChain });
+  // Once the token exists its root is fixed, so the rule only warns: a Safe
+  // owner change while the signatures were collected must not block finishing.
+  for (const w of tokenExists ? [...rootRule.errors, ...rootRule.warnings] : rootRule.warnings) console.warn(`  WARNING: ${w}`);
+  if (!tokenExists && rootRule.errors.length) throw new Error(`refusing to deploy:\n  - ${rootRule.errors.join("\n  - ")}`);
+  if (delegating && !safeInfo) {
+    throw new Error(`GOVERNOR ${governor} is neither the deployer nor a Safe; deploy.js cannot get the setup rights it needs.`);
+  }
   const coinedEnv = (process.env.COINED_ADDRESS || "").trim();
   if (!localChain && !coinedEnv) {
     throw new Error(
@@ -122,6 +241,8 @@ async function main() {
   // implementation bakes any immutables + locks its raw instance; the proxy
   // initializes atomically. The PROXY address is the contract address.
   const impls = {};
+  const NAMED_ADAPTER_ID = 5;
+  const CAP_DELEGATE_PREDICTION = 5;
   async function deployProxied(name, key, ctorArgs, initArgs) {
     const F = await ethers.getContractFactory(name);
     const impl = await F.deploy(...ctorArgs);
@@ -133,19 +254,9 @@ async function main() {
   }
 
   // 1. immutable token FIRST (the children's initializers take it). The token's
-  //    2nd arg is the immutable PLATFORM_FEE_RECIPIENT — the senior dev-fee sink.
-  //
-  //    3rd arg is HOME_CHAIN_ID, the chain allowed to emit. THIS script deploys
-  //    the full playable stack, which only makes sense on the home chain, so it
-  //    defaults to the chain being deployed to. A remote, bridge-only SATORI is a
-  //    different job: deploy the token alone with HOME_CHAIN_ID pinned to Base, so
-  //    its genesis mint and every emission path stay closed. See
-  //    docs/design/superchain-native-token.md.
-  const homeChainId = process.env.HOME_CHAIN_ID
-    ? BigInt(process.env.HOME_CHAIN_ID)
-    : (await ethers.provider.getNetwork()).chainId;
-  console.log(`  homeChainId=${homeChainId}` +
-    (process.env.HOME_CHAIN_ID ? " (from env)" : " (this chain — full home stack)"));
+  //    2nd arg is the immutable PLATFORM_FEE_RECIPIENT — the senior dev-fee sink;
+  //    the 3rd is HOME_CHAIN_ID, the one chain allowed to emit.
+  console.log(`  homeChainId=${homeChainId} (this chain)`);
 
   // CREATE2, not plain CREATE: SuperchainERC20 requirement 4 is that the token
   // sits at the same address on every chain, and a nonce-derived address cannot
@@ -154,232 +265,307 @@ async function main() {
   // unchanged. See scripts/create2-lib.js and docs/design/superchain-native-token.md.
   await ensureFactory(hre, { log: console.log });
   const { address: tokenAddr, alreadyDeployed } = await deployDeterministic(
-    hre, "SatoriToken", [governor, platformFeeRecipient, homeChainId], { log: console.log });
-  if (alreadyDeployed) {
-    throw new Error(
-      `A SatoriToken already exists at ${tokenAddr} with these exact constructor args.\n` +
-      `This script deploys the FULL playable stack and is not safe to run twice against one\n` +
-      `token: it would build a second set of children and REPOINT the token's controller/hook\n` +
-      `at them (setController/setHook/setAirdrop are wiring-gated and repeatable while that slot is held),\n` +
-      `silently orphaning the first stack's children.\n` +
-      `If you meant to redeploy, change an input; if you meant to deploy a remote bridge-only\n` +
-      `token, use scripts/deploy-remote-token.js instead.`
-    );
-  }
+    hre, "SatoriToken", ctorArgs, { log: console.log });
   const token = await ethers.getContractAt("SatoriToken", tokenAddr);
+  // The token is created first, so a run that fails later leaves it behind; a
+  // rerun takes it over and builds a fresh set of children (M06). Progress goes
+  // to <book>.partial.json and the book is written only once the post-conditions
+  // pass, so a failed run cannot overwrite an earlier book.
+  const out = process.env.OUT || path.join(__dirname, "..", "deployments", `${net}.json`);
+  const partial = out.replace(/\.json$/, "") + ".partial.json";
+  let prior = fs.existsSync(partial) ? JSON.parse(fs.readFileSync(partial, "utf8")) : null;
+  if (prior && !(Number(prior.chainId) === chainId && same(prior.addresses?.token, tokenAddr))) prior = null;
 
-  // 1b. the airdrop — a plain contract, no proxy, no upgrade path, no table at
-  //     deploy. The token's `airdrop` pointer (wired in step 5) is the only door
-  //     through which airdrop SATORI can be minted. After deploy: load the table,
-  //     check it, token.freezeAirdrop (closes the table and pins the door, for
-  //     good), then finalizeAirdropLoading, which opens every claim at once
-  //     (docs/issues/airdrop-claim-at-finalize.md).
-  //     The loader starts on REWARDS_ADMIN; handoff.js moves it.
-  //     See docs/issues/airdrop-own-contract.md.
-  const airdrop = await deploy("SatoriAirdrop", tokenAddr, rewardsAdmin);
-
-  // 2. children — each behind its own proxy (upgrade-with-state). Rewards no
-  //    longer holds the platform fee (moved to the immutable token): it keeps
-  //    only the marketing recipient.
-  const voting = await deployProxied("SatoriVoting", "voting", [], [tokenAddr]);
-  // The marketing recipient is passed TWICE on purpose: the ctor arg initializes
-  // the raw implementation (which the ctor also locks), and the initialize arg
-  // sets the PROXY's storage — the copy that is actually read, and the one the
-  // recipient can later rotate via transferMarketingFeeRecipient.
-  const rewards = await deployProxied("SatoriRewards", "rewards",
-    [await voting.getAddress(), rewardsAdmin, marketingFeeRecipient],
-    [await voting.getAddress(), rewardsAdmin, tokenAddr, marketingFeeRecipient]);
-  const registry = await deployProxied("SatoriRegistry", "registry", [], [tokenAddr]);
-  const games = await deployProxied("SatoriGames", "games", [], [tokenAddr]);
-  const bounties = await deployProxied("SatoriBounties", "bounties", [], [tokenAddr]);
-
-  // 3. engine impl + proxy (initialized without hub; hub set after)
-  const EngineFactory = await ethers.getContractFactory("SatoriEngine");
-  const engineImpl = await EngineFactory.deploy();
-  await engineImpl.waitForDeployment();
-  const initData = EngineFactory.interface.encodeFunctionData("initialize", [
-    tokenAddr, await voting.getAddress(), await rewards.getAddress(),
-    await registry.getAddress(), await games.getAddress(), await bounties.getAddress(),
-  ]);
-  const proxy = await deploy("SatoriProxy", await engineImpl.getAddress(), initData);
-  const engine = EngineFactory.attach(await proxy.getAddress());
-
-  // 4. hub behind a proxy (implementation carries token/engine immutables)
-  const hub = await deployProxied("SatoriHub", "hub",
-    [tokenAddr, await engine.getAddress(),
-     await voting.getAddress(), await rewards.getAddress(), await registry.getAddress(),
-     await games.getAddress(), await bounties.getAddress()],
-    [await voting.getAddress(), await rewards.getAddress(), await registry.getAddress(),
-     await games.getAddress(), await bounties.getAddress()]);
-
-  const A = {};
-  for (const [k, c] of Object.entries({ token, airdrop, engine: proxy, engineImpl, hub, voting, rewards, registry, games, bounties })) {
-    A[k] = await c.getAddress();
-  }
-  for (const [k, v] of Object.entries(impls)) A[`${k}Impl`] = v;
-
-  // 5. wiring (deployer holds the one-shot setters + every authority slot)
-  console.log("Wiring...");
-  await (await engine.setHub(A.hub)).wait();
-  await (await token.setController(A.hub)).wait();
-  await (await token.setHook(A.hub)).wait();
-  await (await token.setAirdrop(A.airdrop)).wait();
-  await (await voting.setSatoriCore(A.hub)).wait();
-  await (await voting.setSatoriEngine(A.engine)).wait();
-  // (voting.satoriToken set by the proxy initializer)
-  await (await rewards.setSatoriCore(A.hub)).wait();
-  await (await rewards.setSatoriEngine(A.engine)).wait();
-  await (await rewards.setSatoriBounties(A.bounties)).wait();
-  await (await registry.setSatoriCore(A.hub)).wait();
-  await (await registry.setSatoriEngine(A.engine)).wait();
-  await (await games.setSatoriCore(A.hub)).wait();
-  await (await bounties.setSatoriCore(A.hub)).wait();
-  await (await bounties.setSatoriEngine(A.engine)).wait();
-  await (await bounties.setSatoriRewards(A.rewards)).wait();
-  // (bounties.satoriToken set by the proxy initializer)
-
-  // 6. adapters at canonical ids 1..5. Order of the register calls fixes the
-  //    ids, so keep it (Chainlink=1, Uniswap=2, Custom=3, Coined=4, Named=5).
-  //    Chainlink / Uniswap / Coined are first-party code, so they register as
-  //    OFFICIAL (registerAdapter, admin-only, no fee). That vouches for the code,
-  //    not the source. Before approving a game, check the feed or pool a
-  //    Chainlink or Uniswap stream names, and that a Coined term is deep enough
-  //    that holding a move into the next block costs more than the game pays.
-  //    Only Custom takes a community-SUPPLIED source, so it registers via the
-  //    permissionless community path (registerCommunityAdapter, which charges
-  //    streamBurn — hence the approve below) and is flagged isCommunity=true.
-  console.log("Registering adapters...");
-  const chainlink = await deploy("ChainlinkV3Adapter");
-  const uniswap = await deploy("UniswapV3Adapter");
-  const custom = await deploy("CustomAdapter");
-  A.coined = coinedAddress ?? await (await deploy("MockCoined")).getAddress();
-  const coinedAdapter = await deploy("CoinedAdapter", A.coined);
-  const named = await deploy("NamedStreamAdapter", A.engine, A.registry, A.coined);
-  await (await token.approve(A.hub, ethers.MaxUint256)).wait();
-  await (await hub.registerAdapter(await chainlink.getAddress(), "Chainlink V3")).wait();
-  await (await hub.registerAdapter(await uniswap.getAddress(), "Uniswap V3")).wait();
-  await (await hub.registerCommunityAdapter(await custom.getAddress(), "Custom")).wait();
-  await (await hub.registerAdapter(await coinedAdapter.getAddress(), "Coined")).wait();
-  const NAMED_ADAPTER_ID = 5;
-  await (await hub.registerAdapter(await named.getAddress(), "Named")).wait();
-  // Must precede initializeDefaultStream: setNamedAdapterId requires nextStreamId == 1.
-  await (await registry.setNamedAdapterId(NAMED_ADAPTER_ID)).wait();
-  A.chainlinkAdapter = await chainlink.getAddress();
-  A.uniswapAdapter = await uniswap.getAddress();
-  A.customAdapter = await custom.getAddress();
-  A.coinedAdapter = await coinedAdapter.getAddress();
-  A.namedAdapter = await named.getAddress();
-
-  // 6.5. read-only lens (computed views for the dapp/indexers, incl.
-  // getTotalClaimableRewards — moved off SatoriRewards, review #12).
-  const lens = await deploy("SatoriRewardsLens", A.hub, A.rewards);
-  A.lens = await lens.getAddress();
-
-  // 7. merkle — ALWAYS deployed, behind its own proxy since 2026-08-01
-  //    (docs/issues/closed/merkle-behind-a-proxy-decision.md). The PROXY is the channel
-  //    address: it is what the write-once `setSatoriMerkle` binds to and what
-  //    users claim against forever, so it is what goes in the address book.
-  //    There is no direct-deploy path — `SatoriMerkle`'s constructor only locks
-  //    the implementation; `initialize` sets the publisher and the upgrade anchor.
-  //
-  //    This used to be conditional on ROOT_PUBLISHER and was SKIPPED when unset,
-  //    which produced a stack with no off-chain claim channel at all — and
-  //    `setSatoriMerkle` is write-once, so it could not be added later without
-  //    redeploying the whole stack. A rehearsal missing a piece of the system is
-  //    not a rehearsal of the system. It is unconditional now (owner, 2026-09-03).
-  //
-  //    ROOT_PUBLISHER is therefore a choice of PUBLISHER, never a switch for
-  //    whether the channel exists. Unset, it starts on the deployer exactly like
-  //    the governor does, and handoff.js nominates it away with everything else.
-  const publisher = rootPublisher && ethers.isAddress(rootPublisher)
-    ? ethers.getAddress(rootPublisher)
-    : deployer.address;
-  {
-    const merkle = await deployProxied("SatoriMerkle", "merkle", [],
-      [publisher, tokenAddr]);
-    await (await merkle.setSatoriCore(A.hub)).wait();
-    await (await hub.setSatoriMerkle(await merkle.getAddress())).wait();
-    A.merkle = await merkle.getAddress();
-    A.merkleImpl = impls.merkle; // the impl map was snapshotted into A before this step
-    console.log(`  merkle=${A.merkle} impl=${A.merkleImpl} (publisher=${publisher}` +
-      `${rootPublisher ? "" : " — DEPLOYER, unset ROOT_PUBLISHER; handoff.js moves it"})`);
+  let verifyOnly = false;
+  if (alreadyDeployed) {
+    const controller = await token.controller();
+    // Fails closed: a controller with code that does not answer like a hub
+    // stops the run rather than counting as unfinished.
+    const controllerFinished = controller !== ethers.ZeroAddress
+      && (await ethers.provider.getCode(controller)) !== "0x"
+      && await (await ethers.getContractAt("SatoriHub", controller)).defaultStreamInitialized();
+    const frozen = [];
+    for (const [k, f] of [["controller", "controllerFrozen"], ["hook", "hookFrozen"], ["airdrop", "airdropFrozen"]]) {
+      if (await token[f]()) frozen.push(k);
+    }
+    if (controllerFinished && prior?.lastWriteBlock && same(prior.addresses.hub, controller)) {
+      // The run that built this stack made its last write and then died: verify it.
+      verifyOnly = true;
+      console.log(`  the stack in ${path.basename(partial)} made its last write; verifying it instead of building`);
+    } else {
+      const d = adoption({ controller, controllerFinished, frozen });
+      if (d.error) {
+        throw new Error(`A SatoriToken already exists at ${tokenAddr} with these exact constructor args, and ${d.error}\n` +
+          `To deploy a remote bridge-only token, use scripts/deploy-remote-token.js.`);
+      }
+      console.log(`  adopting the token at ${tokenAddr} from a run that did not finish; children it built, if any, ` +
+        `are abandoned and the token is wired to new ones`);
+    }
   }
 
-  // 7.5. capability policy at launch: delegatePrediction ON, everything else OFF.
-  //
-  // Every capability still ships off EXCEPT this one, because delegation is no
-  // longer only "hand your power to an expert" — it is how a user delegates to
-  // THEIR OWN device-local key (the dapp's Game Wallet) and then plays without a
-  // wallet popup every round. That setup is meant to be available from the first
-  // block, so shipping the flag off would make the dapp's promoted onboarding
-  // path dead on arrival and require a separate admin transaction before anyone
-  // could use it.
-  //
-  // Scope: this grants delegation and NOTHING else. Stream/game creation,
-  // adapters, bounties, claim delegation and voting all stay off for the public
-  // and open later via scripts/set-capabilities.js per the rollout.
-  //
-  // setCapabilities is admin-only and takes the WHOLE bitmap. The deployer holds
-  // `admin` only when REWARDS_ADMIN was not pointed elsewhere (a Safe, typically);
-  // when it was, we cannot send this — print the exact transaction for the admin
-  // to execute rather than failing a deploy that is otherwise complete.
-  const CAP_DELEGATE_PREDICTION = 5;
-  const launchBitmap = 1n << BigInt(CAP_DELEGATE_PREDICTION);
-  const deployerIsRewardsAdmin = rewardsAdmin.toLowerCase() === deployer.address.toLowerCase();
-  if (deployerIsRewardsAdmin) {
+  const A = verifyOnly ? { ...prior.addresses } : { token: tokenAddr };
+  // The Safe's setup as the run that created the token found it; its owners may
+  // have changed since, and copies elsewhere are recreated from this one.
+  const rootSafe = prior?.rootSafe ?? (safeInfo?.reproducible
+    ? { owners: safeInfo.owners, threshold: String(safeInfo.threshold), saltNonce: String(saltNonce) } : null);
+  const publisher = verifyOnly ? prior.rootPublisher : (rootPublisher ?? deployer.address);
+  let lastWriteBlock = verifyOnly ? prior.lastWriteBlock : null;
+  function saveBook(extra = {}, file = partial) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({
+      network: net, chainId, complete: false,
+      // What the token's CREATE2 address is made of; deploy-remote-token.js
+      // rebuilds copies from these, not from whoever holds a slot today.
+      constructorArgs: { root: governor, devRecipient: platformFeeRecipient, homeChainId: String(homeChainId) },
+      // How to create the root Safe at the same address on another chain.
+      rootSafe, rootPublisher: publisher, lastWriteBlock,
+      governor, rewardsAdmin, platformFeeRecipient, marketingFeeRecipient,
+      addresses: A, ...extra,
+    }, null, 2));
+  }
+  if (!verifyOnly) saveBook();
+
+  // A Safe root lends the deployer the two slots the wiring needs and the one
+  // fee, in one Safe transaction, sent only now that the token exists (signed
+  // earlier, it could execute against an empty address and spend its nonce).
+  if (delegating && !verifyOnly) {
+    const readState = async () => ({
+      wiring: await token.wiringAuthority(), appoint: await token.appointAuthority(),
+      balance: await token.balanceOf(deployer.address),
+    });
+    if (!delegated(await readState(), deployer.address, ADAPTER_FEE)) {
+      const calls = delegationCalls(token.interface, tokenAddr, deployer.address, ADAPTER_FEE);
+      const data = encodeMultiSend(calls);
+      const batchPath = out.replace(/\.json$/, "") + ".safe-delegation.json";
+      fs.writeFileSync(batchPath, JSON.stringify(txBuilderBatch({
+        chainId, safe: governor, name: "Satori deploy: lend setup rights to the deployer", calls }), null, 2));
+      const keys = (process.env.SIGNER_KEYS || "").split(",").map((k) => k.trim()).filter(Boolean);
+      if (!keys.length) {
+        console.log(`\n  THE SAFE MUST NOW ACT. The token exists; the deploy needs the root Safe ${governor}`);
+        console.log(`  to lend the deployer wiring and appoint, and send it ${ethers.formatEther(ADAPTER_FEE)} SATORI:`);
+        for (const c of calls) console.log(`    ${c.label}`);
+        console.log(`  As one Safe transaction (Transaction Builder batch: ${batchPath}), or raw:`);
+        console.log(`    to        ${SAFE.multiSendCallOnly}  (MultiSendCallOnly 1.4.1)`);
+        console.log(`    operation 1 (delegatecall)\n    data      ${data}`);
+        console.log(`\n  Then run deploy.js again with the same inputs; it adopts this token and carries on.\n`);
+        return A;
+      }
+      if (!hre.network.config.url) throw new Error("SIGNER_KEYS needs a network with a URL");
+      console.log("  executing the Safe's delegation with SIGNER_KEYS (testnet convenience)...");
+      await execViaSafe({ provider: new ethers.JsonRpcProvider(hre.network.config.url), safe: governor,
+        to: SAFE.multiSendCallOnly, data, operation: 1, keys, log: console.log });
+      const ok = await runChecks([["the Safe lent wiring, appoint and the fee",
+        async () => delegated(await readState(), deployer.address, ADAPTER_FEE)]], { ...readPolicy(net), log: console.log });
+      if (ok.failed.length) throw new Error("the Safe transaction ran but the deployer does not hold wiring, appoint and the fee");
+    }
+  }
+
+  if (!verifyOnly) {
+    // 1b. the airdrop — a plain contract, no proxy, no upgrade path, no table at
+    //     deploy. The token's `airdrop` pointer (wired in step 5) is the only door
+    //     through which airdrop SATORI can be minted. After deploy: load the table,
+    //     check it, token.freezeAirdrop (closes the table and pins the door, for
+    //     good), then finalizeAirdropLoading, which opens every claim at once
+    //     (docs/issues/airdrop-claim-at-finalize.md).
+    //     The loader starts on REWARDS_ADMIN; handoff.js moves it.
+    //     See docs/issues/airdrop-own-contract.md.
+    const airdrop = await deploy("SatoriAirdrop", tokenAddr, rewardsAdmin);
+
+    // 2. children — each behind its own proxy (upgrade-with-state). Rewards no
+    //    longer holds the platform fee (moved to the immutable token): it keeps
+    //    only the marketing recipient.
+    const voting = await deployProxied("SatoriVoting", "voting", [], [tokenAddr]);
+    // The marketing recipient is passed TWICE on purpose: the ctor arg initializes
+    // the raw implementation (which the ctor also locks), and the initialize arg
+    // sets the PROXY's storage — the copy that is actually read, and the one the
+    // recipient can later rotate via transferMarketingFeeRecipient.
+    const rewards = await deployProxied("SatoriRewards", "rewards",
+      [await voting.getAddress(), rewardsAdmin, marketingFeeRecipient],
+      [await voting.getAddress(), rewardsAdmin, tokenAddr, marketingFeeRecipient]);
+    const registry = await deployProxied("SatoriRegistry", "registry", [], [tokenAddr]);
+    const games = await deployProxied("SatoriGames", "games", [], [tokenAddr]);
+    const bounties = await deployProxied("SatoriBounties", "bounties", [], [tokenAddr]);
+
+    // 3. engine impl + proxy (initialized without hub; hub set after)
+    const EngineFactory = await ethers.getContractFactory("SatoriEngine");
+    const engineImpl = await EngineFactory.deploy();
+    await engineImpl.waitForDeployment();
+    const initData = EngineFactory.interface.encodeFunctionData("initialize", [
+      tokenAddr, await voting.getAddress(), await rewards.getAddress(),
+      await registry.getAddress(), await games.getAddress(), await bounties.getAddress(),
+    ]);
+    const proxy = await deploy("SatoriProxy", await engineImpl.getAddress(), initData);
+    const engine = EngineFactory.attach(await proxy.getAddress());
+
+    // 4. hub behind a proxy (implementation carries token/engine immutables)
+    const hub = await deployProxied("SatoriHub", "hub",
+      [tokenAddr, await engine.getAddress(),
+       await voting.getAddress(), await rewards.getAddress(), await registry.getAddress(),
+       await games.getAddress(), await bounties.getAddress()],
+      [await voting.getAddress(), await rewards.getAddress(), await registry.getAddress(),
+       await games.getAddress(), await bounties.getAddress()]);
+
+    for (const [k, c] of Object.entries({ token, airdrop, engine: proxy, engineImpl, hub, voting, rewards, registry, games, bounties })) {
+      A[k] = await c.getAddress();
+    }
+    for (const [k, v] of Object.entries(impls)) A[`${k}Impl`] = v;
+    saveBook();
+    // The fee a Safe root lent above, checked before the first wiring write, so
+    // a mismatch is fixed by editing ADAPTER_FEE and rerunning (the token is adopted).
+    if ((await hub.STREAM_BURN()) !== ADAPTER_FEE) {
+      throw new Error(`SatoriHub.STREAM_BURN is ${await hub.STREAM_BURN()}, not deploy.js's ADAPTER_FEE ${ADAPTER_FEE}; update ADAPTER_FEE`);
+    }
+
+    // 5. wiring (the deployer holds the children's one-shot setters, and the
+    //    token's wiring and appoint slots: as root, or lent by the Safe above)
+    console.log("Wiring...");
+    await (await engine.setHub(A.hub)).wait();
+    await (await token.setController(A.hub)).wait();
+    await (await token.setHook(A.hub)).wait();
+    await (await token.setAirdrop(A.airdrop)).wait();
+    await (await voting.setSatoriCore(A.hub)).wait();
+    await (await voting.setSatoriEngine(A.engine)).wait();
+    // (voting.satoriToken set by the proxy initializer)
+    await (await rewards.setSatoriCore(A.hub)).wait();
+    await (await rewards.setSatoriEngine(A.engine)).wait();
+    await (await rewards.setSatoriBounties(A.bounties)).wait();
+    await (await registry.setSatoriCore(A.hub)).wait();
+    await (await registry.setSatoriEngine(A.engine)).wait();
+    await (await games.setSatoriCore(A.hub)).wait();
+    await (await bounties.setSatoriCore(A.hub)).wait();
+    await (await bounties.setSatoriEngine(A.engine)).wait();
+    await (await bounties.setSatoriRewards(A.rewards)).wait();
+    // (bounties.satoriToken set by the proxy initializer)
+
+    // 6. adapters at canonical ids 1..5. Order of the register calls fixes the
+    //    ids, so keep it (Chainlink=1, Uniswap=2, Custom=3, Coined=4, Named=5).
+    //    Chainlink / Uniswap / Coined are first-party code, so they register as
+    //    OFFICIAL (registerAdapter, admin-only, no fee). That vouches for the code,
+    //    not the source. Before approving a game, check the feed or pool a
+    //    Chainlink or Uniswap stream names, and that a Coined term is deep enough
+    //    that holding a move into the next block costs more than the game pays.
+    //    Only Custom takes a community-SUPPLIED source, so it registers via the
+    //    permissionless community path (registerCommunityAdapter, which charges
+    //    streamBurn — hence the approve below) and is flagged isCommunity=true.
+    console.log("Registering adapters...");
+    const chainlink = await deploy("ChainlinkV3Adapter");
+    const uniswap = await deploy("UniswapV3Adapter");
+    const custom = await deploy("CustomAdapter");
+    A.coined = coinedAddress ?? await (await deploy("MockCoined")).getAddress();
+    const coinedAdapter = await deploy("CoinedAdapter", A.coined);
+    const named = await deploy("NamedStreamAdapter", A.engine, A.registry, A.coined);
+    await (await token.approve(A.hub, ethers.MaxUint256)).wait();
+    await (await hub.registerAdapter(await chainlink.getAddress(), "Chainlink V3")).wait();
+    await (await hub.registerAdapter(await uniswap.getAddress(), "Uniswap V3")).wait();
+    await (await hub.registerCommunityAdapter(await custom.getAddress(), "Custom")).wait();
+    await (await hub.registerAdapter(await coinedAdapter.getAddress(), "Coined")).wait();
+    await (await hub.registerAdapter(await named.getAddress(), "Named")).wait();
+    // Must precede initializeDefaultStream: setNamedAdapterId requires nextStreamId == 1.
+    await (await registry.setNamedAdapterId(NAMED_ADAPTER_ID)).wait();
+    A.chainlinkAdapter = await chainlink.getAddress();
+    A.uniswapAdapter = await uniswap.getAddress();
+    A.customAdapter = await custom.getAddress();
+    A.coinedAdapter = await coinedAdapter.getAddress();
+    A.namedAdapter = await named.getAddress();
+    saveBook();
+
+    // 6.5. read-only lens (computed views for the dapp/indexers, incl.
+    // getTotalClaimableRewards — moved off SatoriRewards, review #12).
+    const lens = await deploy("SatoriRewardsLens", A.hub, A.rewards);
+    A.lens = await lens.getAddress();
+    console.log(`  lens=${A.lens}`);
+    saveBook();
+
+    // 7. merkle — ALWAYS deployed, behind its own proxy since 2026-08-01
+    //    (docs/issues/closed/merkle-behind-a-proxy-decision.md). The PROXY is the channel
+    //    address: it is what the write-once `setSatoriMerkle` binds to and what
+    //    users claim against forever, so it is what goes in the address book.
+    //    There is no direct-deploy path — `SatoriMerkle`'s constructor only locks
+    //    the implementation; `initialize` sets the publisher and the upgrade anchor.
+    //
+    //    This used to be conditional on ROOT_PUBLISHER and was SKIPPED when unset,
+    //    which produced a stack with no off-chain claim channel at all — and
+    //    `setSatoriMerkle` is write-once, so it could not be added later without
+    //    redeploying the whole stack. A rehearsal missing a piece of the system is
+    //    not a rehearsal of the system. It is unconditional now (owner, 2026-09-03).
+    //
+    //    ROOT_PUBLISHER is therefore a choice of PUBLISHER, never a switch for
+    //    whether the channel exists. Unset, it starts on the deployer exactly like
+    //    the governor does, and handoff.js nominates it away with everything else.
+    {
+      const merkle = await deployProxied("SatoriMerkle", "merkle", [],
+        [publisher, tokenAddr]);
+      await (await merkle.setSatoriCore(A.hub)).wait();
+      await (await hub.setSatoriMerkle(await merkle.getAddress())).wait();
+      A.merkle = await merkle.getAddress();
+      A.merkleImpl = impls.merkle; // the impl map was snapshotted into A before this step
+      console.log(`  merkle=${A.merkle} impl=${A.merkleImpl} (publisher=${publisher}` +
+        `${rootPublisher ? "" : " — DEPLOYER, unset ROOT_PUBLISHER; handoff.js moves it"})`);
+    }
+    saveBook();
+
+    // 7.5. capability policy at launch: delegatePrediction ON, everything else OFF.
+    //
+    // Every capability still ships off EXCEPT this one, because delegation is no
+    // longer only "hand your power to an expert" — it is how a user delegates to
+    // THEIR OWN device-local key (the dapp's Game Wallet) and then plays without a
+    // wallet popup every round. That setup is meant to be available from the first
+    // block, so shipping the flag off would make the dapp's promoted onboarding
+    // path dead on arrival and require a separate admin transaction before anyone
+    // could use it.
+    //
+    // Scope: this grants delegation and NOTHING else. Stream/game creation,
+    // adapters, bounties, claim delegation and voting all stay off for the public
+    // and open later via scripts/set-capabilities.js per the rollout.
+    //
+    // setCapabilities is admin-only and takes the WHOLE bitmap; the deployer is
+    // the admin until handoff.js.
+    const launchBitmap = 1n << BigInt(CAP_DELEGATE_PREDICTION);
     console.log("Enabling launch capabilities (delegatePrediction)...");
     await (await rewards.setCapabilities(launchBitmap)).wait();
-  } else {
-    const data = rewards.interface.encodeFunctionData("setCapabilities", [launchBitmap]);
-    console.log(
-      `\n  ACTION REQUIRED — capabilities NOT set: the rewards admin is ${rewardsAdmin}, not the deployer.\n` +
-      `  Execute from the admin to enable delegation (the dapp's Game Wallet onboarding needs it):\n` +
-      `    to   ${A.rewards}\n    data ${data}\n` +
-      `  Or: SET=1 node scripts/set-capabilities.js +delegatePrediction\n`
-    );
-  }
 
-  // 8. bootstrap the default prediction stream (id 1).
-  //
-  // F8 fail-fast: the default stream MUST be the FIRST stream (initializeDefaultStream
-  // reverts DefaultStreamNotFirst otherwise). A stream existing here means someone
-  // front-ran createSimpleDataStream and grabbed id 1 — abort with a clear message
-  // rather than a downstream revert. In practice unreachable: createSimpleDataStream
-  // charges a SATORI burn and no third party holds SATORI before distribution, and
-  // this whole deploy runs pre-distribution. See docs/issues/closed/default-stream-bootstrap-f8.md.
-  //
-  // Under burn voting the default game casts NO standing vote and the deploy no
-  // longer pre-funds one: its weight is DERIVED (a fixed 20% share of all other
-  // burnt weight, floored so genesis is non-zero) and `vote()` rejects it
-  // outright with CannotVoteDefault.
-  // 8a. GOVERNANCE INSTRUMENTS — both holder-voting paths, deployed as part
-  // of the stack so no chain ships without them (owner, 2026-09-15). Neither
-  // holds authority over anything (docs/design/authority-map.md 10b); the
-  // lock governor's one door is the hub's lane-B passthrough, wired here
-  // while the deployer still holds the wiring slot. The lock governor's
-  // proposer starts as `governor` (the deployer, normally) and MOVES TO THE
-  // ASSOCIATION IN handoff.js with every other authority.
-  //
-  //   ACTIVATION_WINDOW_BLOCKS  [default 256]     proof governor, ~8.5 min on Base
-  //   VOTING_PERIOD_SECONDS     [default 604800]  proof governor, 7 days
-  console.log("Deploying governance instruments...");
-  const holderWindow = Number(process.env.ACTIVATION_WINDOW_BLOCKS || 256);
-  const holderPeriod = Number(process.env.VOTING_PERIOD_SECONDS || 7 * 24 * 3600);
-  const holderGov = await deploy("HistoricalBalanceGovernor", A.token, holderWindow, holderPeriod);
-  const lockGov = await deploy("LockVoteGovernor", A.token, A.hub, governor);
-  A.holderGovernor = await holderGov.getAddress();
-  A.lockVoteGovernor = await lockGov.getAddress();
-  await (await hub.setVoteLockGovernor(A.lockVoteGovernor)).wait();
-  console.log(`  holderGovernor=${A.holderGovernor} (window=${holderWindow} blocks, period=${holderPeriod}s)`);
-  console.log(`  lockVoteGovernor=${A.lockVoteGovernor} (proposer=${governor}; handoff.js moves it)`);
+    // 8. bootstrap the default prediction stream (id 1).
+    //
+    // F8 fail-fast: the default stream MUST be the FIRST stream (initializeDefaultStream
+    // reverts DefaultStreamNotFirst otherwise). A stream existing here means someone
+    // front-ran createSimpleDataStream and grabbed id 1 — abort with a clear message
+    // rather than a downstream revert. In practice unreachable: createSimpleDataStream
+    // charges a SATORI burn and no third party holds SATORI before distribution, and
+    // this whole deploy runs pre-distribution. See docs/issues/closed/default-stream-bootstrap-f8.md.
+    //
+    // Under burn voting the default game casts NO standing vote and the deploy no
+    // longer pre-funds one: its weight is DERIVED (a fixed 20% share of all other
+    // burnt weight, floored so genesis is non-zero) and `vote()` rejects it
+    // outright with CannotVoteDefault.
+    // 8a. GOVERNANCE INSTRUMENTS — both holder-voting paths, deployed as part
+    // of the stack so no chain ships without them (owner, 2026-09-15). Neither
+    // holds authority over anything (docs/design/authority-map.md 10b); the
+    // lock governor's one door is the hub's lane-B passthrough, wired here
+    // while the deployer still holds the wiring slot. The lock governor's
+    // proposer starts as `governor` (the root Safe on Base).
+    //
+    //   ACTIVATION_WINDOW_BLOCKS  [default 256]     proof governor, ~8.5 min on Base
+    //   VOTING_PERIOD_SECONDS     [default 604800]  proof governor, 7 days
+    console.log("Deploying governance instruments...");
+    const holderGov = await deploy("HistoricalBalanceGovernor", A.token, holderWindow, holderPeriod);
+    const lockGov = await deploy("LockVoteGovernor", A.token, A.hub, governor);
+    A.holderGovernor = await holderGov.getAddress();
+    A.lockVoteGovernor = await lockGov.getAddress();
+    await (await hub.setVoteLockGovernor(A.lockVoteGovernor)).wait();
+    console.log(`  holderGovernor=${A.holderGovernor} (window=${holderWindow} blocks, period=${holderPeriod}s)`);
+    console.log(`  lockVoteGovernor=${A.lockVoteGovernor} (proposer=${governor})`);
+    saveBook();
 
-  if (await registry.streamExists(1)) {
-    throw new Error("F8: a stream already exists at id 1 before bootstrap — default-stream front-run detected; do NOT continue this deploy");
+    if (await registry.streamExists(1)) {
+      throw new Error("F8: a stream already exists at id 1 before bootstrap — default-stream front-run detected; do NOT continue this deploy");
+    }
+    console.log("Bootstrapping default stream...");
+    // Last state-changing write of the deploy, so its block is the read barrier the
+    // post-conditions wait for: everything they verify was written at or before it.
+    const lastWrite = await (await hub.initializeDefaultStream()).wait();
+    lastWriteBlock = lastWrite.blockNumber;
+    saveBook();
   }
-  console.log("Bootstrapping default stream...");
-  // Last state-changing write of the deploy, so its block is the read barrier the
-  // post-conditions wait for: everything they verify was written at or before it.
-  const lastWrite = await (await hub.initializeDefaultStream()).wait();
 
   // 8b. local-dev only: the dapp hardcodes Multicall3 at its canonical
   // 0xcA11... address (universally deployed on real chains, absent on a
@@ -395,7 +581,17 @@ async function main() {
     console.log(`  Multicall3Mock bytecode installed at ${MULTICALL3_ADDR}`);
   }
 
-  // 9. POST-CONDITIONS — fail loudly if any wiring is wrong
+  // 9. POST-CONDITIONS — fail loudly if any wiring is wrong. Read through the
+  //    recorded addresses, so a rerun can verify a stack an earlier run built.
+  const at = (name, key) => ethers.getContractAt(name, A[key]);
+  const [airdrop, engine, hub, voting, rewards, registry, games, bounties, lens, named, coinedAdapter, holderGov, lockGov] =
+    await Promise.all([
+      at("SatoriAirdrop", "airdrop"), at("SatoriEngine", "engine"), at("SatoriHub", "hub"), at("SatoriVoting", "voting"),
+      at("SatoriRewards", "rewards"), at("SatoriRegistry", "registry"), at("SatoriGames", "games"),
+      at("SatoriBounties", "bounties"), at("SatoriRewardsLens", "lens"), at("NamedStreamAdapter", "namedAdapter"),
+      at("CoinedAdapter", "coinedAdapter"), at("HistoricalBalanceGovernor", "holderGovernor"),
+      at("LockVoteGovernor", "lockVoteGovernor"),
+    ]);
   console.log("Verifying post-conditions...");
   const eq = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
   // Progressive rollout: exactly ONE capability ships on — delegatePrediction,
@@ -411,8 +607,7 @@ async function main() {
   // bit would set and read back happily while gating nothing. Asserting it is
   // clear catches a mis-encoded bitmap that would otherwise look correct.
   const checks = [
-    [`launch capability policy: ONLY delegatePrediction on${deployerIsRewardsAdmin ? "" : " (SKIPPED — admin is external)"}`, async () => {
-      if (!deployerIsRewardsAdmin) return true; // nothing was set; the operator was told to
+    ["launch capability policy: ONLY delegatePrediction on", async () => {
       for (let c = 0; c <= 8; c++) {
         const on = await rewards.capabilityAllowed(c, ethers.ZeroAddress);
         if (on !== (c === CAP_DELEGATE_PREDICTION)) return false;
@@ -431,16 +626,16 @@ async function main() {
     ["airdrop.airdropAuthority == rewardsAdmin", async () => eq(await airdrop.airdropAuthority(), rewardsAdmin)],
     ["airdrop loading not finalized at deploy", async () => (await airdrop.airdropLoadingFinalized()) === false],
     ["airdrop lever not pre-frozen", async () => !(await token.airdropFrozen())],
-    // The constructor seeds EVERY slot with the same address, so the deploy is
-    // unchanged by the governor split and handoff.js is what pulls them apart.
+    // The constructor seeds EVERY slot with the root; a Safe root has lent
+    // wiring and appoint to the deployer, and handoff.js pulls them all apart.
     // Checking only `root` here would pass a token whose other five slots were
     // somehow wrong, which is exactly the failure the split makes possible.
-    ["token authority slots all == governor", async () =>
+    [`token root, fee, upgrade, freeze == governor; wiring, appoint == ${delegating ? "deployer (lent)" : "governor"}`, async () =>
       eq(await token.rootAuthority(), governor) &&
       eq(await token.feeAuthority(), governor) &&
       eq(await token.upgradeAuthority(), governor) &&
-      eq(await token.wiringAuthority(), governor) &&
-      eq(await token.appointAuthority(), governor) &&
+      eq(await token.wiringAuthority(), delegating ? deployer.address : governor) &&
+      eq(await token.appointAuthority(), delegating ? deployer.address : governor) &&
       eq(await token.freezeAuthority(), governor)],
     ["no root handoff pending at deploy", async () =>
       eq(await token.pendingRootAuthority(), ethers.ZeroAddress)],
@@ -528,7 +723,7 @@ async function main() {
   // Local runs keep exactly their old behaviour: one attempt, no barrier, no sleeps.
   const policy = readPolicy(net);
   if (!policy.local) {
-    await waitForHead(ethers.provider, lastWrite.blockNumber, { log: console.log });
+    await waitForHead(ethers.provider, lastWriteBlock, { log: console.log });
   }
   // Governance instruments: read back what the chain believes about both
   // voting paths and the hub's one door. Probes, like everything above.
@@ -543,7 +738,7 @@ async function main() {
       eq(await lockGov.TOKEN(), A.token)],
     ["lockVoteGovernor.HUB == hub", async () =>
       eq(await lockGov.HUB(), A.hub)],
-    ["lockVoteGovernor.proposer == governor (handoff moves it)", async () =>
+    ["lockVoteGovernor.proposer == governor", async () =>
       eq(await lockGov.proposer(), governor)],
     ["hub.voteLockGovernor == lockVoteGovernor (the one lane-B door)", async () =>
       eq(await hub.voteLockGovernor(), A.lockVoteGovernor)],
@@ -564,17 +759,17 @@ async function main() {
       `${failed.length} post-condition(s) failed — deploy is NOT safe.` +
       (policy.attempts > 1
         ? ` Each was re-read ${policy.attempts}x over ~${(policy.attempts - 1) * policy.delayMs / 1000}s` +
-          ` after the chain head reached block ${lastWrite.blockNumber}, so this is a wiring` +
+          ` after the chain head reached block ${lastWriteBlock}, so this is a wiring` +
           ` fault, not RPC lag.`
-        : "")
+        : "") +
+      `\nOnce fixed, run deploy.js again with the same inputs: it verifies this stack rather than building another.`
     );
   }
   const lagged = [...passedOn.values()].filter((a) => a > 1).length;
   console.log(`  all ${checks.length} post-conditions passed` +
     (lagged ? `  (${lagged} confirmed only on a re-read — RPC lag, not a wiring fault)` : ""));
   console.log(
-    `\nCapabilities: delegatePrediction (bit ${CAP_DELEGATE_PREDICTION}) ON` +
-    (deployerIsRewardsAdmin ? "" : " — NOT SENT, see ACTION REQUIRED above") + "; everything else OFF.\n" +
+    `\nCapabilities: delegatePrediction (bit ${CAP_DELEGATE_PREDICTION}) ON; everything else OFF.\n` +
     "  Delegation ships on because the dapp's Game Wallet onboarding is built on it:\n" +
     "  a user delegates to their own device-local key and then predicts with no wallet popups.\n" +
     "  Open the rest later via rewards.setCapabilities(bitmap) — bit i = capability i,\n" +
@@ -584,9 +779,6 @@ async function main() {
   );
 
   // 10. write the address book (for the dapp / verification)
-  const out = process.env.OUT || path.join(__dirname, "..", "deployments", `${net}.json`);
-  fs.mkdirSync(path.dirname(out), { recursive: true });
-  const chainId = Number((await ethers.provider.getNetwork()).chainId);
 
   // Record the two constructor-set immutables the DAPP needs, not just the
   // addresses. `deploymentRound` is what every round on screen is relative to
@@ -615,13 +807,8 @@ async function main() {
     catch (e) { console.warn(`  layout capture failed for ${short}: ${e.message}`); }
   }
 
-  fs.writeFileSync(out, JSON.stringify({
-    network: net, chainId, governor, rewardsAdmin,
-    platformFeeRecipient, marketingFeeRecipient,
-    deploymentRound, deploymentBlock,
-    addresses: A,
-    layouts,
-  }, null, 2));
+  saveBook({ complete: true, deploymentRound, deploymentBlock, layouts }, out);
+  fs.rmSync(partial, { force: true });
   console.log(`\nDeployed. Address book -> ${out}`);
   console.log(JSON.stringify(A, null, 2));
   return A;

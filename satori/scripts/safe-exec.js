@@ -60,6 +60,43 @@ const retry = async (fn, n = 6) => {
   }
 };
 
+/// Sign one SafeTx with `threshold` of the owner keys in `keys` and relay it.
+/// `operation` 1 delegatecalls `to`, which is how a MultiSendCallOnly batch runs.
+async function execViaSafe({ provider, safe: safeAddr, to, data, operation = 0, keys, relayerKey, log = () => {} }) {
+  const safe = new ethers.Contract(safeAddr, SAFE_ABI, provider);
+  const [nonce, threshold, owners, net] = await Promise.all([
+    retry(() => safe.nonce()), retry(() => safe.getThreshold()),
+    retry(() => safe.getOwners()), provider.getNetwork(),
+  ]);
+  // Only owners count, and only up to threshold. Filtering here rather than
+  // trusting the caller means a stray non-owner key produces a clear message
+  // instead of an opaque GS026 from the Safe.
+  const ownerSet = new Set(owners.map((o) => o.toLowerCase()));
+  const wallets = keys.map((k) => new ethers.Wallet(k)).filter((w) => ownerSet.has(w.address.toLowerCase()));
+  if (wallets.length < Number(threshold)) {
+    throw new Error(`need ${threshold} OWNER keys of ${safeAddr}, have ${wallets.length}`);
+  }
+  // Safe requires signatures ordered by ascending signer address.
+  const signers = wallets
+    .sort((a, b) => (a.address.toLowerCase() < b.address.toLowerCase() ? -1 : 1))
+    .slice(0, Number(threshold));
+
+  const tx = {
+    to, value: 0n, data, operation,
+    safeTxGas: 0n, baseGas: 0n, gasPrice: 0n,
+    gasToken: ethers.ZeroAddress, refundReceiver: ethers.ZeroAddress, nonce,
+  };
+  const domain = { chainId: Number(net.chainId), verifyingContract: safeAddr };
+  let sigs = "0x";
+  for (const w of signers) sigs += (await w.signTypedData(domain, SAFE_TX_TYPES, tx)).slice(2);
+
+  const relayer = new ethers.Wallet(relayerKey || keys[0], provider);
+  log(`\n  signing with ${signers.length} owner key(s), relayed by ${relayer.address}`);
+  return retry(() => safe.connect(relayer).execTransaction(
+    tx.to, tx.value, tx.data, tx.operation, tx.safeTxGas, tx.baseGas,
+    tx.gasPrice, tx.gasToken, tx.refundReceiver, sigs).then((t) => t.wait()));
+}
+
 async function main() {
   const rpc = process.env.RPC_URL || "https://sepolia.base.org";
   const safeAddr = ethers.getAddress(process.env.SAFE || "");
@@ -87,39 +124,15 @@ async function main() {
     return;
   }
 
-  // Only owners count, and only up to threshold. Filtering here rather than
-  // trusting the caller means a stray non-owner key produces a clear message
-  // instead of an opaque GS026 from the Safe.
-  const ownerSet = new Set(owners.map((o) => o.toLowerCase()));
-  const wallets = keys.map((k) => new ethers.Wallet(k)).filter((w) => ownerSet.has(w.address.toLowerCase()));
-  if (wallets.length < Number(threshold)) {
-    console.error(`\n  need ${threshold} OWNER keys, have ${wallets.length}\n`);
-    process.exit(1);
-  }
-  // Safe requires signatures ordered by ascending signer address.
-  const signers = wallets
-    .sort((a, b) => (a.address.toLowerCase() < b.address.toLowerCase() ? -1 : 1))
-    .slice(0, Number(threshold));
-
-  const tx = {
-    to, value: 0n, data, operation: 0,
-    safeTxGas: 0n, baseGas: 0n, gasPrice: 0n,
-    gasToken: ethers.ZeroAddress, refundReceiver: ethers.ZeroAddress, nonce,
-  };
-  const domain = { chainId: Number(net.chainId), verifyingContract: safeAddr };
-  let sigs = "0x";
-  for (const w of signers) sigs += (await w.signTypedData(domain, SAFE_TX_TYPES, tx)).slice(2);
-
-  const relayer = new ethers.Wallet(process.env.RELAYER_KEY || keys[0], provider);
-  console.log(`\n  signing with ${signers.length} owner key(s), relayed by ${relayer.address}`);
-  const rc = await retry(() => safe.connect(relayer).execTransaction(
-    tx.to, tx.value, tx.data, tx.operation, tx.safeTxGas, tx.baseGas,
-    tx.gasPrice, tx.gasToken, tx.refundReceiver, sigs).then((t) => t.wait()));
-
+  const rc = await execViaSafe({ provider, safe: safeAddr, to, data, keys, relayerKey: process.env.RELAYER_KEY, log: console.log });
   console.log(`  block ${rc.blockNumber}, receipt status ${rc.status}`);
   console.log(`\n  ⚠ A receipt status of 1 means THE SAFE RAN, not that "${label}" worked.`);
   console.log(`    execTransaction emits ExecutionSuccess even when the inner call`);
   console.log(`    reverted. Verify the effect on chain before believing it.\n`);
 }
 
-main().catch((e) => { console.error("\n  ERR:", e.shortMessage ?? e.message, "\n"); process.exit(1); });
+module.exports = { execViaSafe };
+
+if (require.main === module) {
+  main().catch((e) => { console.error("\n  ERR:", e.shortMessage ?? e.message, "\n"); process.exit(1); });
+}

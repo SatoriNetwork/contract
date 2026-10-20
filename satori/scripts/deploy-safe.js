@@ -6,7 +6,7 @@
 // Why this runs BEFORE the protocol deploy: `GOVERNOR` is the most powerful slot
 // in the system (ADDRESS_ROSTER §8) — it redirects the sole minter via
 // `SatoriToken.setController`, authorizes every UUPS upgrade, and RECEIVES THE
-// 633.6 SATORI GENESIS SUPPLY. Recorded intent is a 3-of-5 Safe. The Safe must
+// GENESIS SUPPLY (about 719.63 SATORI). Recorded intent is a 3-of-5 Safe. The Safe must
 // exist before it can be named, and checklist D3 (one UUPS upgrade executed
 // through the Safe) cannot be rehearsed until it does.
 //
@@ -139,16 +139,26 @@ async function verifySafe(safeAddr, owners, threshold, chainId, deployerAddr, ex
   return failed;
 }
 
+// app.safe.global's chain prefixes, for the link; a chain not listed gets none.
+const SAFE_APP_PREFIX = { 8453: "base", 84532: "basesep", 10: "oeth" };
+
 function report(safeAddr, chainId, threshold, ownerCount) {
   console.log(`\n== SAFE VERIFIED — ${threshold}-of-${ownerCount} ==\n`);
   console.log(`    ${safeAddr}\n`);
-  console.log(`  Open it at:  https://app.safe.global/home?safe=${chainId === 8453 ? "base" : "basesep"}:${safeAddr}\n`);
-  console.log(`  This address is a candidate for .env:\n`);
-  console.log(`    GOVERNOR=${safeAddr}`);
-  console.log(`    REWARDS_ADMIN=${safeAddr}   (or a separate ops key — checklist C4)\n`);
-  console.log(`  NOTE: deploy.js CANNOT be run with GOVERNOR set to this Safe — it`);
-  console.log(`  requires the deployer to be governor and admin. Deploy first, then`);
-  console.log(`  hand off with setGovernor -> acceptGovernor. See checklist D4.\n`);
+  if (SAFE_APP_PREFIX[chainId]) {
+    console.log(`  Open it at:  https://app.safe.global/home?safe=${SAFE_APP_PREFIX[chainId]}:${safeAddr}\n`);
+  }
+  if (chainId === 8453 || chainId === 84532 || chainId === 31337) {
+    console.log(`  For deploy.js, as the token's root (the same Safe can be created at this`);
+    console.log(`  address on any chain with these owners, threshold and salt nonce):\n`);
+    console.log(`    GOVERNOR=${safeAddr}`);
+    console.log(`    SAFE_SALT_NONCE=<the nonce used here>\n`);
+    console.log(`  deploy.js stops after creating the token until this Safe executes the one`);
+    console.log(`  transaction it prints, then is run again. handoff.js moves the admin.\n`);
+  } else {
+    console.log(`  If this is the token's root, the copy of SATORI on this chain now has its`);
+    console.log(`  owner. Never run deploy.js here; deploy-remote-token.js is the token script.\n`);
+  }
 }
 
 async function main() {
@@ -162,8 +172,8 @@ async function main() {
   console.log(`  deployer  ${deployer.address}`);
   console.log(`  mode      ${dryRun ? "DRY RUN — simulate only, no transaction" : "LIVE — will send a transaction"}`);
   if (chainId === 8453) {
-    console.log(`\n  !! BASE MAINNET. This Safe is intended to become GOVERNOR, which`);
-    console.log(`     holds 633.6 SATORI at genesis and can redirect the sole minter.`);
+    console.log(`\n  !! BASE MAINNET. This Safe is intended to become the token's root: it`);
+    console.log(`     receives the genesis supply and is root of every copy on every chain.`);
     console.log(`     Owners and threshold are set in this one transaction. Dry-run`);
     console.log(`     first and read the owner list back before signing.\n`);
   }

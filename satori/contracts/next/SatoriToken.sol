@@ -287,9 +287,10 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
         _;
     }
 
-    /// @param root_ seeds EVERY authority slot (the deployer, which hands each
-    ///        slot to its own Safe after setup — the split cannot precede the
-    ///        wiring calls the deploy script must make).
+    /// @param root_ seeds EVERY authority slot, and is part of the CREATE2
+    ///        address, so it is root of every copy on every chain. On Base the
+    ///        association's Safe, which lends the deployer wiring and appoint
+    ///        for the setup calls (deploy.js).
     constructor(address root_, address devRecipient_, uint256 homeChainId_)
         ERC20("Satori", "SATORI") ERC20Permit("Satori")
     {

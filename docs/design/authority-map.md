@@ -26,6 +26,17 @@ boundaries of these slots can never change, only the addresses. Any one slot may
 later point at a contract instead of a Safe, and that contract can subdivide
 however it likes.
 
+**Who holds them.** The constructor takes one `root_` and seeds all six slots with
+it. On Base that is the association's Safe; the deploy script refuses anything
+else there. `root_` is a constructor argument, so it is part of the token's
+CREATE2 address, and the same Safe is root of every copy of the token anyone
+deploys on any chain. The Safe can be created at the same address on each chain,
+and nobody can create one there with other owners (its owners and threshold are
+in its own CREATE2 salt). During the deploy the Safe lends the deploy key
+`wiringAuthority` and `appointAuthority`, plus the SATORI for the one adapter
+registration fee; root, fee, upgrade, freeze and the genesis SATORI never leave
+it. After the deploy, one Safe transaction moves each slot to its holder.
+
 | Slot | Holds |
 |---|---|
 | `rootAuthority` | assigns all five below; `setRootAuthority` (two-step) / `renounceRootAuthority` |
@@ -69,9 +80,10 @@ dial accrued.
 **`airdropAuthority`** — `loadAirdropBatch` and `finalizeAirdropLoading` — was the
 second carve-out until 2026-10-07, when the airdrop moved into its own contract
 (`docs/issues/airdrop-own-contract.md`). It is now a role on `SatoriAirdrop`,
-seeded at construction with `REWARDS_ADMIN`, rotated by its holder, recalled by
-`appointAuthority`, with no admin fallback. Still the only operational power that
-can put tokens somewhere: loading has no on-chain cap check, but the token's
+seeded at construction with the deploy key and moved at handoff, rotated by its
+holder, recalled by `appointAuthority`, with no admin fallback. Still the only
+operational power that can put tokens somewhere: loading has no on-chain cap
+check, but the token's
 `freezeAirdrop(airdrop, loadedTotal)` refuses a total over the cap, or one that
 moved since the check, so an over-allocation is never frozen or paid. Loading
 closes at the token's `freezeAirdrop` (`loadAirdropBatch` reverts
@@ -120,8 +132,8 @@ holder or `token.appointAuthority`; one-step, no freeze.
 
 ## 4. `engine.curveOperator`
 
-`setDustFloor`, `setDustTarget`. Optional — `address(0)` means only the governor
-may tune. Appointed by the governor, and has no other power.
+`setDustFloor`, `setDustTarget`. Optional — `address(0)` means only
+`appointAuthority` may tune. Appointed by `appointAuthority`, and has no other power.
 
 ## 5. `merkle.rootPublisher`
 
@@ -155,11 +167,16 @@ hand over. **A user role, not a protocol authority** — see the note below.
 
 ## 10. Bridges
 
-- **Tier 1** — `SUPERCHAIN_BRIDGE`, a hardcoded constant. Never the governor's.
-- **Tier 2** — whatever the `bridgeAuthority` registry approves.
+- **Tier 1** — `SUPERCHAIN_BRIDGE`, a hardcoded constant. No slot can change it.
+- **Tier 2** — whatever the `bridgeAuthority` registry approves. Set per chain by
+  `wiringAuthority` (`setBridgeAuthority`); `freezeBridgeAuthority` closes it on
+  that chain for good.
 
-Both may `crosschainMint` / `crosschainBurn`, which move existing supply between
-chains rather than creating it.
+Both may `crosschainMint` / `crosschainBurn`. On Base a mint is bounded by what
+has left Base, so it moves existing supply rather than creating it. A copy on
+another chain has no such bound: a tier-2 bridge approved there can mint without
+limit on that chain, though none of it can return to Base beyond what left. Each
+copy's slots start with the same root as Base's (§1).
 
 ## 10b. Holder voting (both instruments hold authority over NOTHING)
 
@@ -204,6 +221,14 @@ One-shot wiring on the children (`setSatoriCore`, `setSatoriEngine`,
 `setSatoriBounties`, `setSatoriRewards`). Each reverts `AlreadySet` on a second
 call, so the role expires at the end of the deploy script.
 
+Until the handoff it also holds what it borrows or starts with: `wiringAuthority`
+and `appointAuthority`, lent by the root Safe; `rewards.admin` and the airdrop
+loader (it registers the adapters as the admin); and `merkle.rootPublisher` unless
+another publisher was given. The handoff moves them all: one Safe transaction for
+the slots, the deploy key itself for its own roles (the publisher by nomination,
+which its successor accepts) and any SATORI left. Until the slots move, the
+borrowed `wiringAuthority` can still re-point the controller.
+
 ---
 
 ## What has NO power
@@ -222,7 +247,7 @@ annoy?"
 | Role | Worst it can do | Steal? |
 |---|---|---|
 | `rootAuthority` | point any slot at itself, then do anything below | **yes, in two steps** |
-| `wiringAuthority` | re-point the controller and drain banked mint headroom; until `freezeAirdrop`, re-point the airdrop door (which mints nothing unless the freeze authority freezes it) | **yes** |
+| `wiringAuthority` | re-point the controller and drain banked mint headroom; until `freezeAirdrop`, re-point the airdrop door (which mints nothing unless the freeze authority freezes it); on a copy off Base, approve a tier-2 bridge that mints there without limit | **yes** |
 | `upgradeAuthority` | upgrade any contract to anything | **yes** |
 | `rootPublisher` | direct the whole accrued Merkle reserve to itself | **yes, within its lane** |
 | `airdropAuthority` (on `SatoriAirdrop`) | allocate to itself before the freeze, which the pre-freeze check has to catch (a row added after the check makes the freeze revert, and a total over the cap cannot freeze at all); or never finalize, so nobody can claim | **yes** |
@@ -234,7 +259,7 @@ annoy?"
 | `marketingFeeRecipient` | redirect its own future skim | only its own |
 | stream provider | publish bad values on their own streams | no |
 | game authority | rename their own game | no |
-| tier-2 bridge | mint on one chain against a burn on another | only via the registry the governor sets |
+| tier-2 bridge | mint on one chain against a burn on another | only via the registry `wiringAuthority` sets; on Base bounded by what left, on a copy elsewhere unbounded there |
 
 Two of these are the reason `humble.md` §4a exists and the reason the §4
 discussion keeps returning to recall: **the two roles that can steal are the two
@@ -260,12 +285,12 @@ is nothing to point a recall at.
   on the frozen table. It is the natural end of the loader's own one-time job
   rather than the destruction of a standing office, and it cannot steal. See
   `dao-governance.md` §2.
-- **`setOffchainBudget` is `admin`-gated, not governor-gated**, so a DAO that
-  wants the dial directly must either take `admin` wholesale or have the lever
-  re-gated. `SatoriRewards` is upgradeable, so this is a change, not a redeploy.
-- **`admin` is already recallable by the governor** (`setAdmin` accepts
-  `admin || _upgradeGovernor()`), and `curveOperator` is governor-appointed. Both
-  already match the model exactly.
+- **`setOffchainBudget` has its own slot**, `emissionSplitAuthority` (§3), which
+  `appointAuthority` can reassign, so a DAO that wants the dial directly appoints
+  that slot and takes nothing else. Already matches the model.
+- **`admin` is already recallable by `appointAuthority`** (`setAdmin` accepts
+  `admin || appointAuthority`), and `curveOperator` is appointed by
+  `appointAuthority`. Both already match the model exactly.
 - **Stream providers and game authorities should stay un-recallable.** They are
   user property, not protocol authority. A DAO that can seize a stream is a DAO
   that can seize a user's things.

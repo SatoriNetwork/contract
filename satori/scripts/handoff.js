@@ -3,24 +3,33 @@
 //   npx hardhat run scripts/handoff.js --network baseSepolia          (shows the plan)
 //   HANDOFF_EXECUTE=1 npx hardhat run scripts/handoff.js --network baseSepolia
 //
-// WHY THIS EXISTS AS A SEPARATE STEP
-// `deploy.js` cannot be run with GOVERNOR already set to the Safe. Three
-// independent reasons, none of them fixable by passing a different address:
+// TWO SHAPES
+// On Base the token's root is the association's Safe from its constructor (M02):
+// deploy.js borrowed wiring and appoint from it, and this script prints the one
+// Safe transaction that hands every slot to its final holder (or sends it with
+// SIGNER_KEYS on a testnet), and moves the deployer's own roles. A rehearsal
+// deployed with the deployer as root runs the full sequence below instead.
 //
-//   1. `engine.setHub`, `token.setController` and `token.setHook` are
-//      `onlyGovernor`, and the script signs them as the deployer.
+// WHY THIS EXISTS AS A SEPARATE STEP
+// The deployer needs these while deploy.js runs, for three reasons:
+//
+//   1. `token.setController`, `token.setHook`, `token.setAirdrop` and the hub's
+//      Merkle and vote-lock setters are gated on the token's wiring slot, and
+//      `engine.setHub` on its appoint slot; the script signs them as the deployer.
 //   2. The adapter registrations run while every capability flag is off, so they
 //      pass only via the admin bypass in `capabilityAllowed` — the deployer must
 //      be `rewards.admin()`.
-//   3. Adapter registration burns SATORI. At genesis only the governor and
-//      the dev recipient hold any SATORI at all.
+//   3. Adapter registration burns SATORI. At genesis only the root and the dev
+//      recipient hold any SATORI at all.
 //
-// So the deployer must own everything *during* the deploy, and the handoff is
-// what happens immediately after. Until it completes, one hot key holds the
-// genesis treasury AND `setController`, which redirects the sole minter. That
-// window is the most dangerous moment in the entire launch. Close it fast.
+// With a Safe root the deployer only borrows wiring, appoint and 0.001 SATORI;
+// root, fee, upgrade, freeze and the genesis treasury never leave the Safe. The
+// open window is the borrowed wiring slot, which can redirect the sole minter,
+// until the Safe batch this prints runs. With the deployer as root (a
+// rehearsal), the deployer holds everything, treasury included, until the
+// sequence below completes. Either way, close it fast.
 //
-// THE ORDER IS CHOSEN, NOT INCIDENTAL
+// THE DEPLOYER-ROOT ORDER IS CHOSEN, NOT INCIDENTAL
 // The two halves of the danger close at different speeds, so the one that can be
 // closed unilaterally goes first:
 //
@@ -68,6 +77,8 @@ const { ethers, network } = require("hardhat");
 const fs = require("fs");
 const path = require("path");
 const { runChecks, readPolicy } = require("./live-reads-lib");
+const { SAFE, encodeMultiSend, txBuilderBatch } = require("./deploy-lib");
+const { execViaSafe } = require("./safe-exec");
 
 function requireAddr(name, v) {
   const s = (v ?? "").trim();
@@ -90,7 +101,11 @@ async function main() {
   if (!fs.existsSync(book)) {
     throw new Error(`no address book at ${book} — run deploy.js first, or set ADDRESS_BOOK`);
   }
-  const A = JSON.parse(fs.readFileSync(book, "utf8")).addresses;
+  const bookJson = JSON.parse(fs.readFileSync(book, "utf8"));
+  if (bookJson.complete === false) {
+    throw new Error(`${book} is from a deploy.js run that has not finished — finish the deploy first (run it again).`);
+  }
+  const A = bookJson.addresses;
 
   const newGovernor = requireAddr("NEW_GOVERNOR", process.env.NEW_GOVERNOR);
   const newAdmin = requireAddr("NEW_ADMIN", process.env.NEW_ADMIN || process.env.NEW_GOVERNOR);
@@ -129,8 +144,8 @@ async function main() {
   console.log(`  book      ${book}`);
   console.log(`  mode      ${execute ? "EXECUTE — will send transactions" : "PLAN ONLY — nothing will be sent"}`);
   if (chainId === 8453) {
-    console.log(`\n  !! BASE MAINNET. Until step 4 completes, the deployer holds the genesis`);
-    console.log(`     treasury and can redirect the sole minter. Do not stop half way.\n`);
+    console.log(`\n  !! BASE MAINNET. Until the root Safe runs the slot batch printed below, the`);
+    console.log(`     deployer still holds the borrowed wiring slot and can redirect the sole minter.\n`);
   }
 
   // ---- current state ----
@@ -167,6 +182,10 @@ async function main() {
   if (newGovernor === deployer.address) {
     throw new Error("NEW_GOVERNOR is the deployer — that is not a handoff.");
   }
+  for (const [name, a] of [["NEW_ADMIN", newAdmin], ["NEW_ROOT_PUBLISHER", newRootPublisher], ["TREASURY", treasury],
+    ...SLOTS.map((sl) => [`NEW_${sl.name.toUpperCase()}_AUTHORITY`, sl.target])]) {
+    if (a === deployer.address) throw new Error(`${name} is the deployer — that is not a handoff.`);
+  }
   // The incoming governor has to be able to send `acceptGovernor`. An address
   // with no code is an EOA and presumed able; a contract must be one that can
   // originate calls (a Safe can, an inert contract cannot and would strand the
@@ -197,15 +216,21 @@ async function main() {
     pubDone = pubNow.toLowerCase() === newRootPublisher.toLowerCase();
   }
 
-  if (govDone && adminDone && tokensDone && pubDone && loaderDone) {
+  const slotsDone = SLOTS.every((sl) => sl.now.toLowerCase() === sl.target.toLowerCase());
+  let proposerDone = true;
+  if (A.lockVoteGovernor) {
+    const p = await (await ethers.getContractAt("LockVoteGovernor", A.lockVoteGovernor)).proposer();
+    proposerDone = p.toLowerCase() === newGovernor.toLowerCase();
+  }
+  if (govDone && adminDone && tokensDone && pubDone && loaderDone && slotsDone && proposerDone) {
     console.log(`\n== HANDOFF COMPLETE ==`);
-    console.log(`\n  The deployer holds no SATORI, is not the governor, is not the admin,`);
-    console.log(`  is not the airdrop loader, and is not the merkle root publisher.`);
+    console.log(`\n  The deployer holds no SATORI and no token slot, is not the governor, is not`);
+    console.log(`  the admin, the airdrop loader, the lock-vote proposer, or the merkle root publisher.`);
     console.log(`  Nothing further to do.\n`);
     return;
   }
 
-  if (govDone && adminDone && tokensDone && loaderDone && !pubDone) {
+  if (govDone && adminDone && tokensDone && loaderDone && slotsDone && proposerDone && !pubDone) {
     console.log(`\n== ALMOST — ONE ROLE IS STILL ON THE DEPLOYER ==`);
     console.log(`\n  governor, admin and treasury are handed over, but the merkle`);
     console.log(`  root publisher is still ${pubNow}`);
@@ -240,11 +265,14 @@ async function main() {
   //    send these at all. `wiring` is the one that matters most — it carries
   //    `setController`, so this is where the minter hole actually closes.
   const rootIsDeployer = govNow.toLowerCase() === deployer.address.toLowerCase();
+  // Slots only the root can move, when the root is not the deployer: a Safe
+  // root sends them as one batch (below).
+  const rootCalls = [];
   for (const sl of SLOTS) {
     if (sl.now.toLowerCase() === sl.target.toLowerCase()) continue;
     if (!rootIsDeployer) {
-      console.log(`\n  note: ${sl.name} is ${sl.now} and root is no longer the deployer —`);
-      console.log(`        the new root must send ${sl.setter}(${sl.target}) itself.`);
+      rootCalls.push({ to: A.token, data: token.interface.encodeFunctionData(sl.setter, [sl.target]),
+        label: `${sl.setter}(${sl.target})`, sl });
       continue;
     }
     steps.push({
@@ -390,6 +418,34 @@ async function main() {
     if (failed.length) {
       console.error(`\n  ${failed.length} check(s) failed — do NOT proceed to the accept step.\n`);
       process.exit(1);
+    }
+  }
+
+  // ---- the root's own transaction, when the root is a Safe ----
+  if (rootCalls.length) {
+    const batchPath = book.replace(/\.json$/, "") + ".safe-handoff.json";
+    fs.writeFileSync(batchPath, JSON.stringify(txBuilderBatch({
+      chainId, safe: govNow, name: "Satori handoff: every token slot to its holder", calls: rootCalls }), null, 2));
+    const data = encodeMultiSend(rootCalls);
+    const keys = (process.env.SIGNER_KEYS || "").split(",").map((k) => k.trim()).filter(Boolean);
+    console.log(`\n== THE ROOT SAFE MUST MOVE ${rootCalls.length} SLOT(S) ==\n`);
+    console.log(`  Root is ${govNow}. Until this runs, the deployer still holds what deploy.js borrowed.`);
+    for (const c of rootCalls) console.log(`    ${c.label}`);
+    console.log(`  As one Safe transaction (Transaction Builder batch: ${batchPath}), or raw:`);
+    console.log(`    to        ${SAFE.multiSendCallOnly}  (MultiSendCallOnly 1.4.1)`);
+    console.log(`    operation 1 (delegatecall)\n    data      ${data}\n`);
+    if (execute && keys.length) {
+      if (!network.config.url) throw new Error("SIGNER_KEYS needs a network with a URL");
+      console.log("  executing it with SIGNER_KEYS (testnet convenience)...");
+      await execViaSafe({ provider: new ethers.JsonRpcProvider(network.config.url), safe: govNow,
+        to: SAFE.multiSendCallOnly, data, operation: 1, keys, log: console.log });
+      const { failed } = await runChecks(rootCalls.map((c) => [`${c.sl.name} authority is ${c.sl.target}`,
+        async () => (await token[c.sl.getter]()).toLowerCase() === c.sl.target.toLowerCase()]), { ...policy, log: console.log });
+      if (failed.length) {
+        console.error(`\n  the Safe ran, but ${failed.length} slot(s) did not move — check the Safe transaction.\n`);
+        process.exit(1);
+      }
+      console.log("  every slot is with its holder. Re-run this script to confirm the handoff is complete.\n");
     }
   }
 

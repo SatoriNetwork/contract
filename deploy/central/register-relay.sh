@@ -26,13 +26,14 @@
 #
 # THIS HAS FINANCIAL EFFECT — READ BEFORE RUNNING
 # -----------------------------------------------
-# Registered relays are paid. `src/scripts/daily_run.py` accrues relay rewards
-# keyed on the Nostr-derived `evr_address` (relays have no peer_id), with
-# sub-threshold amounts accumulating until they cross. Registering a relay
-# makes it eligible; it is not a bookkeeping entry.
+# Registered relays are paid. `src/scripts/daily_run.py` pays relay rewards to
+# the relay's Base `address`, derived from its Nostr key (relays have no
+# peer_id). Registering a relay makes it eligible; it is not a bookkeeping entry.
+# This needs central's base-upgrade code (src/utils/eth_address.py); on a
+# central without it the import fails before anything is written.
 #
 # In particular: the address is derived from the relay's NIP-11 `pubkey`. If two
-# relays serve the SAME pubkey they resolve to the SAME evr_address and both
+# relays serve the SAME pubkey they resolve to the SAME address and both
 # accrue to it. That is the current state — the Central relay reuses
 # satorian.satorinet.io's identity. Give Central's relay its own keypair if the
 # two should be accounted separately.
@@ -55,20 +56,20 @@ NIP11_URL="${NIP11_URL:-http://satori-relay-nginx/}"
 docker exec -e RELAY_URL="$RELAY_URL" -e NIP11_URL="$NIP11_URL" central-lite python3 -c '
 import os, httpx
 from relay_watcher.db import upsert_discovered_relay
-from src.utils.nostr_evrmore import nostr_pubkey_to_evr_address
+from src.utils.eth_address import relay_base_address
 
 doc = httpx.get(os.environ["NIP11_URL"],
                 headers={"Accept": "application/nostr+json"}, timeout=10).json()
 pk   = doc["pubkey"]
-addr = nostr_pubkey_to_evr_address(pk)
+addr = relay_base_address(pk)
 print("relay      :", os.environ["RELAY_URL"])
 print("nip11 name :", doc["name"])
 print("pubkey     :", pk)
-print("evr address:", addr)
+print("base address:", addr)
 print("id         :", upsert_discovered_relay(os.environ["RELAY_URL"], pk, addr, 0))
 '
 
 echo
 echo "Verify:"
 echo "  docker exec satori-db psql -U satori -d satori -c \\"
-echo "    \"SELECT id, relay_url, evr_address, neuron_count FROM discovered_relays ORDER BY id;\""
+echo "    \"SELECT id, relay_url, address, neuron_count FROM discovered_relays ORDER BY id;\""

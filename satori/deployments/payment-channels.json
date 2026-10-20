@@ -1,0 +1,16 @@
+{
+  "contract": "PaymentChannels",
+  "address": "0xeF3f87042cd9619729E5D69Da2fF90F89EA6976c",
+  "factory": "0x4e59b44847b379578588920cA78FbF26c0B4956C",
+  "salt": "0x4dbc4d7f1502ff1e7185eb127f8fdc08ff8874774495b478c5f8bc699e7901be",
+  "initCodeHash": "0x0afa1ee42a06ab7c2b2518e14242dd7a2021ec94fa4da7e9b1405e6253556891",
+  "chains": {
+    "84532": {
+      "name": "baseSepolia",
+      "tx": "0x9bd10fc0c644fc02f0512cdd68de5c995ec2105ed058cbd488a705d9c929e298",
+      "block": 48351055,
+      "deployer": "0x9d3109b8A045D63056Aa5C1d2c883F3F9fA18817"
+    }
+  },
+  "note": "Base Sepolia's tx and block were filled in by hand from its receipt (status 1, 1,540,387 gas): the first run's code check read a lagging RPC before the script used waitForCode."
+}

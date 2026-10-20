@@ -6,12 +6,15 @@
 // else: no children, no engine, no hub, no adapters, no default stream. There is
 // no game on a remote chain and there is not meant to be one.
 //
-// What makes such a deployment safe is not this script — it is the bytecode. The
-// token's HOME_CHAIN_ID gate closes the constructor's genesis mint,
-// `setController` (and with it rewardMint / airdropMint / setLock /
-// markParticipated) and `mintDevFee`. So the only way supply can ever enter a
-// remote deployment is `crosschainMint` from the SuperchainTokenBridge predeploy.
-// This script's job is to prove that is what actually landed.
+// What makes such a deployment safe is mostly the bytecode. The token's
+// HOME_CHAIN_ID gate closes the constructor's genesis mint, `setController`
+// (and with it rewardMint / airdropMint / setLock / markParticipated) and
+// `mintDevFee`. So supply can enter a remote deployment only through
+// `crosschainMint`: from the SuperchainTokenBridge predeploy, or from a tier-2
+// bridge the copy's root approves with setBridgeAuthority. That root is the home
+// token's constructor root on every chain, whoever deploys the copy: on Base
+// mainnet the association's Safe (M02). This script proves the gates landed and
+// that the root Safe exists here, or prints how to create it.
 //
 // Config:
 //   HOME_BOOK   path to the home address book   [default: ./deployments/base.json]
@@ -88,9 +91,12 @@ async function main() {
   try { book = JSON.parse(fs.readFileSync(bookPath, "utf8")); }
   catch (e) { throw new Error(`${bookPath} is unreadable: ${e.message}`); }
 
-  const homeChainId = Number(book.chainId);
-  const governor = ethers.getAddress(book.governor);
-  const platformFeeRecipient = ethers.getAddress(book.platformFeeRecipient);
+  // constructorArgs is what the home token's address is made of; older books
+  // only have the same values under their deploy-time names.
+  const args = book.constructorArgs ?? { root: book.governor, devRecipient: book.platformFeeRecipient, homeChainId: book.chainId };
+  const homeChainId = Number(args.homeChainId);
+  const governor = ethers.getAddress(args.root);
+  const platformFeeRecipient = ethers.getAddress(args.devRecipient);
   const homeToken = ethers.getAddress(book.addresses.token);
   for (const [k, v] of Object.entries({ homeChainId, governor, platformFeeRecipient, homeToken })) {
     if (!v) throw new Error(`${bookPath} is missing ${k} — cannot reproduce the home token's address`);
@@ -168,7 +174,9 @@ async function main() {
     // The two that matter most: the gates are read at call time, so calling them
     // is the only honest proof they are closed on THIS chain.
     ["setController is gated (NotHomeChain)",
-      revertsWith(() => token.setController.staticCall(deployer.address, { from: governor }), "NotHomeChain()")],
+      // Through the provider: the root is a Safe, not this signer, and ethers
+      // refuses a `from` that is not its signer before anything is sent.
+      revertsWith(() => token.connect(ethers.provider).setController.staticCall(deployer.address, { from: governor }), "NotHomeChain()")],
     ["mintDevFee is gated (NotHomeChain)",
       revertsWith(() => token.mintDevFee.staticCall(), "NotHomeChain()")],
   ];
@@ -190,6 +198,22 @@ async function main() {
   }
   console.log(`  all ${checks.length} post-conditions passed`);
 
+  // --- 6b. the root on this chain ---
+  // The copy's root is the home root's address. Until a Safe exists at it here,
+  // nobody can use the copy's slots: tier 2 stays closed, which is safe.
+  const rootHere = (await ethers.provider.getCode(governor)) !== "0x";
+  if (rootHere) {
+    console.log(`  root ${governor} exists on this chain`);
+  } else if (book.rootSafe) {
+    console.log(`  root ${governor} does not exist on this chain yet. Create the same Safe here with:\n` +
+      `    SAFE_OWNERS=${book.rootSafe.owners.join(",")} SAFE_THRESHOLD=${book.rootSafe.threshold} ` +
+      `SAFE_SALT_NONCE=${book.rootSafe.saltNonce} npx hardhat run scripts/deploy-safe.js --network ${net}`);
+  } else {
+    console.log(`  root ${governor} has no code here, and the home book records no Safe setup to recreate it.`);
+  }
+  console.log(`  tier 2 here: no bridge authority until the root sets one. To close it on this chain for good\n` +
+    `  (PATH_TO_LIVE 7.1), the root sends: to ${address} data ${token.interface.encodeFunctionData("freezeBridgeAuthority", [])}`);
+
   // --- 7. address book ---
   const out = process.env.OUT || path.join(__dirname, "..", "deployments", `${net}.json`);
   fs.mkdirSync(path.dirname(out), { recursive: true });
@@ -199,8 +223,10 @@ async function main() {
     kind: "remote-token",            // NOT a home stack — there is no game here
     homeChainId,
     homeBook: path.basename(bookPath),
+    constructorArgs: { root: governor, devRecipient: platformFeeRecipient, homeChainId: String(homeChainId) },
     governor,
     platformFeeRecipient,
+    rootSafePresent: rootHere,
     bridgeLive: bridgeCode !== "0x",
     addresses: { token: address },
   }, null, 2));

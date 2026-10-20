@@ -62,20 +62,19 @@ const { ethers, network } = require("hardhat");
 // receipt is not a read barrier. Here that lands harder than anywhere else in the
 // deploy: this script runs FIRST, and the tree it would wrongly declare unusable
 // contains the node that becomes the token's IRREVERSIBLE PLATFORM_FEE_RECIPIENT.
-// "Redeploy" is the natural response to a failed check and the expensive one — it
-// builds a second tree, and on mainnet spends the one chance to set slot 7 right.
 // See docs/issues/closed/rpc-read-after-write-lag-on-live-networks.md.
 const { runChecks, waitForCode, readPolicy } = require("./live-reads-lib");
 const fs = require("fs");
 const path = require("path");
 
-const BPS = 10000n;
-const TOP_C_SHARE = 6000n;   // A -> C
-const TOP_B_SHARE = 4000n;   // A -> B
-const LEAF_SHARE  = 5000n;   // each leaf recipient
+// deploy.js checks the fee recipient against the same shape (checkFeeTree).
+const { FEE_TREE } = require("./deploy-lib");
+const BPS = FEE_TREE.bps;
+const [TOP_C_SHARE, TOP_B_SHARE] = FEE_TREE.top;   // A -> C, A -> B
+const LEAF_SHARE = FEE_TREE.leaf[0];               // each leaf recipient
 
-const DEFAULT_THRESHOLD = 0n;    // 0 == "use the contract default" (9000 = 90%)
-const B_THRESHOLD       = 1000n; // 10%
+const DEFAULT_THRESHOLD = FEE_TREE.threshold.C; // 0 == "use the contract default" (9000 = 90%)
+const B_THRESHOLD       = FEE_TREE.threshold.B; // 10%
 
 function requireAddr(name) {
   const v = (process.env[name] || "").trim();
@@ -187,6 +186,25 @@ async function main() {
   console.log(`     slot 1  ${bAddr}  ${TOP_B_SHARE} bps  (B)`);
   console.log(`     threshold contract default   authority NONE`);
 
+  // Hand the tree to Phase 2 as a FILE, not as something to retype, and write it
+  // NOW, before any read-back: a lagging node that fails the checks below must
+  // not leave the operator with A's address only on screen. deploy.js checks the
+  // tree on chain against this file before the token exists, whatever it says.
+  const out = path.join(__dirname, "..", "deployments", `splitters-${network.name}.json`);
+  const writeFile = (verified, rejected) => {
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, JSON.stringify({
+      network: network.name, chainId, verified, ...(rejected ? { rejected } : {}),
+      platformFeeRecipient: aAddr,          // <- what Phase 2 consumes
+      a: aAddr, c: cAddr, b: bAddr,
+      payees: { PAYEE_1: payees[0], PAYEE_2: payees[1], PAYEE_3: payees[2], PAYEE_4: payees[3] },
+      authorities: { C: authorityC, B: authorityB },
+      deployer: deployer.address,
+    }, null, 2));
+  };
+  writeFile(false);
+  console.log(`\n  written (not yet verified) -> ${out}`);
+
   // ---- read barrier ----------------------------------------------------------
   // All three nodes are brand new, so the lag that matters here is not a stale
   // pointer but the CODE not being visible yet — every verification read reverts
@@ -201,9 +219,9 @@ async function main() {
       if (size === 0) {
         throw new Error(
           `could not confirm code at ${label} (${addr}). The deployment transactions ` +
-          `SUCCEEDED — this is a read that has not caught up, not a failed deploy. Check ` +
-          `a block explorer before doing anything else: re-running builds a SECOND tree, ` +
-          `and on mainnet spends the one chance to set PLATFORM_FEE_RECIPIENT correctly.`
+          `SUCCEEDED — this is a read that has not caught up, not a failed deploy. The ` +
+          `tree is in ${out}; deploy.js checks it on chain before using it. Do not ` +
+          `re-run this script: it would build a SECOND tree.`
         );
       }
       console.log(`  ok   ${label}  ${addr}  ${size} bytes`);
@@ -221,7 +239,8 @@ async function main() {
   if (pre.failed.length) {
     throw new Error(
       `could not read DEFAULT_ROTATION_THRESHOLD_BPS from A (${aAddr}) — the tree IS ` +
-      `deployed; confirm on a block explorer before redeploying.`
+      `deployed and in ${out}; deploy.js checks it on chain before using it. Do not ` +
+      `re-run this script: it would build a SECOND tree.`
     );
   }
 
@@ -318,8 +337,10 @@ async function main() {
       console.error(`  Each was re-read ${policy.attempts}x over ~${(policy.attempts - 1) * policy.delayMs / 1000}s against code`);
       console.error(`  already confirmed on chain, so this is a real fault, not RPC lag.`);
     }
-    console.error(`  Fix the inputs and redeploy; nothing points at this tree yet, and the`);
-    console.error(`  addresses above are inert until PLATFORM_FEE_RECIPIENT names one.\n`);
+    // Marked rejected, so deploy.js refuses this tree if the file is used anyway.
+    writeFile(false, failed.map(([m]) => m));
+    console.error(`  Fix the inputs and run this script again; it replaces ${out}, which`);
+    console.error(`  now marks this tree rejected so deploy.js refuses it.\n`);
     process.exit(1);
   }
   const lagged = [...passedOn.values()].filter((a) => a > 1).length;
@@ -327,22 +348,10 @@ async function main() {
     console.log(`\n  (${lagged} check(s) confirmed only on a re-read — RPC lag, not a tree fault)`);
   }
 
-  // Hand the tree to Phase 2 as a FILE, not as something to retype. A's address
-  // becomes an immutable on a token with no upgrade path, so a transcription slip
-  // here is the one mistake in this whole system that can never be corrected —
-  // and "copy this line into .env" is exactly the step where that happens.
-  // deploy.js reads this and, if PLATFORM_FEE_RECIPIENT is also set in the
-  // environment, refuses to run unless the two agree.
-  const out = path.join(__dirname, "..", "deployments", `splitters-${network.name}.json`);
-  fs.mkdirSync(path.dirname(out), { recursive: true });
-  fs.writeFileSync(out, JSON.stringify({
-    network: network.name, chainId,
-    platformFeeRecipient: aAddr,          // <- what Phase 2 consumes
-    a: aAddr, c: cAddr, b: bAddr,
-    payees: { PAYEE_1: payees[0], PAYEE_2: payees[1], PAYEE_3: payees[2], PAYEE_4: payees[3] },
-    authorities: { C: authorityC, B: authorityB },
-    deployer: deployer.address,
-  }, null, 2));
+  // A's address becomes an immutable on a token with no upgrade path, so a
+  // transcription slip is the one mistake that can never be corrected; deploy.js
+  // reads this file and refuses an environment value that disagrees with it.
+  writeFile(true);
 
   console.log(`\n== PHASE 1 COMPLETE — the tree is already final ==`);
   console.log(`\n  Written to ${out}`);
