@@ -14,6 +14,17 @@ async function asRewards(rewards) {
   return await ethers.getSigner(addr);
 }
 
+// The on-chain lane mints only what Rewards reported. Price the current round
+// (as SatoriRewards' first touch does) and report everything its allowance
+// still holds; returns the amount reported.
+async function reportRoom(hub, token, rw) {
+  await hub.connect(rw).freezeRoundGross(await hub.getCurrentRound());
+  const room = (await hub.onChainAllowance())
+    - ((await token.generalAccrued()) - (await hub.merkleReserveCumulative()));
+  await hub.connect(rw).noteIssued(room);
+  return room;
+}
+
 // MockERC20 is referenced per harness contract so the suite compiles it in.
 let MockERC20;
 
@@ -28,51 +39,43 @@ describe("[adversarial-cov2] erc20-token (round 2 — med gaps)", function () {
   });
 
   // ---------------------------------------------------------------------
-  // rewardMint cap accounting is CUMULATIVE within a single round.
+  // rewardMint cap accounting is CUMULATIVE across calls.
   //
-  // The existing cov suite does at most one rewardMint per round, so it
-  // never proves that two mints in the SAME round share the per-round
-  // headroom. A regression that recomputed headroom per-call (e.g. reset
-  // totalRewardsMinted, or compared `amount` instead of the running total
-  // against the cap) would pass every current test yet allow double-mint.
+  // The existing cov suite does at most one rewardMint per report, so it
+  // never proves that two mints share one reported amount. A regression that
+  // recomputed room per-call (e.g. compared `amount` instead of the running
+  // total against what was reported) would pass every current test yet allow
+  // double-mint.
   // ---------------------------------------------------------------------
   describe("rewardMint cap is cumulative across multiple mints in one round", function () {
-    it("two partial mints in the same round share one round's headroom; the second wei over the cap reverts", async function () {
-      const { satori, rewards } = await deploySatoriFixture();
+    it("two partial mints in the same round share one report; the second wei over it reverts", async function () {
+      const { satori, hub, token, rewards } = await deploySatoriFixture();
       const rewardsSigner = await asRewards(rewards);
-      // The binding cap is the HUB's: its emission ceiling net of the
-      // fee's flat 15%. The token's `1440 × rounds` sits outside it.
-      const RATE = await satori.emissionRateNow();
-      const BPS = await satori.devFeeBps();
-      const genCap = (e) => (RATE * e * (10000n - BPS)) / 10000n;
       const recipient = (await ethers.getSigners())[5].address;
 
-      // Drain whatever the deploy round has left, then advance one round so the
-      // headroom under test is EXACTLY one round's share.
-      const room0 = genCap(1n) - (await satori.onChainMinted());
-      if (room0 > 0n) await satori.connect(rewardsSigner).rewardMint(recipient, room0);
       await time.increase(ROUND);
+      const reported = await reportRoom(hub, token, rewardsSigner);
+      expect(reported).to.be.gt(0n);
       const base = await satori.totalRewardsMinted();
-      const perRound = genCap(2n) - genCap(1n);
 
-      // First partial mint consumes part of the round's headroom.
-      const part = perRound / 4n;
+      // First partial mint consumes part of the report.
+      const part = reported / 4n;
       await satori.connect(rewardsSigner).rewardMint(recipient, part);
       expect(await satori.totalRewardsMinted()).to.equal(base + part);
 
-      // The REMAINING headroom for this round is (perRound - part). One wei more
-      // than that must revert — proving the cap is checked against the running
-      // total, not per-call.
-      const remaining = perRound - part;
+      // The REMAINING room is (reported - part). One wei more than that must
+      // revert — proving the cap is checked against the running total, not
+      // per-call.
+      const remaining = reported - part;
       await expect(
         satori.connect(rewardsSigner).rewardMint(recipient, remaining + 1n)
       ).to.be.revertedWithCustomError(satori, "BudgetExceeded");
 
-      // Exactly the remaining headroom succeeds and saturates the round.
+      // Exactly the remaining room succeeds and saturates the report.
       await satori.connect(rewardsSigner).rewardMint(recipient, remaining);
-      expect(await satori.totalRewardsMinted()).to.equal(base + perRound);
+      expect(await satori.totalRewardsMinted()).to.equal(base + reported);
 
-      // Now fully saturated for this round; any further mint reverts.
+      // Now fully saturated; any further mint reverts.
       await expect(
         satori.connect(rewardsSigner).rewardMint(recipient, 1n)
       ).to.be.revertedWithCustomError(satori, "BudgetExceeded");
@@ -83,42 +86,38 @@ describe("[adversarial-cov2] erc20-token (round 2 — med gaps)", function () {
   // rewardMint(to == address(0)) reverts (OZ ERC20 zero-address guard) AND
   // leaves the cap accounting untouched.
   //
-  // Cap accounting does `totalRewardsMinted += amount` BEFORE `_mint`. If the
+  // Cap accounting does `onChainMinted += amount` BEFORE `_mint`. If the
   // `_mint` revert did not roll the whole tx back (a future refactor caching
-  // state), the cap would be silently consumed by a no-op mint, permanently
-  // shrinking real emission headroom. Pin that the revert is atomic.
+  // state), the reported room would be silently consumed by a no-op mint,
+  // permanently stranding a reported credit. Pin that the revert is atomic.
   // ---------------------------------------------------------------------
   describe("rewardMint to the zero address reverts atomically", function () {
     it("reverts and does NOT consume cap headroom", async function () {
-      const { satori, rewards } = await deploySatoriFixture();
+      const { satori, hub, token, rewards } = await deploySatoriFixture();
       const rewardsSigner = await asRewards(rewards);
-      const RATE = await satori.emissionRateNow();
-      const BPS = await satori.devFeeBps();
-      const genCap = (e) => (RATE * e * (10000n - BPS)) / 10000n;
       const recipient = (await ethers.getSigners())[5].address;
 
-      // Saturate the deploy round first, so the post-advance headroom is
-      // EXACTLY one round's share and the full-headroom mint below is a tight
-      // proof that the reverted zero-address call consumed nothing.
-      const room0 = genCap(1n) - (await satori.onChainMinted());
-      if (room0 > 0n) await satori.connect(rewardsSigner).rewardMint(recipient, room0);
+      // The full-report mint below is a tight proof that the reverted
+      // zero-address call consumed nothing.
       await time.increase(ROUND);
-      const perRound = genCap(2n) - genCap(1n);
+      const reported = await reportRoom(hub, token, rewardsSigner);
       const mintedBefore = await satori.totalRewardsMinted();
+      const onChainBefore = await satori.onChainMinted();
       const supplyBefore = await satori.totalSupply();
 
-      // Within-headroom amount, but to the zero address -> OZ ERC20InvalidReceiver.
+      // Within-report amount, but to the zero address -> OZ ERC20InvalidReceiver.
       await expect(
-        satori.connect(rewardsSigner).rewardMint(ethers.ZeroAddress, perRound / 2n)
+        satori.connect(rewardsSigner).rewardMint(ethers.ZeroAddress, reported / 2n)
       ).to.be.reverted;
 
       // Accounting untouched by the reverted call.
       expect(await satori.totalRewardsMinted()).to.equal(mintedBefore);
+      expect(await satori.onChainMinted()).to.equal(onChainBefore);
       expect(await satori.totalSupply()).to.equal(supplyBefore);
 
-      // The full round headroom is still available to a valid recipient.
-      await satori.connect(rewardsSigner).rewardMint(recipient, perRound);
-      expect(await satori.totalRewardsMinted()).to.equal(mintedBefore + perRound);
+      // The full report is still mintable to a valid recipient.
+      await satori.connect(rewardsSigner).rewardMint(recipient, reported);
+      expect(await satori.totalRewardsMinted()).to.equal(mintedBefore + reported);
     });
   });
 

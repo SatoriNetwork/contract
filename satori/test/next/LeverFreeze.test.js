@@ -10,10 +10,10 @@ const { ethers } = require("hardhat");
 // a governor for, which means a DAO handed `governor` is a DAO whose vote can
 // reach the banked mint headroom.
 //
-// WHY THE HEADROOM IS REAL. The token caps the general lane at 85% of
-// `1440 x rounds`; the hub mints 85% of a decaying schedule far below that. The
-// gap banks up forever and nothing in normal operation touches it. Only a
-// re-pointed controller can.
+// WHY THE HEADROOM IS REAL. The token's envelope is `1440 x rounds` on
+// everything reported (general plus fee); the hub reports a decaying schedule
+// far below that. The unreported gap banks up forever and nothing in normal
+// operation touches it. Only a re-pointed controller can report and mint it.
 //
 // The token is immutable, so this could only ever be added before D5.
 
@@ -34,8 +34,8 @@ describe("SatoriToken — per-lever renouncement", function () {
   const someContract = () => token.getAddress();
 
   describe("nothing is frozen at deploy", function () {
-    it("all five levers start live and all five views say so", async function () {
-      for (const f of ["controllerFrozen", "hookFrozen", "bridgeAuthorityFrozen", "devFeeBpsFrozen", "airdropFrozen"]) {
+    it("every lever starts live and every view says so", async function () {
+      for (const f of ["controllerFrozen", "hookFrozen", "bridgeAuthorityFrozen", "devFeeBpsFrozen"]) {
         expect(await token[f](), f).to.equal(false);
       }
       for (const f of ["controllerLocked", "hookLocked", "bridgeAuthorityLocked", "devFeeBpsLocked", "airdropLocked"]) {
@@ -48,8 +48,7 @@ describe("SatoriToken — per-lever renouncement", function () {
     it("refuses to freeze an UNSET controller (that would brick minting forever)", async function () {
       // The same guard renounceGovernor carries, for the same reason: with no
       // controller, rewardMint / setLock / markParticipated are all unreachable,
-      // and freezing would make that permanent. (freezeAirdrop carries the same
-      // guard for the airdrop slot — test/SatoriAirdrop.test.js.)
+      // and freezing would make that permanent.
       await expect(token.connect(governor).freezeController())
         .to.be.revertedWithCustomError(token, "ControllerNotSet");
     });
@@ -80,7 +79,8 @@ describe("SatoriToken — per-lever renouncement", function () {
       // freezing rests on it.
       await token.connect(governor).setController(controller.address);
       await token.connect(governor).freezeController();
-      // Minting through the frozen controller still works normally.
+      // Reporting and minting through the frozen controller still work normally.
+      await expect(token.connect(controller).accrueRewards(1n)).to.not.be.reverted;
       await expect(token.connect(controller).rewardMint(stranger.address, 1n))
         .to.not.be.reverted;
     });

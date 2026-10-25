@@ -63,8 +63,7 @@ const {
   VOTE,
   voteFor,
   voteRatio,
-  warmUpLoyalty,
-} = require("../fixtures");
+  } = require("../fixtures");
 const {
   TEST_MARKETING_FEE_RECIPIENT,
   deployMerkleProxied,
@@ -353,10 +352,7 @@ describe("SEAM 3: delegation split pays TWO independent 5% skims under the dial 
     await advanceRound();
 
     await satori.connect(delegator).delegatePredictionPower(delegate.address);
-    // Delegator weight is capital x loyalty and a fresh delegation starts at
-    // L = 0, so the delegator's pull-share -- and therefore the second of the
-    // two skims this seam is about -- is zero without a warm-up.
-    await warmUpLoyalty(satori, registry, null, delegate, [delegator], voter, s);
+    await time.increase(86400);
     await rewards.connect(delegator).setReferral(delRef.address);
     await rewards.connect(delegate).setReferral(dgtRef.address);
 

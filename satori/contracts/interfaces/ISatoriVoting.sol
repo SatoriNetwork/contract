@@ -49,8 +49,8 @@ interface ISatoriVoting {
 
     /// @notice Has the admin APPROVED `gameId`? Born false; the default game
     ///         is live without it (see `gameLive` = approved-or-default). An
-    ///         unapproved game cannot be
-    ///         voted on, has no predictions recorded, and cannot be scored.
+    ///         unapproved game cannot be voted on and earns no emission.
+    ///         Predictions, bounties and scoring do not check it.
     function gameApproved(uint32 gameId) external view returns (bool);
     function gameLive(uint32 gameId) external view returns (bool);
 

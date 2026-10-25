@@ -60,6 +60,13 @@ interface ISatoriBounties {
     function snapshotAdapterStake(address user, uint32 gameId, uint256 round)
         external returns (uint256 stake);
 
+    /// @notice A boosted binary prediction finalized WITHOUT a win (loss, void,
+    ///         unrecoverable, displaced). Its share of each boosted token's pot
+    ///         goes back to the pool now instead of waiting for the history ring
+    ///         to roll past the round. Engine only; call before the finalize
+    ///         notification clears the user's boosted set.
+    function releaseForfeit(address user, uint32 gameId, uint32 round) external;
+
     /// @notice Adapter score-time bounty credit (score/total, single token).
     ///         Pays pot(T) × (userScore × stake) / bountyTotal; first scorer pins
     ///         `bountyTotal`; running paid capped ⇒ Σ ≤ one pot.

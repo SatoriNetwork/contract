@@ -107,7 +107,7 @@ function buildTools(world) {
       schema: { type: "object", properties: { streamId: { type: "number" }, targetMinutes: { type: "number" } }, required: ["streamId", "targetMinutes"] },
       run: async ({ streamId, targetMinutes }) => {
         // Raw hub: the game is born UNAPPROVED like any attacker game.
-        const tx = await hub.connect(attacker)["createGame(uint32,uint16,bytes,string,uint24)"](streamId, 0, "0x", "atk", targetMinutes);
+        const tx = await hub.connect(attacker)["createGame(uint32,uint32,bytes,string,uint24)"](streamId, 0, "0x", "atk", targetMinutes);
         await tx.wait();
         return { gameCount: (await games.gameCount()).toString(), approved: false };
       },

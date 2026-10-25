@@ -1,5 +1,4 @@
 import { StreamValueDisplay } from './streamAdapterUI';
-import { DEFAULT_STREAM_ID } from './defaultStreamSeries';
 
 // A plain-language "what is this stream?" line for the stream-name tooltip.
 // There is no on-chain description field, so this is derived client-side, in
@@ -38,14 +37,6 @@ export function describeStream(
   stream: DescribableStream,
   valueDisplay: StreamValueDisplay | null,
 ): string {
-  if (stream.id === DEFAULT_STREAM_ID) {
-    return 'The protocol’s own participation stream. Its value is the share of all '
-      + 'circulating SATORI that was committed to predicting in the previous round — the '
-      + 'combined balance of everyone who predicted, divided by total supply. It tracks how '
-      + 'much of the network is showing up, weighted by stake, not how many predictions were '
-      + 'made. Predicting UP means you expect that participation to rise.';
-  }
-
   // Before the label branch: the named adapter's descriptor does carry a label
   // ("Net prediction flow"), and the generic copy would call it a data feed.
   if (stream.isNamed) {

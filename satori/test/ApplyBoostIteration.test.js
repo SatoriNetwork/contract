@@ -235,8 +235,19 @@ describe("ApplyBoostIteration — PR 8 iteration swap + cap-8 (item W)", functio
     await bounties.connect(funder).fundBounty(stream, await gbp.getAddress(), ethers.parseEther("1000"), ethers.parseEther("10"));
 
     await registry.connect(authority).setValue(stream, 100);
-    await satori.connect(alice).predictMultipleWithPayloads([{ gameId: stream, payload: pack1(UP) }]);
+    const predictTx = await satori.connect(alice).predictMultipleWithPayloads([{ gameId: stream, payload: pack1(UP) }]);
     const round = await satori.getCurrentRound();
+
+    // Each boost is announced with its weighted stake and the lock it set, so the
+    // read model needs no storage reads (G11).
+    for (const t of [usd, eur, gbp]) {
+      const tk = await t.getAddress();
+      await expect(predictTx).to.emit(bounties, "BountyBoosted").withArgs(
+        alice.address, stream, tk, round,
+        await bounties.boostStakeForPrediction(alice.address, stream, round, tk),
+        round + 1n
+      );
+    }
 
     // All three distinct matching tokens are in the round set (count 3),
     // and each is a member.

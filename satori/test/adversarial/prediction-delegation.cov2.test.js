@@ -45,7 +45,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
-const { deploySatoriFixtureNoFee, pack1, VOTE, voteFor, warmUpLoyalty } = require("../fixtures");
+const { deploySatoriFixtureNoFee, pack1, VOTE, voteFor } = require("../fixtures");
 
 const UP = 1;
 // The value-provider cut is gone, so stream creation no longer takes a cut-bps
@@ -135,11 +135,7 @@ describe("prediction-delegation coverage round 2 (med-priority gaps)", function 
     // Both A and B delegate to D.
     await satori.connect(A).delegatePredictionPower(D.address);
     await satori.connect(B).delegatePredictionPower(D.address);
-    // Delegator weight is capital x loyalty and a fresh delegation starts at
-    // L = 0. B has to carry loyalty into the predict round or the whole
-    // delegator share EVAPORATES and the conservation sum below can never
-    // balance. A is warmed too, then leaves -- which is the point of the test.
-    await warmUpLoyalty(satori, registry, null, D, [A, B], owner, sid);
+    await time.increase(86400);
 
     // Roll a round so both delegations activate into the rate pool.
     await advanceRound();
@@ -160,9 +156,8 @@ describe("prediction-delegation coverage round 2 (med-priority gaps)", function 
     expect(stake).to.equal(ethers.parseEther("20"));
 
     const R = await satori.getCurrentRound();
-    // Marketing bucket DELTA from HERE: the loyalty warm-up is itself a scored
-    // round that skims into the same bucket, and the predictor's skim is
-    // credited eagerly at settle -- so this must precede the predict.
+    // Marketing bucket DELTA from HERE: the predictor's skim is credited eagerly
+    // at settle, so this must precede the predict.
     const mktStart = await rewards.unclaimedRewards(await rewards.marketingFeeRecipient());
     await satori.connect(D).predictMultipleWithPayloads([{ gameId: sid, payload: pack1(UP) }]);
 
@@ -259,9 +254,7 @@ describe("prediction-delegation coverage round 2 (med-priority gaps)", function 
     await voteFor(satori, voter, sid);
 
     await satori.connect(A).delegatePredictionPower(D.address);
-    // A must carry loyalty into the winning round, or the round pays nothing
-    // and the cap-resume walk has no credit to resume collecting.
-    await warmUpLoyalty(satori, registry, null, D, [A], owner, sid);
+    await time.increase(86400);
 
     // LAPSE A for well over the per-call cap BEFORE the winning prediction, so
     // the winning round lands beyond the first capped walk. These leading rounds

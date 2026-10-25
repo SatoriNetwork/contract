@@ -147,6 +147,10 @@ contract MockUniswapV3Pool {
 
     function setFee(uint24 newFee) external { _feeTier = newFee; }
 
+    address public token0 = address(0xA0);
+    address public token1 = address(0xA1);
+    function setTokens(address t0, address t1) external { token0 = t0; token1 = t1; }
+
     function setOldestObservation(uint32 timestamp, bool initialized) external {
         _oldestTimestamp = timestamp;
         _oldestInitialized = initialized;
@@ -195,5 +199,13 @@ contract MockUniswapV3Pool {
         // oldest, so this is sufficient.
         index; // silence unused-parameter warning
         return (_oldestTimestamp, 0, 0, _oldestInitialized);
+    }
+}
+
+// Mock Uniswap V3 factory: records the pools it "created".
+contract MockUniswapV3Factory {
+    mapping(address => mapping(address => mapping(uint24 => address))) public getPool;
+    function setPool(address t0, address t1, uint24 fee, address pool) external {
+        getPool[t0][t1][fee] = pool;
     }
 }

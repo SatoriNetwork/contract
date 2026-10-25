@@ -33,6 +33,8 @@ const SPLITTER_ABI = [
   'function revokeRotation(address parent, address newPayee)',
   'function rotateAt(address parent, address newPayee)',
   'function transferAuthority(address newAuthority)',
+  'function acceptAuthority()',
+  'function pendingAuthority() view returns (address)',
   'function renounceAuthority()',
   'function slotOf(address addr) view returns (uint256)',
   'function isRecipient(address addr) view returns (bool)',
@@ -73,11 +75,15 @@ export interface SplitterNode {
   /// Holder of the unilateral rotation right. ZeroAddress means renounced, and
   /// that door is closed permanently.
   authority: string;
+  /// The address the authority has offered the role to; it takes effect when that
+  /// address accepts. ZeroAddress when there is no offer.
+  pendingAuthority: string;
   /// Share of `totalShares` that must approve before anyone may rotate this
   /// splitter's slot in its parent without the authority.
   rotationThresholdBps: bigint;
   totalShares: bigint;
   iAmAuthority: boolean;
+  iAmPendingAuthority: boolean;
   /// My slot on THIS node, if I hold one. Needed to read my own approval.
   mySlotId: number | null;
 }
@@ -131,6 +137,7 @@ export function useDevFee(): DevFeeState & {
   revokeRotation: (n: SplitterNode, newPayee: string) => Promise<void>;
   rotateAt: (n: SplitterNode, newPayee: string) => Promise<void>;
   transferAuthority: (n: SplitterNode, to: string) => Promise<void>;
+  acceptAuthority: (n: SplitterNode) => Promise<void>;
   renounceAuthority: (n: SplitterNode) => Promise<void>;
 } {
   const { contracts } = useContracts();
@@ -197,8 +204,9 @@ export function useDevFee(): DevFeeState & {
         parent: string | null, parentSlotId: number | null,
       ): Promise<SplitterNode> => {
         const c = at(addr);
-        const [auth, thr, tot, mySlotPlus] = await Promise.all([
+        const [auth, pending, thr, tot, mySlotPlus] = await Promise.all([
           c.authority(),
+          c.pendingAuthority().catch(() => ethers.ZeroAddress),
           c.rotationThresholdBps(),
           c.totalShares(),
           c.slotOf(address).then((v: bigint) => Number(v), () => -1),
@@ -206,9 +214,11 @@ export function useDevFee(): DevFeeState & {
         return {
           address: addr, label, parent, parentSlotId,
           authority: auth,
+          pendingAuthority: pending,
           rotationThresholdBps: BigInt(thr),
           totalShares: BigInt(tot),
           iAmAuthority: auth.toLowerCase() === me,
+          iAmPendingAuthority: pending.toLowerCase() === me,
           mySlotId: mySlotPlus >= 0 ? mySlotPlus : null,
         };
       };
@@ -275,7 +285,7 @@ export function useDevFee(): DevFeeState & {
 
       setState({
         loading: false, root, isPayee: mine.length > 0, mine, upstream,
-        nodes, isAuthority: nodes.some((n) => n.iAmAuthority), error: null,
+        nodes, isAuthority: nodes.some((n) => n.iAmAuthority || n.iAmPendingAuthority), error: null,
         forAddress: me,
       });
     } catch (e: any) {
@@ -421,7 +431,15 @@ export function useDevFee(): DevFeeState & {
     await load();
   }, [contracts, wr, load]);
 
-  /// Hand the unilateral rotation right to another address.
+  /// Take the rotation right the authority offered to this address.
+  const acceptAuthority = useCallback(async (n: SplitterNode) => {
+    if (!contracts) return;
+    await (await wr(n.address).acceptAuthority()).wait();
+    await load();
+  }, [contracts, wr, load]);
+
+  /// Offer the unilateral rotation right to another address; it moves when that
+  /// address accepts.
   const transferAuthority = useCallback(async (n: SplitterNode, to: string) => {
     if (!contracts) return;
     const t = to.trim();
@@ -441,6 +459,6 @@ export function useDevFee(): DevFeeState & {
   return {
     ...state, refresh: load, claim, pull, rotate, setGate,
     readProposal, approveRotation, revokeRotation, rotateAt,
-    transferAuthority, renounceAuthority,
+    transferAuthority, acceptAuthority, renounceAuthority,
   };
 }

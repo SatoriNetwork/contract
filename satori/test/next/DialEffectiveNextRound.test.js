@@ -75,8 +75,8 @@ describe("Dial takes effect NEXT round (dial/merkle sync)", function () {
     // sid is the only game predicted in R, so it owns R's whole denominator and
     // alice — R's only predictor — takes R's entire payable budget.
 
-    // R+1, the VERY NEXT round: the dial (432) must be in effect here, so this
-    // round's gross is 720. bob is R+1's only predictor and sid2 is R+1's only
+    // R+1, the VERY NEXT round: the dial must be in effect here, so this
+    // round's gross is `grossAfter`. bob is R+1's only predictor and sid2 is R+1's only
     // predicted game, so bob takes R+1's entire payable budget. Predicting in the
     // immediately-following round is what makes this an off-by-one detector: a
     // dial that applied a round late would pay bob the FULL residual.
@@ -111,24 +111,59 @@ describe("Dial takes effect NEXT round (dial/merkle sync)", function () {
     // rate for R while on-chain used the old dial → onChain + merkle > residual for R.
     await rewards.connect(owner).setOffchainBudget(E(200)); // round R
     expect(await hub.merkleReserveCeiling()).to.equal(0n);   // R: still the old dial (0)
+    await hub.syncEmission();                                // a later bank in R adds nothing for R
+    expect(await hub.merkleReserveCumulative()).to.equal(0n);
+    expect(await hub.merkleReserveCeiling()).to.equal(0n);
 
-    await advanceRound();                                    // R+1: the dial (200) is now in effect
-    expect(await hub.merkleReserveCeiling()).to.equal(0n);   // R+1 not yet complete → nothing banked yet
-
-    await advanceRound();                                    // R+2: exactly one round (R+1) of 200 banked
+    await advanceRound();                                    // R+1: reserved from the round's start
     expect(await hub.merkleReserveCeiling()).to.equal(E(200));
+
+    await advanceRound();                                    // R+2: R+1 and R+2, never R
+    expect(await hub.merkleReserveCeiling()).to.equal(E(400));
   });
 
-  it("conservation holds across a dial change: merkleReserveCeiling + onChainRewardCeiling == the general cap", async function () {
-    await rewards.connect(owner).setOffchainBudget(E(200));
-    await advanceRound();
-    await advanceRound();
-    // The general cap is 85% of the HUB's emission ceiling. This used to be
-    // stated as `rewardCeiling() - devFeeCeiling()` — the token's 1440 envelope
-    // less the fee's realized accrual — which was right only while emission was
-    // flat AND the fee accrued on the clock. Neither holds now.
-    const generalCap = ((await hub.emissionCeiling()) * (10000n - (await satori.devFeeBps()))) / 10000n;
-    expect((await hub.merkleReserveCeiling()) + (await lens.onChainRewardCeiling())).to.equal(generalCap);
+  it("conservation holds across a dial change: each round's on-chain gross plus its reserve is the round's residual", async function () {
+    const residual = (await hub.emissionRateNow()) - (await hub.devRateNow());
+    const dial = E(200);
+    const sid = await streamIdFrom(await satori[SIMPLE3]("S", owner.address, 1440), satori);
+    // No credit is reported in this test: the general grows by exactly the
+    // reserve banked, so the on-chain lane's ceiling must not move.
+    const general0 = await token.generalAccrued();
+    const onChain0 = await lens.onChainRewardCeiling();
+    const onlyReserveReported = async (label) => {
+      const reserve = await hub.merkleReserveCumulative();
+      const general = await token.generalAccrued();
+      expect(general, label).to.equal(general0 + reserve);
+      expect(general - reserve, label).to.be.lte(await hub.onChainAllowance());
+    };
+
+    // R: the change freezes R (and any untouched round before it) at the OLD dial.
+    const priced0 = await hub.onChainPricedRound();
+    const allowance0 = await hub.onChainAllowance();
+    const R = await token.getCurrentRound();
+    expect(priced0).to.be.lt(R);
+    await rewards.connect(owner).setOffchainBudget(dial);
+    expect(await hub.onChainPricedRound()).to.equal(R);
+    expect((await hub.onChainAllowance()) - allowance0).to.equal(residual * (R - priced0));
+    expect(await hub.merkleReserveCumulative()).to.equal(0n);
+    await onlyReserveReported("R");
+
+    // R+1 and R+2: each first touch (a stream value write) prices the round at
+    // the NEW dial and banks the same dial as reserve.
+    for (let i = 1n; i <= 2n; i++) {
+      await advanceRound();
+      const a = await hub.onChainAllowance();
+      const c = await hub.merkleReserveCumulative();
+      await registry.setValue(sid, 100n + i);
+      expect(await hub.onChainPricedRound()).to.equal(R + i);
+      const gross = (await hub.onChainAllowance()) - a;
+      const reserve = (await hub.merkleReserveCumulative()) - c;
+      expect(gross, `R+${i} gross`).to.equal(residual - dial);
+      expect(reserve, `R+${i} reserve`).to.equal(dial);
+      expect(gross + reserve, `R+${i}`).to.equal(residual);
+      await onlyReserveReported(`R+${i}`);
+    }
+    expect(await lens.onChainRewardCeiling()).to.equal(onChain0);
   });
 
   it("with a lower rate pending for R+1, both dial bounds check R+1's residual", async function () {

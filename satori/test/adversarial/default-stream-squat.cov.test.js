@@ -63,9 +63,17 @@ describe("default-stream squat: init must pin DEFAULT_STREAM_ID==1 or revert", f
       .to.be.revertedWithCustomError(satori, "DefaultStreamNotFirst");
   });
 
+  it("init refuses to run before the Coined adapter is wired (DefaultStreamNotFirst) and nothing is created", async function () {
+    const { satori, registry } = await deploySatoriFixtureOpts(2000, { skipNamedAdapter: true });
+    expect(await registry.namedAdapterId()).to.equal(0);
+    await expect(satori.initializeDefaultStream())
+      .to.be.revertedWithCustomError(satori, "DefaultStreamNotFirst");
+    expect(await registry.streamExists(1)).to.equal(false);
+  });
+
   it("init-first (the deploy order): default stream is pinned to id 1, owned by the core", async function () {
     const { satori, registry } = await deployStackNoInit(platform);
-    const coreAddr = await satori.getAddress();
+    const engine = await ethers.getContractAt("SatoriEngine", await satori.engine());
 
     // init BEFORE any other stream — the deploy.js order. Succeeds.
     await satori.initializeDefaultStream();
@@ -73,10 +81,12 @@ describe("default-stream squat: init must pin DEFAULT_STREAM_ID==1 or revert", f
     const defId = await satori.DEFAULT_STREAM_ID();
     expect(Number(defId)).to.equal(1);
 
-    // The stream at DEFAULT_STREAM_ID is the protocol's own: authority == core.
-    // (There is no value-provider cut any more — providers are not paid.)
-    const [, providerAtDefault] = await registry.getDataStreamInfo(defId);
-    expect(providerAtDefault).to.equal(coreAddr);
+    // The stream at DEFAULT_STREAM_ID is the protocol's own: the Sentiment stream
+    // "satori", provided by the engine.
+    const info = await registry.getDataStreamInfo(defId);
+    expect(info[0]).to.equal("satori");
+    expect(info[1]).to.equal(await engine.getAddress());
+    expect(await registry.isNamedStream(defId)).to.equal(true);
 
     // init is one-shot.
     await expect(satori.initializeDefaultStream())

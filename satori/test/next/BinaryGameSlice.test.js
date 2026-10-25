@@ -1,10 +1,9 @@
 // A binary game-round credits at most its slice P (sweep item B4).
 //
 // The engine scores each prediction on the values after its own hour, so on a
-// game other than the default an UP at 01:00 and a DOWN at 13:00 can both be
-// right. Such a game divides by both sides' committed weight; the default game,
-// whose predictors of a round all read one pair of values, keeps dividing by
-// its own side.
+// game other than a Sentiment game an UP at 01:00 and a DOWN at 13:00 can both be
+// right. Such a game divides by both sides' committed weight. (The default game
+// is a Sentiment game and pays pari-mutuel: see CoinedDefaultFlow.test.js.)
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
@@ -81,7 +80,7 @@ async function slice(rewards, voting, gid, R) {
   return (budget * (await voting.getGameVotesAtRound(gid, R))) / (await voting.roundDenominator(R));
 }
 
-const grossUp = (x, bps) => (x * 10000n) / (10000n - bps);
+const grossUp = (x, bps) => (x * 10000n + (10000n - bps) - 1n) / (10000n - bps);
 
 describe("Binary game slice: no game-round credits more than its slice (B4)", function () {
   this.timeout(300000);
@@ -182,36 +181,5 @@ describe("Binary game slice: no game-round credits more than its slice (B4)", fu
     await expect(hub.connect(bob).claim()).to.not.be.reverted;
     expect(await token.balanceOf(alice.address)).to.be.gte(E(60) + ua);
     expect(await token.balanceOf(bob.address)).to.be.gte(E(60) + ub);
-  });
-
-  it("the default game still pays its winners the whole slice when a loser is present", async function () {
-    const fix = await deploySplitFixture();
-    const { token, engine, rewards, voting, owner, signers } = fix;
-    const [alice, bob, carol, whale] = signers.slice(1, 5);
-    for (const u of [alice, bob, carol]) await (await token.connect(owner).transfer(u.address, E(60))).wait();
-    await (await token.connect(owner).transfer(whale.address, E(400))).wait();
-
-    // Round R: two UP, one DOWN. Round R+1: the whale also predicts, so more
-    // capital is deployed than in R and the default stream rises (UP wins).
-    const R = BigInt(Math.floor((await time.latest()) / DAY) + 1);
-    await time.increaseTo(Number(R) * DAY + 5 * HOUR);
-    await predict(engine, alice, 1, UP);
-    await predict(engine, bob, 1, UP);
-    await predict(engine, carol, 1, DOWN);
-    await time.increaseTo(Number(R + 1n) * DAY + 5 * HOUR);
-    await predict(engine, whale, 1, UP);
-    await time.increaseTo(Number(R + 2n) * DAY + 5 * HOUR);
-    await engine.flushDefaultStream();
-
-    const a = await settle(engine, rewards, alice, 1);
-    const b = await settle(engine, rewards, bob, 1);
-    const c = await settle(engine, rewards, carol, 1);
-    expect(a.scored).to.deep.equal([{ round: R, correct: true }]);
-    expect(b.scored).to.deep.equal([{ round: R, correct: true }]);
-    expect(c.scored).to.deep.equal([{ round: R, correct: false }]);
-    const P = await slice(rewards, voting, 1, R);
-    expect(P).to.be.gt(0n);
-    expect(a.credit + b.credit).to.be.lte(P);
-    expect(a.credit + b.credit).to.be.gte(P - 2n);
   });
 });

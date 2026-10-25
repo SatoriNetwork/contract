@@ -15,7 +15,8 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 ///         The kernels below are byte-for-byte mirrors of:
 ///           - SatoriRewards.scoreAdapterPrediction        (SATORI slice)
 ///           - SatoriBounties.creditAdapterBounty / _accrueAdapterBounty (BOUNTY slice)
-///           - Satori.rewardMint                            (mint-cap guard)
+///           - SatoriToken.accrueRewards                    (envelope guard, fee per report)
+///           - SatoriToken.rewardMint                       (pays only what was reported)
 ///         If the contract math changes, these mirrors must be re-synced (the JS
 ///         unit tests fuzz the live contract; these tests fix the math kernel).
 contract ConservationArithmeticHalmos is Test {
@@ -227,22 +228,24 @@ contract ConservationArithmeticHalmos is Test {
     // non-SATORI posting burn (Satori.chargeBountyBurn), a plain SATORI transfer.
 
     // ============================================================
-    // KERNEL 3 — mint-cap guard (Satori.rewardMint)
+    // KERNEL 3 — envelope guard (SatoriToken.accrueRewards)
     //
-    //   if (totalRewardsMinted + amount > ROUND_REWARD_BUDGET * roundsElapsed)
-    //       revert BudgetExceeded();
-    //   totalRewardsMinted += amount;
+    //   if (generalAccrued + general + devFeeAccrued + fee
+    //           > ROUND_REWARD_BUDGET * roundsElapsed) revert BudgetExceeded();
+    //
+    // Modelled as one running total (general + fee) and one increment
+    // (general + fee): the shape is the old mint-time guard's, moved to the
+    // report (M03). `rewardMint` has no envelope check of its own — what it
+    // pays is bounded by what passed here (kernel 4 below).
     // ============================================================
 
-    uint256 internal constant ROUND_REWARD_BUDGET = 720 ether;
+    uint256 internal constant ROUND_REWARD_BUDGET = 1440 ether;
 
-    /// @dev The exact guard. Returns the post-mint total, or reverts (returns
-    ///      the input unchanged via the `passes` flag) if the cap would be
-    ///      exceeded. Modeled to match the contract's checked arithmetic: the
-    ///      `+ amount` itself is checked (Solidity 0.8), so an overflowing sum
-    ///      reverts too. We expose `passes` so the proof can reason about both
-    ///      branches.
-    function _rewardMintGuard(uint256 totalMinted, uint256 amount, uint256 roundsElapsed)
+    /// @dev The envelope guard on the accrued total (general + fee). Returns the
+    ///      post-report total, or the input unchanged via `passes = false` if
+    ///      the envelope would be exceeded. Modeled on the contract's checked
+    ///      arithmetic: an overflowing sum reverts too.
+    function _accrueGuard(uint256 totalMinted, uint256 amount, uint256 roundsElapsed)
         internal pure returns (bool passes, uint256 newTotal)
     {
         uint256 cap = ROUND_REWARD_BUDGET * roundsElapsed;   // checked mul
@@ -257,21 +260,20 @@ contract ConservationArithmeticHalmos is Test {
         }
     }
 
-    /// PROOF: WHENEVER rewardMint succeeds, the resulting totalRewardsMinted is
-    /// provably <= ROUND_REWARD_BUDGET * roundsElapsed. The cap can never be
-    /// breached by a successful mint, for ALL symbolic (totalMinted, amount,
-    /// roundsElapsed). This is the defense-in-depth that catches any over-issue
-    /// bug in SatoriRewards.
+    /// PROOF: WHENEVER accrueRewards succeeds, the accrued total (general + fee)
+    /// is provably <= ROUND_REWARD_BUDGET * roundsElapsed, for ALL symbolic
+    /// (total, increment, roundsElapsed). With kernel 4's mint guard, minted
+    /// <= accrued, so reward minting inherits the same bound.
     function check_mintCapNeverExceeded(
         uint256 totalMinted,
         uint256 amount,
         uint256 roundsElapsed
     ) public pure {
-        // Bound roundsElapsed so the cap multiply (720e18 * rounds) stays well
+        // Bound roundsElapsed so the cap multiply (1440e18 * rounds) stays well
         // below 2^256 — the protocol mints once per ~daily round, so even a
         // millennium is < 4e5 rounds. 1e12 rounds is astronomically generous.
         vm.assume(roundsElapsed <= 1e12);
-        (bool passes, uint256 newTotal) = _rewardMintGuard(totalMinted, amount, roundsElapsed);
+        (bool passes, uint256 newTotal) = _accrueGuard(totalMinted, amount, roundsElapsed);
         if (passes) {
             assert(newTotal <= ROUND_REWARD_BUDGET * roundsElapsed);
             assert(newTotal == totalMinted + amount);   // the mint accounted exactly `amount`
@@ -291,7 +293,71 @@ contract ConservationArithmeticHalmos is Test {
         vm.assume(totalMinted <= cap);
         vm.assume(amount <= type(uint256).max - totalMinted); // no add-overflow: isolate the cap branch
         vm.assume(totalMinted + amount > cap);                // overshoot
-        (bool passes, ) = _rewardMintGuard(totalMinted, amount, roundsElapsed);
+        (bool passes, ) = _accrueGuard(totalMinted, amount, roundsElapsed);
         assert(!passes);                                      // must be rejected
+    }
+
+    // ============================================================
+    // KERNEL 4 — the fee booked per report (SatoriToken.accrueRewards)
+    //
+    //   fee = (general * bps + (10000 - bps) - 1) / (10000 - bps)
+    //
+    // i.e. ceil(general * bps / (10000 - bps)): the dev's share of the gross
+    // (general + fee) is never SHORT of bps, and over by less than one wei.
+    // ============================================================
+
+    function _feeOn(uint256 general, uint256 bps) internal pure returns (uint256) {
+        uint256 residual = 10000 - bps;
+        return (general * bps + residual - 1) / residual;
+    }
+
+    /// PROOF: for every general amount and every rate in the band, the booked
+    /// fee is at least the exact share and less than one wei over it.
+    /// @dev Times out in Halmos (180 s); DevFeeRounding.fuzz.t.sol covers it on the real token.
+    function check_feeNeverShortAndUnderAWeiOver(uint256 general, uint256 bps) public pure {
+        vm.assume(bps >= 500 && bps <= 2500);
+        vm.assume(general <= 1e40);                           // no mul overflow; far above any supply
+        uint256 residual = 10000 - bps;
+        uint256 fee = _feeOn(general, bps);
+        assert(fee * residual >= general * bps);              // never short
+        assert(fee * residual < general * bps + residual);    // under a wei over
+    }
+
+    /// PROOF: splitting a report cannot lower the fee — two reports book at
+    /// least what one report of their sum books.
+    /// @dev Times out in Halmos (180 s); DevFeeRounding.fuzz.t.sol covers it on the real token.
+    function check_splittingNeverLowersFee(uint256 a, uint256 b, uint256 bps) public pure {
+        vm.assume(bps >= 500 && bps <= 2500);
+        vm.assume(a <= 1e40 && b <= 1e40);
+        assert(_feeOn(a, bps) + _feeOn(b, bps) >= _feeOn(a + b, bps));
+    }
+
+    /// @dev Mirror of SatoriToken.rewardMint:
+    ///      `uint256 minted = generalMinted + amount; if (minted > generalAccrued) revert NotAccrued();`
+    ///      An overflowing add reverts (Solidity 0.8), modeled as not passing.
+    function _tokenRewardMint(uint256 accrued, uint256 minted, uint256 amount)
+        internal pure returns (bool ok, uint256 newMinted)
+    {
+        unchecked {
+            uint256 m = minted + amount;
+            if (m < minted) return (false, minted);           // overflow -> revert
+            if (m > accrued) return (false, minted);           // NotAccrued
+            return (true, m);
+        }
+    }
+
+    /// PROOF: from any state with minted <= accrued, a successful mint moves
+    /// minted by exactly `amount` and keeps it <= accrued, and a refused one
+    /// was a mint past what was reported (or an overflow). So nothing mints
+    /// that was not reported first.
+    function check_mintNeverExceedsReported(uint256 accrued, uint256 minted, uint256 amount) public pure {
+        vm.assume(minted <= accrued);
+        (bool ok, uint256 newMinted) = _tokenRewardMint(accrued, minted, amount);
+        if (ok) {
+            assert(newMinted == minted + amount);
+            assert(newMinted <= accrued);
+        } else {
+            assert(amount > accrued - minted);
+        }
     }
 }

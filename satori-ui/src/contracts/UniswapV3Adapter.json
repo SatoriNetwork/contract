@@ -2,6 +2,17 @@
   "contractName": "UniswapV3Adapter",
   "abi": [
     {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "factory_",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "nonpayable",
+      "type": "constructor"
+    },
+    {
       "inputs": [],
       "name": "BadFeeTier",
       "type": "error"
@@ -29,6 +40,11 @@
     },
     {
       "inputs": [],
+      "name": "NotFactoryPool",
+      "type": "error"
+    },
+    {
+      "inputs": [],
       "name": "PoolNotReady",
       "type": "error"
     },
@@ -50,6 +66,19 @@
           "internalType": "uint32",
           "name": "",
           "type": "uint32"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "FACTORY",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
         }
       ],
       "stateMutability": "view",

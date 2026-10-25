@@ -22,7 +22,6 @@ const EXCLUDE = [
   /^mocks\//,
   /^interfaces\//,
   /^next\/interfaces\//,
-  /^next\/MockTransferHook\.sol$/,
 ];
 
 const isProduction = (source) => {

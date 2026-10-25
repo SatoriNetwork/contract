@@ -4,7 +4,7 @@ export const NAMED_STREAM_CADENCE = 60;
 /// `registry.namedAdapterId()` is 0 until the deploy wires the adapter. Checked
 /// before anything the user has to sign, so an unwired chain fails fast.
 export function requireNamedAdapterId(id: number): number {
-  if (!id) throw new Error('Named streams are not enabled on this chain.');
+  if (!id) throw new Error('Sentiment streams are not enabled on this chain.');
   return id;
 }
 
@@ -22,4 +22,4 @@ export function namedStreamCreateArgs(namedAdapterId: number, engine: string) {
 
 /// SatoriBounties.fundBounty reverts NamedGame on any game of a named stream.
 export const NAMED_NO_BOUNTY =
-  'Named games take no bounties: a bounty pays every right call, and on a named game the crowd\'s own flow decides what is right.';
+  'Sentiment games take no bounties: a bounty pays every right call, and on a Sentiment game the crowd\'s own flow decides what is right.';

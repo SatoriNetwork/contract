@@ -369,4 +369,50 @@ describe("Upgrade liveness: a proxy that can be upgraded once can always be upgr
   });
 });
 
+// ------------------------------------------------------------------
+// D. THE NEW CODE MUST STILL FIND THE UPGRADE AUTHORITY (sweep G05).
+// ------------------------------------------------------------------
+describe("Upgrade liveness: upgradeTo runs the candidate against the proxy's storage", function () {
+  this.timeout(300000);
+
+  it("D1: every proxy reports its own upgradeGovernor() as the token's root authority", async function () {
+    const f = await loadFixture(fix);
+    for (const [name, key] of ALL) {
+      expect(await f[key].upgradeGovernor(), `${name}.upgradeGovernor()`).to.equal(f.owner.address);
+    }
+  });
+
+  it("D2: a candidate whose code finds a different upgrade authority is refused and leaves no trace", async function () {
+    // This is the moved-token-pointer failure in miniature: the new code
+    // resolves the authority to the wrong address (a moved pointer reads zero or
+    // junk), so upgradeTo and renounceUpgrade would revert for the real
+    // governor for good. The mock bakes in the wrong answer; the check must
+    // catch it from the live proxy, and the revert must undo the slot write.
+    const f = await loadFixture(fix);
+    for (const [name, key, mock] of [
+      ["SatoriVoting", "voting", "RevertingVotingImpl"],
+      ["SatoriRewards", "rewards", "RevertingRewardsImpl"],
+    ]) {
+      const before = await f[key].implementation();
+      const wrong = await (await ethers.getContractFactory(mock)).deploy(f.signers[9].address);
+      await wrong.waitForDeployment();
+      await expect(f[key].connect(f.owner).upgradeTo(await wrong.getAddress()), name)
+        .to.be.revertedWithCustomError(f[key], "UpgradeBadImplementation");
+      await expect(f[key].connect(f.owner).upgradeTo(
+        await (await (await ethers.getContractFactory(mock)).deploy(ethers.ZeroAddress)).getAddress()), `${name} zero`)
+        .to.be.revertedWithCustomError(f[key], "UpgradeBadImplementation");
+      expect(await f[key].implementation(), `${name} impl moved`).to.equal(before);
+      await assertUpgradePathAlive(f, name, key);
+    }
+  });
+
+  it("D3: a candidate that names the real governor installs", async function () {
+    const f = await loadFixture(fix);
+    const ok = await (await ethers.getContractFactory("RevertingVotingImpl")).deploy(f.owner.address);
+    await ok.waitForDeployment();
+    await (await f.voting.connect(f.owner).upgradeTo(await ok.getAddress())).wait();
+    expect(await f.voting.implementation()).to.equal(await ok.getAddress());
+  });
+});
+
 module.exports = { assertUpgradePathAlive, ALL, ctorArgs, freshImpl };

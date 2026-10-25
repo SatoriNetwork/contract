@@ -7,7 +7,6 @@ import { isProfane } from '../utils/profanity';
 import { payoutForStream, payableBudget } from '../lib/roundPayout';
 import { getCurrentRound, getNamedAdapterId } from '../lib/chainValues';
 import { earningGames } from '../lib/round';
-import { DEFAULT_STREAM_ID, DEFAULT_STREAM_DISPLAY_NAME } from '../lib/defaultStreamSeries';
 import { indexerStreams, indexerRoundBudget, recentlyWrittenStream } from '../utils/indexerClient';
 
 export interface StreamBasic {
@@ -151,12 +150,7 @@ export function useStreamList() {
       }
       return {
         id,
-        // Stream 1 is relabelled at the edge. Its on-chain name is the literal
-        // "Satori Predictions" the hub wrote at bootstrap, which describes
-        // today's participation ratio not at all, and it cannot be changed on
-        // chain (provider-gated setter; the provider is the hub, which has no
-        // passthrough).
-        name: id === DEFAULT_STREAM_ID ? DEFAULT_STREAM_DISPLAY_NAME : name,
+        name,
         provider,
         streamType,
         currentValue: value,
@@ -201,9 +195,8 @@ export function useStreamList() {
     );
 
     // Hide streams with profane names. Client-side only — the streams still
-    // exist on-chain; this is a UX filter, not a moderation policy. The
-    // default stream (id 1) is never filtered.
-    rows = rows.filter((r) => r.id === DEFAULT_STREAM_ID || !isProfane(r.name));
+    // exist on-chain; this is a UX filter, not a moderation policy.
+    rows = rows.filter((r) => !isProfane(r.name));
 
     if (replace) setStreams(rows);
     else setStreams((prev) => [...prev, ...rows]);

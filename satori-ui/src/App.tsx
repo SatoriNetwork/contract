@@ -53,16 +53,10 @@ import './index.css';
 import { getCurrentRound, calibrateRound } from './lib/chainValues';
 import { currentHour } from './lib/round';
 import { predictGate, reopenTime } from './lib/predictGate';
-import { streamValueDisplayFor, DEFAULT_STREAM_ID } from './lib/defaultStreamSeries';
 import { describeStream } from './lib/streamDescription';
 import { afterTx } from './lib/afterTx';
 import { STREAK_THRESHOLD_LABEL, streakThresholdFigures } from './lib/streakThreshold';
 
-// The self-referential default stream is pinned to id 1 on-chain
-// (SatoriHub.DEFAULT_STREAM_ID; SatoriHub.initializeDefaultStream reverts if it isn't first). It's always
-// predictable — predict flushes its value to the current round first.
-// Imported rather than redeclared: its display name and value formatting live
-// in the same module, and they must not drift apart.
 
 type Tab = 'dashboard' | 'leaderboard' | 'streams' | 'bounties' | 'proposals' | 'referral' | 'delegation' | 'history' | 'dev fee' | 'dev fee admin' | 'governor' | 'admin' | 'off-chain';
 
@@ -244,10 +238,7 @@ function App() {
         provider: readProvider,
       });
       if (cancelled) return;
-      // Stream 1 is a Simple stream, so the probe returns null and the chart
-      // would render its 1e18-scaled ratio raw. streamValueDisplayFor supplies
-      // the percentage display.
-      setChartValueDisplay(streamValueDisplayFor(displayStream.id, ui.valueDisplay));
+      setChartValueDisplay(ui.valueDisplay);
       // Share what the probe found, so surfaces that only have a streamId (the
       // dashboard's Recent Predictions) can render the direction the user pressed.
       rememberOrientation(displayStream.id, ui.valueDisplay);
@@ -350,7 +341,6 @@ function App() {
     streamList.streams.find((x) => x.id === streamId),
     dashboard.data?.recentPredictions.find((p) => p.streamId === streamId),
     currentRound != null ? Number(currentRound) : null,
-    currentHour(),
   ), [currentRound, streamList.streams, dashboard.data]);
   const isActiveThisRound = useCallback((streamId: number) => gateFor(streamId).active, [gateFor]);
 
@@ -824,26 +814,6 @@ function App() {
                     valueDisplay={chartValueDisplay}
                     targetMinutes={chartTargetMinutes}
                     description={describeStream(displayStream, chartValueDisplay)}
-                    valueNote={displayStream.id === DEFAULT_STREAM_ID
-                      ? 'What share of all SATORI in circulation was committed to predicting in the '
-                        + 'PREVIOUS round \u2014 the total balance of everyone who predicted, over total '
-                        + 'supply. It measures how much of the protocol showed up, weighted by stake, '
-                        + 'not how many predictions were made: padding a batch with extra predictions '
-                        + 'moves it not at all, and a large holder can only push it up by putting real '
-                        + 'capital at risk. A round\u2019s own share is not final until it ends, so the '
-                        + 'number stamped on round N is round N\u22121\u2019s \u2014 it trails by one round '
-                        + 'by design. Rounds nobody predicted in never get a value at all, which is why '
-                        + 'the labels skip. '
-                        // The scoring rule in words, since a picture cannot
-                        // carry it: the target is a known duration from the
-                        // moment you predict, plus the void rule and the fact
-                        // that this bet counts toward its own anchor.
-                        + 'Your prediction is scored from the value at the moment you predict to the '
-                        + 'first value published at least 24 hours later. Equal readings VOID \u2014 no '
-                        + 'reward, but your streak survives. Note that your own prediction is counted '
-                        + 'inside the reading it is scored against, so predicting UP nudges up the bar '
-                        + 'you then have to beat.'
-                      : undefined}
                   />
                   {streamDetail.loading && (
                     <div className="text-center text-xs text-gray-500">Loading chart data...</div>
@@ -974,7 +944,7 @@ function App() {
                           >
                             {s?.isNamed ? (
                               <>
-                                This stream can&apos;t take a prediction right now, so it&apos;ll be skipped when you submit. Named streams take one call per 24 hours.
+                                This stream can&apos;t take a prediction right now, so it&apos;ll be skipped when you submit. Sentiment streams take one call per round.
                                 {gate.reopenHour != null && <> You can call this one again at {reopenTime(gate.reopenHour, currentHour())}.</>}
                               </>
                             ) : (

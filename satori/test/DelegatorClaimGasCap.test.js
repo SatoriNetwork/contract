@@ -3,8 +3,8 @@
  *
  * `_accrueDelegatorRewards` walks the delegator's rounds and gives the
  * open-round replay its OWN budget of the same size, so one claim can walk 2x
- * the cap. Measured 2026-08-12 with loyalty weighting in place: ~10.1k gas per
- * idle round walked, ~8.6k on a winning round. At the previous cap of 1024 the
+ * the cap. Measured 2026-08-12: ~10.1k gas per idle round walked, ~8.6k on a
+ * winning round. At the previous cap of 1024 the
  * worst case was ~21M against a 30M block -- not a margin.
  *
  * The cap is 512. This test pins the OUTCOME rather than the constant: build a

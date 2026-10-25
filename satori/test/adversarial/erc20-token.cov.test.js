@@ -31,46 +31,69 @@ async function asRewards(satori, rewards) {
   return await ethers.getSigner(addr);
 }
 
+// What the schedule backstop lets Rewards still report: the priced rounds'
+// allowance less the general already reported to the on-chain lane.
+async function allowanceRoom(hub, token) {
+  return (await hub.onChainAllowance())
+    - ((await token.generalAccrued()) - (await hub.merkleReserveCumulative()));
+}
+
+// One round's on-chain gross from the schedule itself (no dial in this
+// fixture): the rate net of the senior dev fee. Recomputed here so the hub's
+// own pricing is checked against it, not against itself.
+async function scheduleGross(hub, token) {
+  const rate = await hub.emissionRateNow();
+  return rate - (rate * (await token.devFeeBps())) / 10000n;
+}
+
 describe("[adversarial-cov] erc20-token", function () {
   // ---------------------------------------------------------------------
   // rewardMint cap (BudgetExceeded) — HIGH
   // ---------------------------------------------------------------------
   describe("rewardMint cumulative cap (BudgetExceeded)", function () {
-    it("reverts BudgetExceeded when minting beyond the general lane's cap, and the boundary is exact", async function () {
-      const { satori, rewards } = await deploySatoriFixture();
+    it("reverts BudgetExceeded when reporting past the priced rounds or minting past the report, and both boundaries are exact", async function () {
+      const { satori, hub, token, rewards } = await deploySatoriFixture();
       const rewardsSigner = await asRewards(satori, rewards);
-
-      // The binding cap here is the HUB's: its emission ceiling net of
-      // the fee's flat 15%. The token's `1440 × rounds` is the outer envelope
-      // and sits well outside it, so it is not what fires.
-      const RATE = await satori.emissionRateNow();
-      const BPS = await satori.devFeeBps();
-      const genCap = (e) => (RATE * e * (10000n - BPS)) / 10000n;
       const initial = await satori.INITIAL_MINT();
       const recipient = (await ethers.getSigners())[5].address;
 
-      // The genesis mint is ONE ROUND of the hub's schedule: its 85% seeds the
-      // general lane and exactly saturates the deploy round's cap. Advance one
-      // round; the new headroom is the second round's share.
+      // Pricing grows the report allowance by one gross per round priced; the
+      // first boundary is at noteIssued, the second at the mint. Nothing prices the
+      // deploy round at bootstrap any more (the default stream is a Sentiment stream
+      // with no seed write), so the first freeze prices it together with this one.
       await time.increase(ROUND);
-      const headroom = genCap(2n) - genCap(1n);
+      const roomBefore = await allowanceRoom(hub, token);
+      const pricedBefore = await hub.onChainPricedRound();
+      await hub.connect(rewardsSigner).freezeRoundGross(await satori.getCurrentRound());
+      const room = await allowanceRoom(hub, token);
+      const newlyPriced = (await hub.onChainPricedRound()) - pricedBefore;
+      expect(newlyPriced).to.equal(2n); // the deploy round and this one
+      expect(room - roomBefore).to.equal(newlyPriced * (await scheduleGross(hub, token)));
+
+      await expect(
+        hub.connect(rewardsSigner).noteIssued(room + 1n)
+      ).to.be.revertedWithCustomError(hub, "BudgetExceeded");
+      await hub.connect(rewardsSigner).noteIssued(room);
 
       const mintedBefore = await satori.totalRewardsMinted();
       expect(mintedBefore).to.equal(initial); // still the genesis bootstrap
 
-      // headroom + 1 must revert (the `>` cap fires)
+      // reported + 1 must revert (the `>` cap fires)
       await expect(
-        satori.connect(rewardsSigner).rewardMint(recipient, headroom + 1n)
+        satori.connect(rewardsSigner).rewardMint(recipient, room + 1n)
       ).to.be.revertedWithCustomError(satori, "BudgetExceeded");
 
-      // exactly headroom must pass (<= cap)
-      await satori.connect(rewardsSigner).rewardMint(recipient, headroom);
-      expect(await satori.totalRewardsMinted()).to.equal(initial + headroom);
+      // exactly the report must pass (<= cap)
+      await satori.connect(rewardsSigner).rewardMint(recipient, room);
+      expect(await satori.totalRewardsMinted()).to.equal(initial + room);
 
-      // Now fully saturated again: even 1 wei more reverts.
+      // Now fully saturated again: even 1 wei more reverts, at either step.
       await expect(
         satori.connect(rewardsSigner).rewardMint(recipient, 1n)
       ).to.be.revertedWithCustomError(satori, "BudgetExceeded");
+      await expect(
+        hub.connect(rewardsSigner).noteIssued(1n)
+      ).to.be.revertedWithCustomError(hub, "BudgetExceeded");
     });
   });
 
@@ -79,12 +102,16 @@ describe("[adversarial-cov] erc20-token", function () {
   // ---------------------------------------------------------------------
   describe("rewardMint access control (Unauthorized)", function () {
     it("rejects every caller other than address(satoriRewards) and never changes supply", async function () {
-      const { satori, voting, owner, signers } = await deploySatoriFixture();
+      const { satori, hub, lens, rewards, voting, owner, signers } = await deploySatoriFixture();
       const attacker = signers[6];
 
-      // advance a round so the cap is NOT the limiting factor (proves it is
-      // the access gate, not the budget, that reverts)
+      // Report real room so the budget is NOT the limiting factor (proves it
+      // is the access gate, not the budget, that reverts).
+      const rewardsSigner = await asRewards(satori, rewards);
       await time.increase(ROUND);
+      await hub.connect(rewardsSigner).freezeRoundGross(await satori.getCurrentRound());
+      await hub.connect(rewardsSigner).noteIssued(ethers.parseEther("1"));
+      expect(await lens.onChainRewardCeiling()).to.be.gt(await satori.onChainMinted());
 
       const mintedBefore = await satori.totalRewardsMinted();
       const supplyBefore = await satori.totalSupply();
@@ -114,38 +141,64 @@ describe("[adversarial-cov] erc20-token", function () {
   });
 
   // ---------------------------------------------------------------------
-  // Deploy-round saturation, unlocks next round — MED
+  // Genesis leaves no mint room; the report allowance grows per priced round — MED
   // ---------------------------------------------------------------------
   describe("deploy-round saturation", function () {
-    it("deploy round is exactly saturated at genesis (zero headroom); the general cap grows one round's share at a time", async function () {
-      const { satori, rewards } = await deploySatoriFixture();
+    it("genesis leaves zero mint room, time opens none, and each priced round adds exactly one gross of report allowance", async function () {
+      const { satori, hub, token, lens, rewards } = await deploySatoriFixture();
       const rewardsSigner = await asRewards(satori, rewards);
-      const RATE = await satori.emissionRateNow();
-      const BPS = await satori.devFeeBps();
-      const genCap = (e) => (RATE * e * (10000n - BPS)) / 10000n;
       const initial = await satori.INITIAL_MINT();
       const recipient = (await ethers.getSigners())[7].address;
+      const GROSS = await scheduleGross(hub, token);
+      const BPS = await token.devFeeBps();
 
       const deployRound = await satori.deploymentRound();
       const curRound = await satori.getCurrentRound();
       expect(curRound).to.equal(deployRound); // fixture deploys within deploy round
 
-      // On the deploy round the general lane's genesis share IS its cap: zero
-      // headroom — an exact boundary, even 1 wei reverts at e == 1.
-      expect(await satori.onChainMinted()).to.equal(genCap(1n));
+      // Genesis is reported and minted in full, so there is zero room: an exact
+      // boundary, even 1 wei reverts. Genesis pays the deploy round; the first
+      // touch prices it again later (the bootstrap overlap), not at bootstrap.
+      const genesisGeneral = await token.generalAccrued();
+      expect(genesisGeneral).to.equal((initial * (10000n - BPS)) / 10000n);
+      expect(await satori.onChainMinted()).to.equal(genesisGeneral);
+      expect(await hub.onChainAllowance()).to.equal(genesisGeneral);
       await expect(
         satori.connect(rewardsSigner).rewardMint(recipient, 1n)
       ).to.be.revertedWithCustomError(satori, "BudgetExceeded");
 
-      // Roll one round forward: exactly that round's share of headroom appears.
+      // Rolling the clock opens no mint room: it grows only with reports.
       await time.increase(ROUND);
-      await satori.connect(rewardsSigner).rewardMint(recipient, genCap(2n) - genCap(1n));
-      expect(await satori.totalRewardsMinted()).to.equal(initial + genCap(2n) - genCap(1n));
+      expect(await lens.onChainRewardCeiling()).to.equal(genesisGeneral);
+      await expect(
+        satori.connect(rewardsSigner).rewardMint(recipient, 1n)
+      ).to.be.revertedWithCustomError(satori, "BudgetExceeded");
 
-      // And again for the round after.
-      await time.increase(ROUND);
-      await satori.connect(rewardsSigner).rewardMint(recipient, genCap(3n) - genCap(2n));
-      expect(await satori.totalRewardsMinted()).to.equal(initial + genCap(3n) - genCap(1n));
+      // Price the round: exactly one gross more may be reported; a second
+      // freeze of the same round adds nothing. Report and mint all of it.
+      let minted = initial;
+      for (let i = 0; i < 2; i++) {
+        if (i > 0) await time.increase(ROUND);
+        const cur = await satori.getCurrentRound();
+        const allowance0 = await hub.onChainAllowance();
+        // The first freeze also prices the deploy round, which nothing priced yet.
+        const priced = i === 0 ? 2n * GROSS : GROSS;
+        await hub.connect(rewardsSigner).freezeRoundGross(cur);
+        expect(await hub.onChainAllowance()).to.equal(allowance0 + priced);
+        await hub.connect(rewardsSigner).freezeRoundGross(cur);
+        expect(await hub.onChainAllowance()).to.equal(allowance0 + priced);
+
+        const room = await allowanceRoom(hub, token);
+        await hub.connect(rewardsSigner).noteIssued(room);
+        await satori.connect(rewardsSigner).rewardMint(recipient, room);
+        minted += room;
+        expect(await satori.totalRewardsMinted()).to.equal(minted);
+      }
+      // Two priced rounds plus the deploy round's overlap, no more.
+      expect(minted).to.equal(initial + 3n * GROSS);
+      await expect(
+        satori.connect(rewardsSigner).rewardMint(recipient, 1n)
+      ).to.be.revertedWithCustomError(satori, "BudgetExceeded");
     });
   });
 

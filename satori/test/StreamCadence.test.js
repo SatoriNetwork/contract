@@ -49,10 +49,10 @@ describe("Stream cadence (per-stream minCadenceRounds — minimum rounds between
   // (SatoriHub._requireGameableCadence). The convenience overloads therefore
   // hand out 1440, the finest a user may have.
   describe("Default daily cadence (existing signatures)", function () {
-    it("the bootstrapped Predictions stream (id 1) is every-round (1440 minutes)", async function () {
-      // The default stream is created through the registry directly by
-      // initializeDefaultStream(): it is every-round, same as the public floor.
-      expect(await registry.streamMinCadenceMinutes(1)).to.equal(1440);
+    it("the bootstrapped default stream (id 1) is a Sentiment stream: cadence 60 minutes", async function () {
+      // initializeDefaultStream() creates it through the registry as the Coined
+      // stream satori, and a Sentiment stream takes exactly cadence 60.
+      expect(await registry.streamMinCadenceMinutes(1)).to.equal(60);
     });
 
     it("createSimpleDataStream(name, authority) defaults to minCadenceRounds = 2", async function () {

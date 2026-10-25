@@ -4,67 +4,10 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/utils/math/Math.sol";
 import "./interfaces/ISatoriCore.sol";
 import "./libraries/SatoriTypes.sol";
-
-interface IHubForLens {
-    function emissionCeiling() external view returns (uint256);
-    function token() external view returns (address);
-    function registry() external view returns (address);
-    function voting() external view returns (address);
-    function rewards() external view returns (address);
-    function bounties() external view returns (address);
-    function games() external view returns (address);
-    function merkle() external view returns (address);
-    function merkleReserveCeiling() external view returns (uint256);
-    function merkleReserveCumulative() external view returns (uint256);
-    function emission() external view returns (
-        uint128 issued, uint128 nextStepAt, uint128 rate, uint128 prevRate,
-        uint64 from, uint64 ratioWad, uint32 stepsTaken, uint256 banked
-    );
-    function emissionRateNext() external view returns (uint256);
-    function residualNext() external view returns (uint256);
-    function emissionHolder() external view returns (address);
-}
-
-interface ITokenForLens {
-    function getCurrentRound() external view returns (uint256);
-    function deploymentRound() external view returns (uint256);
-    function devFeeCeiling() external view returns (uint256);
-    function devFeeBps() external view returns (uint256);
-    function generalCeilingFor(uint256 ceiling) external view returns (uint256);
-    function lockUntil(address user, uint8 lane) external view returns (uint24);
-}
-
-interface IRegistryForLens {
-    function streamExists(uint32 streamId) external view returns (bool);
-    function getValueAtHour(uint32 streamId, uint256 hour) external view returns (int256);
-}
-
-/// @notice Minimal forward of the rewards getters the Lens needs. Avoids
-///         dragging in the full ISatoriRewards interface and its many
-///         scoring/claim mutators.
-interface IRewardsForLens {
-    function effectivePredictorFee(address predictor) external view returns (uint16);
-    function totalWeightPacked(uint32 gameId, uint256 round) external view returns (uint256);
-    function unclaimedRewards(address user) external view returns (uint256);
-    function delegationPeriodsLength(address user) external view returns (uint256);
-    function firstActiveDelegationPeriod(address user) external view returns (uint256);
-    function delegationPeriodAt(address user, uint256 i) external view returns (
-        address delegate,
-        uint24 startRound,
-        uint24 endRound,
-        uint24 nextClaimRound,
-        uint256 startBalance,
-        uint256 checkpointsLength,
-        uint256 openRoundsLength
-    );
-    function delegationCheckpointAt(address user, uint256 i, uint256 j) external view returns (uint24 round, uint224 value);
-    function delegationOpenRoundAt(address user, uint256 i, uint256 j) external view returns (uint24 round, uint224 banked, uint256 loyalty);
-    function delegationLoyaltyAt(address user, uint256 i) external view returns (uint256);
-    function loyaltyCoeffs(address delegate, uint256 round) external view returns (uint256 alpha, uint256 beta);
-    function loyaltyLag() external view returns (uint256);
-    function delegatorRewardRatePerRound(address delegate, uint256 round) external view returns (uint256);
-    function offchainBudget() external view returns (uint256);
-}
+import "./interfaces/IRegistryForLens.sol";
+import "./interfaces/IHubForLens.sol";
+import "./interfaces/ITokenForLens.sol";
+import "./interfaces/IRewardsForLens.sol";
 
 /**
  * @title SatoriRewardsLens
@@ -90,10 +33,6 @@ contract SatoriRewardsLens {
     uint256 private constant DIR_HALF_MASK = (1 << 128) - 1;
     uint256 private constant REFERRAL_BPS = 500;
     uint256 private constant SATORI_RATE_SCALE = 1e24;
-    /// Loyalty fixed-point one. Mirrored from SatoriRewards on the same
-    /// frozen-constant terms as REFERRAL_BPS above; the LAG is read live via
-    /// `loyaltyLag()` because it is the one value a re-tune would move.
-    uint256 private constant LOY_ONE = 1e18;
 
     // Constants mirrored from SatoriHub (audit LA-4). Same frozen-constant rule
     // as REFERRAL_BPS above: changing them on the hub means shipping a new lens.
@@ -226,8 +165,6 @@ contract SatoriRewardsLens {
 
         // Open-round deltas: rate growth on previously-crossed pending rounds.
         // Each iteration issues TWO staticcalls, so it charges 2 to the budget.
-        // Weighted by the loyalty recorded ON THE ENTRY, matching
-        // `_replayOpenRounds` — the walk's carried `L` has moved on by now.
         for (uint256 k = 0; k < p.openRoundsLength; k++) {
             // Check the FULL iteration cost (2) up front, not `used >= budget`:
             // with one unit of budget left the old check passed and the charge
@@ -235,14 +172,12 @@ contract SatoriRewardsLens {
             // `budget -= used` and turned the budgeted walk into a panic-revert
             // (the exact F28/F29 failure the budget exists to prevent).
             if (used + 2 > budget) return (total, used, false);
-            (uint24 oRound, uint224 banked, uint256 oLoyalty) = rewards.delegationOpenRoundAt(user, i, k);
+            (uint24 oRound, uint224 banked) = rewards.delegationOpenRoundAt(user, i, k);
             uint256 currentRate = rewards.delegatorRewardRatePerRound(p.delegate, oRound);
-            if (currentRate > uint256(banked) && oLoyalty > 0) {
+            if (currentRate > uint256(banked)) {
                 uint256 bal = _balanceAt(cpRound, cpValue, p.startBalance, oRound);
                 if (bal > 0) {
-                    total += Math.mulDiv(
-                        (bal * oLoyalty) / LOY_ONE, currentRate - uint256(banked), SATORI_RATE_SCALE
-                    );
+                    total += Math.mulDiv(bal, currentRate - uint256(banked), SATORI_RATE_SCALE);
                 }
             }
             used += 2;
@@ -260,32 +195,16 @@ contract SatoriRewardsLens {
         }
         if (from > to) return (total, used, true);
 
-        // Forward walk does NOT halt on pending — matches the mutating path.
-        // Each round contributes rate × (predict-time balance × loyalty), with
-        // `L` carried exactly as `_accrueDelegatorRewards` carries it: folded
-        // from the round LOY_LAG behind, which is the same point the score-time
-        // denominator used. Omitting the loyalty factor here does not merely
-        // round differently — the rate is scaled by a loyalty-weighted `W`, so
-        // `bal × rate` over-reports pending by orders of magnitude.
-        uint256 L = rewards.delegationLoyaltyAt(user, i);
-        uint256 lag = rewards.loyaltyLag();
+        // Forward walk does NOT halt on pending — matches the mutating path. Each
+        // round contributes rate x the delegator's capital at that round.
         for (uint24 r = from; r <= to; r++) {
-            // This round's exact cost — 2 with the coefficient staticcall, 1
-            // without — checked BEFORE any of it is spent, so `used` can never
-            // exceed `budget` (see the open-round loop for the underflow this
-            // off-by-one caused in the caller).
-            uint256 cost = uint256(r) >= lag ? 2 : 1;
-            if (used + cost > budget) return (total, used, false);
+            if (used + 1 > budget) return (total, used, false);
             uint256 rate = rewards.delegatorRewardRatePerRound(p.delegate, r);
-            if (rate > 0 && L > 0) {
+            if (rate > 0) {
                 uint256 bal = _balanceAt(cpRound, cpValue, p.startBalance, r);
-                if (bal > 0) total += Math.mulDiv((bal * L) / LOY_ONE, rate, SATORI_RATE_SCALE);
+                if (bal > 0) total += Math.mulDiv(bal, rate, SATORI_RATE_SCALE);
             }
-            if (cost == 2) {
-                (uint256 alpha, uint256 beta) = rewards.loyaltyCoeffs(p.delegate, uint256(r) - lag);
-                L = (L * alpha) / LOY_ONE + beta;
-            }
-            used += cost;
+            used += 1;
         }
         return (total, used, true);
     }
@@ -328,33 +247,26 @@ contract SatoriRewardsLens {
 
     /// @notice Flat burn fees, mirroring SatoriHub.STREAM_BURN / GAME_BURN.
     function streamBurn() public pure returns (uint256) { return STREAM_BURN; }
+
+    /// @notice What registering a community stream or game adapter burns; admin-settable.
+    function registrationFee() external view returns (uint256) { return rewards.registrationFee(); }
     function gameBurn()   public pure returns (uint256) { return GAME_BURN; }
     function bountyBurn() public pure returns (uint256) { return GAME_BURN; }
     /// @notice Minimum total prediction power to GROW a streak; mirrors SatoriHub.
     function farmingThreshold() public pure returns (uint256) { return FARMING_FLOOR; }
 
-    /// @notice Prediction/delegation transfer lock (lane A) — was `SatoriHub.lockedUntil`.
-    function lockedUntil(address u) external view returns (uint256) { return uint256(_token().lockUntil(u, 0)); }
+    /// @notice The round until which `u` cannot transfer: the longest of every lock lane
+    ///         (prediction/delegation, vote), so the dapp never shows "Unlocked" for a
+    ///         wallet whose transfers revert.
+    function lockedUntil(address u) external view returns (uint256) { return uint256(_token().transferLockedUntil(u)); }
 
-    /// @notice Emission still mintable by the ON-CHAIN lane, i.e. the hub's
-    ///         emission ceiling net of the dev fee and of the Merkle lane's
-    ///         reserve. Was `SatoriHub.onChainRewardCeiling`.
-    ///
-    /// This MIRRORS `SatoriHub.rewardMint`'s `generalCap` exactly, and must keep
-    /// mirroring it — so it asks the TOKEN the same question the hub asks,
-    /// rather than recomputing the carve-out here. It used to subtract
-    /// `devFeeCeiling()` — the fee's realized accrual — which was right only
-    /// while that accrual tracked the clock. It now tracks what was MINTED, so
-    /// it lags whenever the lanes run below the emission rate, and subtracting
-    /// it here would report headroom the hub would refuse.
+    /// @notice All the ON-CHAIN lane may ever have minted so far: everything
+    ///         reported to the token as earned, less the Merkle lane's banked
+    ///         reserve. Mirrors the on-chain branch of `SatoriHub.rewardMint`
+    ///         exactly (callers subtract `onChainMinted` for the room). Was
+    ///         `SatoriHub.onChainRewardCeiling`.
     function onChainRewardCeiling() external view returns (uint256) {
-        uint256 general = _token().generalCeilingFor(
-            IHubForLens(satoriCore).emissionCeiling()
-        );
-        uint256 merk = IHubForLens(satoriCore).merkleReserveCeiling();
-        // Saturating: report zero, never a panic, should the reserve ever reach
-        // the general cap.
-        return merk >= general ? 0 : general - merk;
+        return _token().generalAccrued() - IHubForLens(satoriCore).merkleReserveCumulative();
     }
 
     struct EmissionStatus {
@@ -395,8 +307,9 @@ contract SatoriRewardsLens {
             : st.rateNext;
         uint256 ceil = hub.merkleReserveCeiling();
         uint256 cum = hub.merkleReserveCumulative();
+        // Rounded up like the token's per-report fee, so a sync lands exactly here.
         st.issuedProjected = ceil > cum
-            ? st.issued + (ceil - cum) * 10000 / (10000 - _token().devFeeBps())
+            ? st.issued + Math.ceilDiv((ceil - cum) * 10000, 10000 - _token().devFeeBps())
             : st.issued;
         st.holder = hub.emissionHolder();
         st.dial = rewards.offchainBudget();
@@ -408,7 +321,10 @@ contract SatoriRewardsLens {
     function streamExists(uint32 s) external view returns (bool) { return _registry().streamExists(s); }
 
     /// @notice Direction of a stream's value move between two rounds: 1 up,
-    ///         -1 down, 0 flat/unknown. Was `SatoriHub.getValueChange`.
+    ///         -1 down, 0 flat or the stream does not exist. Was
+    ///         `SatoriHub.getValueChange`. A round older than the ring's history
+    ///         reads as value 0, so after eviction the result is not a real
+    ///         comparison and can be ±1; check both rounds are inside the ring.
     function getValueChange(uint32 streamId, uint256 fromRound, uint256 toRound) external view returns (int8) {
         IRegistryForLens reg = _registry();
         if (!reg.streamExists(streamId)) return 0;

@@ -34,10 +34,14 @@
 // sequence is unrecoverable, and it would have mis-read the reward ledger too.
 //
 // ── WHAT THIS CHECKS ───────────────────────────────────────────────────────
-// The layout that was actually deployed, recorded into deployments/<net>.json
-// by deploy.js at deploy time, is the ground truth. Current source is diffed
-// against THAT. Appending is fine; anything that moves an existing variable is
-// refused.
+// The layout of the implementation the proxy is RUNNING NOW is the ground truth.
+// deploy.js records one per implementation, and deploy-impl.js records another
+// for every implementation it prepares, all keyed by implementation address in
+// deployments/<net>.json (`implLayouts`). The proxy's live implementation is read
+// off its ERC-1967 slot and current source is diffed against ITS recorded
+// layout. Diffing against the deploy-time layout alone would pass a second
+// upgrade that moves a variable the first upgrade appended (M08). Appending is
+// fine; anything that moves an existing variable is refused.
 //
 // If a deployment predates layout recording there is nothing to compare, and
 // this REFUSES rather than assuming the best — an unverifiable upgrade is
@@ -55,7 +59,30 @@ async function main() {
   if (!fs.existsSync(bookPath)) throw new Error(`no deployment book at ${bookPath}`);
   const book = JSON.parse(fs.readFileSync(bookPath, "utf8"));
 
-  const recorded = book.layouts && book.layouts[name];
+  // The layout of the implementation the proxy runs now. `PROXY` names the proxy;
+  // without it (or without a reachable chain) fall back to the deploy-time layout,
+  // which is only right while no upgrade has happened.
+  const IMPL_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc";
+  let recorded = book.layouts && book.layouts[name];
+  const proxy = process.env.PROXY;
+  if (proxy) {
+    const hre = require("hardhat");
+    const raw = await hre.ethers.provider.getStorage(proxy, IMPL_SLOT);
+    const live = ("0x" + raw.slice(26)).toLowerCase();
+    const forLive = book.implLayouts && book.implLayouts[live];
+    if (forLive) {
+      recorded = forLive;
+      console.log(`  live implementation ${live}: its recorded layout`);
+    } else {
+      console.error(`
+  REFUSING: ${net}.json records no layout for the implementation ${proxy} runs now
+  (${live}). An upgrade cannot be shown safe against a layout nobody recorded.
+  Prepare implementations with scripts/deploy-impl.js, which records one, or add
+  "implLayouts": { "${live}": [...] } from the source commit that produced it.
+`);
+      process.exit(1);
+    }
+  }
   if (!recorded) {
     console.error(`
   REFUSING: ${net}.json records no deployed layout for ${name}.

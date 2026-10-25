@@ -66,7 +66,7 @@ describe("DataStream Registry", function () {
 
       // Custom adapter (id 3, registered by the fixture); any non-zero target
       // passes CustomAdapter.validate, which is all creation needs.
-      await satori.connect(owner)["createAdapterDataStream(string,uint16,address,bytes)"](
+      await satori.connect(owner)["createAdapterDataStream(string,uint32,address,bytes)"](
         "AdapterT", 3, authority1.address, "0x"
       );
       const adapterId = Number(await registry.getDataStreamCount());
@@ -143,7 +143,7 @@ describe("DataStream Registry", function () {
     it("emits the adapter stream's adapterId, config and cadence at creation", async function () {
       const config = ethers.AbiCoder.defaultAbiCoder().encode(["uint64"], [3600]);
       await expect(
-        satori.connect(owner)["createAdapterDataStream(string,uint16,address,bytes,uint24)"](
+        satori.connect(owner)["createAdapterDataStream(string,uint32,address,bytes,uint24)"](
           "Custom", 3, authority1.address, config, 2880
         )
       )
@@ -151,13 +151,15 @@ describe("DataStream Registry", function () {
         .withArgs(GENESIS_STREAMS + 1, owner.address, authority1.address, 3, 2880, config, "Custom");
     });
 
-    it("records the hub as the default stream's creator and provider", async function () {
+    it("records the hub as the default stream's creator and the engine as its provider (the Sentiment stream satori)", async function () {
       const hub = await satori.getAddress();
+      const engine = await satori.engine();
       const [log] = await registry.queryFilter(registry.filters.DataStreamCreated(1));
       expect(log.args.creator).to.equal(hub);
-      expect(log.args.provider).to.equal(hub);
-      expect(log.args.adapterId).to.equal(0);
-      expect(log.args.minCadenceMinutes).to.equal(1440);
+      expect(log.args.provider).to.equal(engine);
+      expect(log.args.adapterId).to.equal(await registry.namedAdapterId());
+      expect(log.args.minCadenceMinutes).to.equal(60);
+      expect(log.args.name).to.equal("satori");
     });
 
     it("Should increment datastream count", async function () {

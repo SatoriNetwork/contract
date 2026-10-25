@@ -45,7 +45,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { time, impersonateAccount, setBalance } = require("@nomicfoundation/hardhat-network-helpers");
-const { deploySatoriFixtureOpts, freezeStandingAirdrop } = require("../fixtures");
+const { deploySatoriFixtureOpts } = require("../fixtures");
 const { deployMerkleProxied } = require("../next/splitFixture");
 
 const E = (n) => ethers.parseEther(String(n));
@@ -208,9 +208,9 @@ describe("[adv] ADMIN / AUTH / LIFECYCLE / EMERGENCY — full privileged surface
       // Dial the reserve and let it accrue while Merkle does not exist yet.
       await rewards.connect(owner).setOffchainBudget(E(500));
       // Dial is effective from the NEXT round (genesis round D uses dial 0), so
-      // 4 rounds elapse to accrue 3 effective rounds at 500 == 1500.
-      await advanceRounds(4); // reserve accrues 1500
-      expect(await satori.merkleReserveCeiling()).to.equal(E(1500));
+      // 4 rounds elapse to accrue 4 rounds (current included) at 500 == 2000.
+      await advanceRounds(4); // reserve accrues 2000
+      expect(await satori.merkleReserveCeiling()).to.equal(E(2000));
 
       // Late-wire the Merkle contract (deployer-only, still available: write-once slot empty).
       const merkle = await deployMerkleProxied(publisher.address, await satori.satoriToken());
@@ -317,9 +317,9 @@ describe("[adv] ADMIN / AUTH / LIFECYCLE / EMERGENCY — full privileged surface
       await rewards.connect(owner).setOffchainBudget(E(50));
       expect(await satori.merkleReserveCeiling()).to.equal(E(200));
       // The most recent rate (50) governs the NEXT round only; advance 2 rounds
-      // so one full round accrues at 50 (the live ceiling lags one round).
+      // so two rounds accrue at 50 (the current round included).
       await advanceRounds(2);
-      expect(await satori.merkleReserveCeiling()).to.equal(E(250));
+      expect(await satori.merkleReserveCeiling()).to.equal(E(300));
     });
   });
 
@@ -461,36 +461,28 @@ describe("[adv] ADMIN / AUTH / LIFECYCLE / EMERGENCY — full privileged surface
   });
 
   // ================================================================
-  // AIRDROP LIFECYCLE ORDERING — claims only after finalize, loading never
-  // after the freeze; the airdrop lane is walled off from the reward cap.
+  // AIRDROP LIFECYCLE ORDERING — claims from the load, loading never after
+  // finalize; the airdrop lane is walled off from the reward cap.
   // ================================================================
   describe("airdrop loading ordering + lane isolation", function () {
-    it("no claim before finalize, no finalize before the door is frozen, no load after the freeze; no top-up or re-point after; claimed cursors untouched", async function () {
+    it("claims from the load, loading continues until finalize, no load or top-up after it; claimed cursors untouched", async function () {
       const { satori, airdrop, token } = await deployStack(owner, publisher);
       await airdrop.connect(owner).loadAirdropBatch([alice.address], [E(100000)]);
-      await expect(airdrop.connect(alice).claimAirdrop())
-        .to.be.revertedWithCustomError(airdrop, "ClaimsNotOpen");
-      await expect(airdrop.connect(owner).finalizeAirdropLoading())
-        .to.be.revertedWithCustomError(airdrop, "AirdropNotFrozen");
-
-      await freezeStandingAirdrop(token, owner);
-      await expect(airdrop.connect(owner).loadAirdropBatch([bob.address], [E(100000)]))
-        .to.be.revertedWithCustomError(airdrop, "AirdropLoadingClosed");
-      await airdrop.connect(owner).finalizeAirdropLoading();
-      // No wait: the whole allocation is claimable right after finalize.
+      // No wait and no finalize: the whole allocation is claimable at once.
       await airdrop.connect(alice).claimAirdrop();
       expect(await airdrop.airdropClaimed(alice.address)).to.equal(E(100000));
 
-      // After claims started the admin can neither add bob, RETROACTIVELY bump
-      // alice, re-finalize, nor point the token at a fresh table.
+      await airdrop.connect(owner).loadAirdropBatch([stranger.address], [E(1)]);
+      await airdrop.connect(owner).finalizeAirdropLoading();
+
+      // After finalize the admin can neither add bob, RETROACTIVELY bump
+      // alice, nor re-finalize.
       await expect(airdrop.connect(owner).loadAirdropBatch([bob.address], [E(100000)]))
         .to.be.revertedWithCustomError(airdrop, "AirdropLoadingClosed");
       await expect(airdrop.connect(owner).loadAirdropBatch([alice.address], [E(999999)]))
         .to.be.revertedWithCustomError(airdrop, "AirdropLoadingClosed");
       await expect(airdrop.connect(owner).finalizeAirdropLoading())
         .to.be.revertedWithCustomError(airdrop, "AlreadySet");
-      await expect(token.connect(owner).setAirdrop(bob.address))
-        .to.be.revertedWithCustomError(token, "Frozen");
       expect(await airdrop.airdropAllocation(alice.address)).to.equal(E(100000));
       expect(await airdrop.airdropAllocation(bob.address)).to.equal(0n);
       expect(await airdrop.airdropClaimed(alice.address)).to.equal(E(100000));
@@ -500,7 +492,6 @@ describe("[adv] ADMIN / AUTH / LIFECYCLE / EMERGENCY — full privileged surface
     it("an airdrop claim NEVER touches the reward cap counters (separate lane)", async function () {
       const { satori, airdrop, token } = await deployStack(owner, publisher);
       await airdrop.connect(owner).loadAirdropBatch([alice.address], [E(500000)]);
-      await freezeStandingAirdrop(token, owner);
       await airdrop.connect(owner).finalizeAirdropLoading();
 
       const rmintBefore = await satori.totalRewardsMinted();
@@ -522,9 +513,6 @@ describe("[adv] ADMIN / AUTH / LIFECYCLE / EMERGENCY — full privileged surface
       await impersonateAccount(airdropAddr);
       await setBalance(airdropAddr, E(100));
       const ad = await ethers.getSigner(airdropAddr);
-      await expect(token.connect(ad).airdropMint(alice.address, 1n))
-        .to.be.revertedWithCustomError(token, "AirdropNotFrozen");
-      await freezeStandingAirdrop(token, owner);
       await expect(token.connect(ad).airdropMint(alice.address, TOTAL + 1n))
         .to.be.revertedWithCustomError(token, "BudgetExceeded");
     });

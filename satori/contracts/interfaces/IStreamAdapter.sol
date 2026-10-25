@@ -4,7 +4,7 @@ pragma solidity ^0.8.20;
 /**
  * @title IStreamAdapter
  * @notice Pull-based oracle adapter interface for Adapter-type streams.
- * @dev Every adapter is registered against a `uint16 adapterId` in
+ * @dev Every adapter is registered against a `uint32 adapterId` in
  *      `SatoriRegistry.adapter`. Adapter IDs are immutable once registered
  *      — the owner can register new IDs but never replace one — so existing
  *      streams never have their adapter swapped out from under them.
@@ -12,7 +12,7 @@ pragma solidity ^0.8.20;
  *      `target` is the primary address argument (typically the feed,
  *      pool, or custom-contract address). `config` is arbitrary extra
  *      bytes that the adapter decodes (e.g. Chainlink encodes `maxFeedAge`
- *      here; Uniswap and Custom adapters ignore `config`).
+ *      here; Uniswap encodes its TWAP window; Custom ignores `config`).
  */
 interface IStreamAdapter {
     /// @notice Pull the current value from the underlying source.

@@ -139,19 +139,12 @@ async function main() {
       (await token.ROUND_REWARD_BUDGET()) === ethers.parseEther("1440")],
     ["hub ROUND_REWARD_BUDGET == token's", async () =>
       (await hub.ROUND_REWARD_BUDGET()) === (await token.ROUND_REWARD_BUDGET())],
-    // The fee SHIPS at 15%. It is the DAO's to move afterwards, but only
-    // inside a band the immutable token fixes — so what a deploy must pin is
-    // the starting value AND the band, not the rate forever.
-    ["devFeeBps ships at 1500 (15%)", async () =>
-      (await token.devFeeBps()) === 1500n],
+    // The fee SHIPS at 15% and is the fee authority's to move afterwards, inside
+    // a band the immutable token fixes. Only the band is an invariant; the rate
+    // and any pending change are STATE below.
     ["dev fee band is [500, 2500] and unalterable", async () =>
       (await token.DEV_FEE_BPS_MIN()) === 500n &&
       (await token.DEV_FEE_BPS_MAX()) === 2500n],
-    ["no fee change is pending at deploy", async () =>
-      (await token.pendingDevFeeBps()) === 0n],
-    // Every governor lever starts LIVE. Freezing is a deliberate later act, and
-    // a deploy that shipped one already frozen would be unrecoverable — the
-    // token has no upgrade path.
     // NO SLOT MAY BE EMPTY. A zero slot is unrecoverable for that job: nothing
     // but `root` can refill it, and a zero `root` cannot refill anything at all.
     // Cheap to check, permanent to get wrong.
@@ -162,11 +155,6 @@ async function main() {
       (await token.wiringAuthority()) !== ethers.ZeroAddress &&
       (await token.appointAuthority()) !== ethers.ZeroAddress &&
       (await token.freezeAuthority()) !== ethers.ZeroAddress],
-    ["all four governor levers start unfrozen", async () =>
-      (await token.controllerFrozen()) === false &&
-      (await token.hookFrozen()) === false &&
-      (await token.bridgeAuthorityFrozen()) === false &&
-      (await token.devFeeBpsFrozen()) === false],
     // The genesis mint must be exactly ONE ROUND of the hub's schedule. Mint a
     // full 1440 instead and the protocol is over its own emission from block
     // zero — the hub's first rewardMint reverts and nothing can ever pay out.
@@ -198,20 +186,14 @@ async function main() {
     }],
     // It lives in the non-upgradeable token: a deploy that ships another
     // figure is a redeploy to fix.
-    ["AIRDROP_TOTAL_SUPPLY == 1,200,000", async () =>
-      (await token.AIRDROP_TOTAL_SUPPLY()) === ethers.parseEther("1200000")],
+    ["AIRDROP_TOTAL_SUPPLY == 1,100,000", async () =>
+      (await token.AIRDROP_TOTAL_SUPPLY()) === ethers.parseEther("1100000")],
     // SatoriAirdrop reads the ceiling THROUGH the token, so this can only fail
     // if the pointer is wrong — which is exactly what it is here to catch.
     ["airdrop AIRDROP_TOTAL_SUPPLY reads the token's", async () =>
       (await airdrop.AIRDROP_TOTAL_SUPPLY()) === (await token.AIRDROP_TOTAL_SUPPLY())],
-    // Claims open at finalize, and finalize refuses until the token's door is
-    // frozen on this airdrop (docs/issues/airdrop-claim-at-finalize.md). Not
-    // airdropLocked: an emptied wiring slot does not count, root can refill it.
-    // Holds by construction on current code; it catches a book whose airdrop
-    // predates the freeze gate.
-    ["airdrop finalized only behind a frozen door", async () =>
-      !(await airdrop.airdropLoadingFinalized()) ||
-      ((await token.airdropFrozen()) && eq(await token.airdrop(), A.airdrop))],
+    ["airdrop loaded total within the cap", async () =>
+      (await airdrop.airdropLoadedTotal()) <= (await token.AIRDROP_TOTAL_SUPPLY())],
     ["HOME_CHAIN_ID == this chain", async () =>
       Number(await token.HOME_CHAIN_ID()) === chainId],
     ["deploymentRound is set", async () => (await token.deploymentRound()) > 0n],
@@ -229,14 +211,19 @@ async function main() {
       (await token.crosschainMinted())],
     ["airdropMinted <= AIRDROP_TOTAL_SUPPLY", async () =>
       (await token.airdropMinted()) <= (await token.AIRDROP_TOTAL_SUPPLY())],
-    // ONE WEI OF SLACK, deliberately. The genesis split floors the GENERAL
-    // share onto the hub's cap and gives the dev the remainder, while
-    // devFeeCeiling floors the fee's own 3/17 — two roundings that need not
-    // agree. So the fee can legitimately sit a wei AHEAD of its ceiling on a
-    // fresh deploy, which is also why mintDevFee saturates rather than
-    // subtracting. Anything beyond a wei is a real accounting break.
-    ["devFeeMinted <= devFeeCeiling + 1 wei (genesis rounding)", async () =>
-      (await token.devFeeMinted()) <= (await token.devFeeCeiling()) + 1n],
+    // The fee is booked at the report (M03): nothing mints that was not
+    // reported, the dev pulls only what was booked, and the envelope binds on
+    // the booking.
+    ["devFeeMinted <= devFeeAccrued", async () =>
+      (await token.devFeeMinted()) <= (await token.devFeeAccrued())],
+    ["generalMinted <= generalAccrued", async () =>
+      (await token.generalMinted()) <= (await token.generalAccrued())],
+    ["generalAccrued + devFeeAccrued <= rewardCeiling", async () =>
+      (await token.generalAccrued()) + (await token.devFeeAccrued()) <= (await token.rewardCeiling())],
+    ["hub lanes == token.generalMinted", async () =>
+      (await hub.onChainMinted()) + (await hub.merkleMinted()) === (await token.generalMinted())],
+    ["hub lanes within what was reported", async () =>
+      (await hub.onChainMinted()) + (await hub.merkleReserveCumulative()) <= (await token.generalAccrued())],
 
     // The default stream and its game exist and are initialized. Without these
     // the protocol has nothing to pay anyone for.
@@ -246,6 +233,14 @@ async function main() {
     }],
     ["default game (id 1) is stream 1's binary game", async () =>
       Number(await games.binaryGameByStream(1)) === 1],
+    ["default stream (id 1) is the Sentiment stream", async () => await registry.isNamedStream(1)],
+    // The wiring links, which no later act is meant to change.
+    ["hub.engine == engine", async () => eq(await hub.engine(), A.engine)],
+    ["engine.hub == hub", async () => eq(await (await at("SatoriEngine", A.engine)).hub(), A.hub)],
+    ["engine.token == token", async () => eq(await (await at("SatoriEngine", A.engine)).token(), A.token)],
+    ["registry.adapter(1..3) are Chainlink, Uniswap, Custom", async () =>
+      eq(await registry.adapter(1), A.chainlinkAdapter) && eq(await registry.adapter(2), A.uniswapAdapter)
+      && eq(await registry.adapter(3), A.customAdapter)],
   ];
 
   // ── STATE (reported, never asserted) ───────────────────────────────────
@@ -278,7 +273,14 @@ async function main() {
       (await token.totalRewardsMinted()) + (await token.airdropMinted()) +
       (await token.crosschainMinted()) - (await token.crosschainBurned()) -
       (await token.totalSupply()), eth),
+    await safe("devFeeBps (ships at 1500)", () => token.devFeeBps()),
+    await safe("pendingDevFeeBps", () => token.pendingDevFeeBps()),
+    await safe("levers frozen: controller / hook / bridgeAuthority / devFeeBps", async () =>
+      [await token.controllerFrozen(), await token.hookFrozen(),
+       await token.bridgeAuthorityFrozen(), await token.devFeeBpsFrozen()].join(" / ")),
     await safe("devFeeMinted", () => token.devFeeMinted(), eth),
+    await safe("dev fee owed (accrued - minted)", async () =>
+      (await token.devFeeAccrued()) - (await token.devFeeMinted()), eth),
     await safe("PLATFORM_FEE_RECIPIENT", () => token.PLATFORM_FEE_RECIPIENT()),
     await safe("token.rootAuthority", () => token.rootAuthority()),
     await safe("token.feeAuthority", () => token.feeAuthority()),
@@ -288,19 +290,9 @@ async function main() {
     await safe("token.freezeAuthority", () => token.freezeAuthority()),
     await safe("rewards.admin", () => rewards.admin()),
     await safe("airdrop.loader", () => airdrop.airdropAuthority()),
-    await safe("airdrop.loadedTotal", async () => {
-      const t = await airdrop.airdropLoadedTotal();
-      // The freeze closes every table on this token, and the door can never be
-      // re-pointed after it.
-      return eth(t) + (t === 0n && (await token.airdropFrozen())
-        ? `  ${YEL}<- door frozen with nothing loaded: this airdrop is empty forever${OFF}` : "");
-    }),
+    await safe("airdrop.loadedTotal", async () => eth(await airdrop.airdropLoadedTotal())),
     await safe("airdrop.loadingFinalized", () => airdrop.airdropLoadingFinalized()),
-    await safe("token.airdropFrozen", () => token.airdropFrozen()),
-    // What finalizeAirdropLoading waits for: the token's pointer is this
-    // airdrop and frozen there.
-    await safe("airdrop door pinned here", async () =>
-      eq(await token.airdrop(), A.airdrop) && (await token.airdropFrozen())),
+    await safe("token.airdrop is this airdrop", async () => eq(await token.airdrop(), A.airdrop)),
     await safe("bridgeAuthority", () => token.bridgeAuthority()),
     await safe("streams", () => registry.getDataStreamCount()),
     await safe("emissionHolder", () => hub.emissionHolder()),

@@ -21,6 +21,8 @@ interface IUniswapV3Pool {
 
     /// @notice Fee tier in hundredths of a bip (3000 = 0.3%).
     function fee() external view returns (uint24);
+    function token0() external view returns (address);
+    function token1() external view returns (address);
 
     function slot0() external view returns (
         uint160 sqrtPriceX96,
@@ -40,7 +42,21 @@ interface IUniswapV3Pool {
     );
 }
 
+/// The one place that knows which pools are real: only a pool the factory created
+/// is registered under (token0, token1, fee).
+interface IUniswapV3Factory {
+    function getPool(address tokenA, address tokenB, uint24 fee) external view returns (address);
+}
+
 contract UniswapV3Adapter is IStreamAdapter, IStreamAdapterUIDescriptor {
+    /// @notice The Uniswap V3 factory this adapter trusts (zero on a chain with none,
+    ///         which skips the check). Immutable: another factory is a new adapter id.
+    address public immutable FACTORY;
+
+    constructor(address factory_) {
+        FACTORY = factory_;
+    }
+
     /// @notice TWAP window when a stream supplies no config; per-stream via a
     ///         uint32 of seconds in `config`.
     uint32 public constant DEFAULT_TWAP_WINDOW = 30 minutes;
@@ -81,9 +97,13 @@ contract UniswapV3Adapter is IStreamAdapter, IStreamAdapterUIDescriptor {
         return abi.decode(config, (uint32));
     }
 
-    /// @notice Minimum pool age before a stream can use it. Defense against
-    ///         wash-bootstrap: a freshly-deployed pool seeded with manipulated
-    ///         observations must age this long first.
+    /// @notice Minimum pool age before a stream can use it, while the pool's
+    ///         ring has not wrapped. Defense against wash-bootstrap: a
+    ///         freshly-deployed pool seeded with manipulated observations must
+    ///         age this long first.
+    /// @dev Once the ring has wrapped its oldest entry shows only how far back
+    ///      the ring reaches (hours, on a busy pool), never the pool's age, so a
+    ///      wrapped ring is held to the TWAP window instead.
     uint32 public constant MIN_POOL_AGE = 1 days;
 
     error InvalidPool();
@@ -91,6 +111,9 @@ contract UniswapV3Adapter is IStreamAdapter, IStreamAdapterUIDescriptor {
     /// @dev Tier 100 (0.01%) is included on purpose: it hosts the deepest Base
     ///      stablecoin pools (audit F50). Non-canonical tiers stay rejected.
     error BadFeeTier();
+    /// @dev The pool is not one the factory created, so it could be a look-alike
+    ///      that reports any price.
+    error NotFactoryPool();
     error PoolTooYoung();
     /// @dev `need` is uint32, not uint16: it can legitimately exceed a pool's max
     ///      cardinality (that is how an over-long window is refused), and
@@ -131,6 +154,12 @@ contract UniswapV3Adapter is IStreamAdapter, IStreamAdapterUIDescriptor {
         uint24 feeTier = pool.fee();
         if (feeTier != 100 && feeTier != 500 && feeTier != 3000 && feeTier != 10000) revert BadFeeTier();
 
+        // The pool's own `factory()` could lie; the factory's registry cannot.
+        if (FACTORY != address(0)
+            && IUniswapV3Factory(FACTORY).getPool(pool.token0(), pool.token1(), feeTier) != target) {
+            revert NotFactoryPool();
+        }
+
         (, , uint16 obsIndex, uint16 cardinality, , , ) = pool.slot0();
         if (cardinality == 0) revert PoolNotReady();
 
@@ -141,12 +170,14 @@ contract UniswapV3Adapter is IStreamAdapter, IStreamAdapterUIDescriptor {
             revert InsufficientCardinality(cardinality, uint32(need));
         }
         uint16 oldestIdx = uint16((uint256(obsIndex) + 1) % uint256(cardinality));
-        (uint32 oldestTs, , , bool initialized) = pool.observations(oldestIdx);
-        if (!initialized) {
-            // Ring not full yet — index 0 is the oldest.
+        (uint32 oldestTs, , , bool wrapped) = pool.observations(oldestIdx);
+        if (wrapped) {
+            if (block.timestamp - uint256(oldestTs) < uint256(twapWindow)) revert PoolNotReady();
+        } else {
+            // Ring not full yet — index 0 is the pool's first observation.
             (oldestTs, , , ) = pool.observations(0);
+            if (block.timestamp - uint256(oldestTs) < uint256(MIN_POOL_AGE)) revert PoolTooYoung();
         }
-        if (block.timestamp - uint256(oldestTs) < uint256(MIN_POOL_AGE)) revert PoolTooYoung();
 
         uint32[] memory secondsAgos = new uint32[](2);
         secondsAgos[0] = twapWindow;

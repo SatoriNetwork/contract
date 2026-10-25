@@ -65,8 +65,9 @@ describe("Gas: how a batch predict scales with batch size", function () {
     await nextRound();
     for (const id of streams) await registry.setValue(id, 100);
 
-    // The round's FIRST predictor also pays flushDefaultStream(), a once-per-
-    // round cost that has nothing to do with batch size. Burn it on a warm-up
+    // The round's FIRST predictor also pays the hourly snapshot pull of any
+    // Sentiment stream, a once-per-hour cost that has nothing to do with batch size.
+    // Burn it on a warm-up
     // actor so it does not land on the n=1 measurement and make one game look
     // more expensive than two.
     await satori.connect(signers[7]).predictMultipleWithPayloads(

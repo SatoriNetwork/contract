@@ -86,11 +86,12 @@ const retry = async (fn, n = 6) => {
   const rpc = process.env.RPC_URL || 'https://sepolia.base.org';
   const bookPath = process.env.ADDRESS_BOOK ||
     path.join(__dirname, '..', 'deployments', `${process.env.NETWORK || 'baseSepolia'}.json`);
-  const merkleAddr = process.env.MERKLE_ADDRESS ||
-    JSON.parse(fs.readFileSync(bookPath, 'utf8')).addresses.merkle;
+  const book = fs.existsSync(bookPath) ? JSON.parse(fs.readFileSync(bookPath, 'utf8')) : null;
+  const merkleAddr = process.env.MERKLE_ADDRESS || (book && book.addresses.merkle);
   if (!merkleAddr) throw new Error('no merkle address — set MERKLE_ADDRESS or ADDRESS_BOOK');
 
   const provider = new ethers.JsonRpcProvider(rpc);
+  await require('./chain-guard').requireChain(provider, book);
   const merkle = new ethers.Contract(merkleAddr, MERKLE_ABI, provider);
   const iface = new ethers.Interface(MERKLE_ABI);
 

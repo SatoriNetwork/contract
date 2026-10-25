@@ -1,9 +1,8 @@
 // airdrop-break.adv.test.js
 //
-// ADVERSARIAL break-testing for the AIRDROP (no vesting, no delay: the whole
-// allocation, claimable the moment the loader finalizes, and finalize needs the
-// token's airdrop door frozen to this contract —
-// docs/issues/airdrop-claim-at-finalize.md).
+// ADVERSARIAL break-testing for the AIRDROP (no vesting, no delay, no freeze:
+// every allocation is claimable in full from the block it is loaded in;
+// finalize only closes loading — docs/issues/airdrop-claim-at-finalize.md).
 //
 // Target surface:
 //   SatoriAirdrop.sol : loadAirdropBatch, finalizeAirdropLoading,
@@ -12,34 +11,30 @@
 //                       airdropClaimed, airdropClaimedTotal, airdropLoadedTotal,
 //                       setAirdropAuthority, AIRDROP_TOTAL_SUPPLY
 //   SatoriToken.sol   : airdropMint (gated msg.sender == token.airdrop),
-//                       setAirdrop / freezeAirdrop / airdropFrozen,
-//                       airdropMinted counter, cap AIRDROP_TOTAL_SUPPLY,
+//                       setAirdrop, airdropMinted counter, cap AIRDROP_TOTAL_SUPPLY,
 //                       SEPARATE from totalRewardsMinted / the 1440/round cap.
 //
 // Attacks encoded below (each an adversary trying to break an invariant):
-//  A1  finalize gate: claim before finalize (years later, door frozen or not);
-//      finalize before the freeze; finalize by an abandoned contract once the
-//      door is frozen to its replacement; claims open in the finalize block
+//  A1  claims on load: claimable before finalize, in the load block, while
+//      loading continues; finalize changes nothing for claims
 //  A2  finalize is write-once (AlreadySet), not by a rotated or recalled
-//      loader; a stranger cannot finalize, before or after the freeze
-//  A3  OVER-LOAD — load sum > cap loads, but the freeze refuses it, so no
-//      claim opens and nobody is stranded; a corrected table pays in full
+//      loader; a stranger cannot finalize
+//  A3  OVER-LOAD — loading refuses any batch past the cap, so every loaded
+//      row is always payable in full
 //  A4  guards: length mismatch / duplicate / zero-addr / zero-amount, intra-batch dup
 //  A5  reentrancy on claim — plain ERC20, no claimer callback, CEI ordering
 //  A6  mint-to-the-ALLOCATED-address only — no redirect; airdropMint gated
 //  A7  loader-only loading and finalizing; rotation moves the right
 //  A8  supply identity totalSupply() == totalRewardsMinted() + airdropMinted
 //      under INTERLEAVED reward mints and airdrop claims
-//  A9  loading after the freeze is refused, before finalize and after it — for
-//      the loader, a rotated loader, and a recalled one; at once and long after
+//  A9  loading after finalize is refused — for the loader, a rotated loader,
+//      and a recalled one; at once and long after
 //  A10 claimableAirdrop view exactness vs a real claim, to the wei
 //  A11 all-or-nothing: after a full claim every re-claim pays nothing, through
 //      every door, later or racing in the same block
 //  A12 airdrop mint must NOT eat into the per-round reward cap (both lanes at cap)
-//  A13 the door: no SatoriAirdrop, the loaded one or a rival, mints while the
-//      door can be re-pointed; an emptied wiring slot is not a lock (root refills it);
-//      after the freeze no key or redeploy adds a row, and after finalize none
-//      adds a claim
+//  A13 the door: re-pointing it to a rival or replacement never pays anyone
+//      twice (the cursor is the token's) and never passes the cap
 //
 // ADDS a test file only; never edits a contract or an existing test.
 
@@ -51,7 +46,8 @@ const {
   impersonateAccount,
   setBalance,
 } = require("@nomicfoundation/hardhat-network-helpers");
-const { deploySatoriFixture, freezeStandingAirdrop } = require("../fixtures");
+const { deploySatoriFixture } = require("../fixtures");
+const { burnedTotal } = require("../helpers/burned");
 
 const DAY = 24n * 3600n; // one reward round
 const YEAR = 365n * DAY;
@@ -66,22 +62,36 @@ async function asRewards(rewards) {
   return await ethers.getSigner(addr);
 }
 
-describe("[adv] AIRDROP — whole allocation at finalize (SatoriAirdrop)", function () {
+// The hub mints on-chain only what Rewards reported, and refuses a report past
+// the rounds priced so far: price the current round, then report `amount`.
+async function report(hub, rw, amount) {
+  await hub.connect(rw).freezeRoundGross(await hub.getCurrentRound());
+  await hub.connect(rw).noteIssued(amount);
+}
+
+// What Rewards may still report: the priced rounds' allowance less what it
+// already reported.
+async function allowanceRoom(hub, token) {
+  const reported = (await token.generalAccrued()) - (await hub.merkleReserveCumulative());
+  return (await hub.onChainAllowance()) - reported;
+}
+
+describe("[adv] AIRDROP — whole allocation on load (SatoriAirdrop)", function () {
   this.timeout(600000);
 
-  let satori, token, airdrop, rewards, owner, alice, bob, carol, dave, TOTAL;
+  let satori, token, hub, airdrop, rewards, owner, alice, bob, carol, dave, TOTAL;
 
   beforeEach(async function () {
     const fix = await deploySatoriFixture();
-    ({ satori, token, airdrop, rewards, owner } = fix);
+    ({ satori, token, hub, airdrop, rewards, owner } = fix);
     [, alice, bob, carol, dave] = fix.signers;
     TOTAL = await airdrop.AIRDROP_TOTAL_SUPPLY();
   });
 
   // The fixture points the door at `airdrop` and seeds every token slot with
-  // owner, who is also the loader: owner freezes, then finalizes.
+  // owner, who is also the loader. Finalize closes loading; claims never wait
+  // for it.
   async function openClaims() {
-    await freezeStandingAirdrop(token, owner);
     await airdrop.connect(owner).finalizeAirdropLoading();
   }
 
@@ -93,122 +103,57 @@ describe("[adv] AIRDROP — whole allocation at finalize (SatoriAirdrop)", funct
   }
 
   // ================================================================
-  // A1 — the finalize gate
+  // A1 — claims on load
   // ================================================================
-  describe("A1 finalize gate (claim before finalize, finalize before the freeze, abandoned contract)", function () {
-    it("never finalized: years later, door frozen, every door still reverts ClaimsNotOpen and nothing mints", async function () {
-      await airdrop.connect(owner).loadAirdropBatch([alice.address], [E(100000)]);
-      await time.increase(10n * YEAR);
-      // The freeze alone opens nothing.
-      await freezeStandingAirdrop(token, owner);
-      expect(await airdrop.claimableAirdrop(alice.address)).to.equal(0n);
-      await expect(airdrop.connect(alice).claimAirdrop())
-        .to.be.revertedWithCustomError(airdrop, "ClaimsNotOpen");
-      await expect(airdrop.connect(bob).claimAirdropFor(alice.address))
-        .to.be.revertedWithCustomError(airdrop, "ClaimsNotOpen");
-      await expect(airdrop.connect(bob).claimAirdropForMany([alice.address]))
-        .to.be.revertedWithCustomError(airdrop, "ClaimsNotOpen");
-      // The gate fires before the loop: not even an empty sweep gets through.
-      await expect(airdrop.connect(bob).claimAirdropForMany([]))
-        .to.be.revertedWithCustomError(airdrop, "ClaimsNotOpen");
-      expect(await token.airdropMinted()).to.equal(0n);
-      expect(await satori.balanceOf(alice.address)).to.equal(0n);
-    });
-
-    it("finalize before the freeze reverts AirdropNotFrozen; claims stay shut and the table stays open", async function () {
-      await airdrop.connect(owner).loadAirdropBatch([alice.address], [E(1000)]);
-      expect(await token.airdrop()).to.equal(await airdrop.getAddress());
-      expect(await token.airdropFrozen()).to.equal(false);
-
-      await expect(airdrop.connect(owner).finalizeAirdropLoading())
-        .to.be.revertedWithCustomError(airdrop, "AirdropNotFrozen");
+  describe("A1 claims on load (no finalize, no freeze)", function () {
+    it("every door pays the WHOLE allocation in the block right after the load — finalize never called", async function () {
+      const alloc = E(1000);
+      await airdrop.connect(owner).loadAirdropBatch([alice.address, bob.address, carol.address], [alloc, alloc, alloc]);
       expect(await airdrop.airdropLoadingFinalized()).to.equal(false);
       await expect(airdrop.connect(alice).claimAirdrop())
-        .to.be.revertedWithCustomError(airdrop, "ClaimsNotOpen");
-      await airdrop.connect(owner).loadAirdropBatch([bob.address], [E(1)]);
-
-      await openClaims();
-      await airdrop.connect(alice).claimAirdrop();
-      expect(await satori.balanceOf(alice.address)).to.equal(E(1000));
+        .to.emit(airdrop, "AirdropClaimed").withArgs(alice.address, alloc);
+      await expect(airdrop.connect(dave).claimAirdropFor(bob.address))
+        .to.emit(airdrop, "AirdropClaimed").withArgs(bob.address, alloc);
+      expect(await airdrop.connect(dave).claimAirdropForMany.staticCall([carol.address])).to.equal(alloc);
+      await airdrop.connect(dave).claimAirdropForMany([carol.address]);
+      for (const w of [alice, bob, carol]) expect(await satori.balanceOf(w.address)).to.equal(alloc);
+      expect(await satori.balanceOf(dave.address)).to.equal(0n);
     });
 
-    it("a wrong table replaced before the freeze: once the door is frozen to the corrected contract, the abandoned one can never finalize or load; only the corrected one pays", async function () {
-      await airdrop.connect(owner).loadAirdropBatch([alice.address], [E(1000)]);
-      const fixed = await deployAirdrop(owner.address);
-      await fixed.connect(owner).loadAirdropBatch([alice.address], [E(2000)]);
-      await token.connect(owner).setAirdrop(await fixed.getAddress());
-      await freezeStandingAirdrop(token, owner);
-
-      // Frozen, but to the other contract — and it can never point back.
-      expect(await token.airdropFrozen()).to.equal(true);
-      await expect(airdrop.connect(owner).finalizeAirdropLoading())
-        .to.be.revertedWithCustomError(airdrop, "AirdropNotFrozen");
-      await expect(token.connect(owner).setAirdrop(await airdrop.getAddress()))
-        .to.be.revertedWithCustomError(token, "Frozen");
-      await expect(airdrop.connect(owner).finalizeAirdropLoading())
-        .to.be.revertedWithCustomError(airdrop, "AirdropNotFrozen");
-      await expect(airdrop.connect(owner).loadAirdropBatch([bob.address], [E(1)]))
-        .to.be.revertedWithCustomError(airdrop, "AirdropLoadingClosed");
-
-      await fixed.connect(owner).finalizeAirdropLoading();
-      await fixed.connect(alice).claimAirdrop();
-      expect(await satori.balanceOf(alice.address)).to.equal(E(2000));
-      await expect(airdrop.connect(alice).claimAirdrop())
-        .to.be.revertedWithCustomError(airdrop, "ClaimsNotOpen");
-      expect(await token.airdropMinted()).to.equal(E(2000));
-    });
-
-    it("every door pays the WHOLE allocation in the block right after finalize — no wait", async function () {
-      const alloc = E(250000) + 3n;
-      await airdrop.connect(owner).loadAirdropBatch([alice.address], [alloc]);
-      await freezeStandingAirdrop(token, owner);
-
-      const doors = {
-        claimAirdrop: () => airdrop.connect(alice).claimAirdrop(),
-        claimAirdropFor: () => airdrop.connect(bob).claimAirdropFor(alice.address),
-        claimAirdropForMany: () => airdrop.connect(bob).claimAirdropForMany([alice.address]),
-      };
-      for (const [name, door] of Object.entries(doors)) {
-        const snap = await takeSnapshot();
-        await expect(door(), `${name} before finalize`)
-          .to.be.revertedWithCustomError(airdrop, "ClaimsNotOpen");
-        await expect(airdrop.connect(owner).finalizeAirdropLoading())
-          .to.emit(airdrop, "AirdropLoadingFinalized").withArgs(alloc);
-        await expect(door(), `${name} after finalize`)
-          .to.emit(airdrop, "AirdropClaimed").withArgs(alice.address, alloc);
-        expect(await satori.balanceOf(alice.address), `${name} paid`).to.equal(alloc);
-        expect(await satori.balanceOf(bob.address), `${name} caller`).to.equal(0n);
-        await snap.restore();
-      }
-    });
-
-    it("inside the finalize block, a claim ordered before finalize reverts and one ordered after it pays", async function () {
-      const alloc = E(1000);
-      await airdrop.connect(owner).loadAirdropBatch([alice.address], [alloc]);
-      await freezeStandingAirdrop(token, owner);
-
-      // One sender with consecutive nonces fixes the order inside the block.
-      // Explicit gas limits: estimation would refuse to send the first claim.
-      const nonce = await ethers.provider.getTransactionCount(owner.address);
-      const opt = (i) => ({ gasLimit: 500000, nonce: nonce + i });
+    it("inside the load block, a claim ordered before the load reverts and one ordered after it pays", async function () {
+      const gas = { gasLimit: 500000 };
+      const nonce = await ethers.provider.getTransactionCount(alice.address);
+      const opt = (i) => ({ ...gas, nonce: nonce + i });
       await ethers.provider.send("evm_setAutomine", [false]);
       let txs;
       try {
         txs = [
-          await airdrop.connect(owner).claimAirdropFor(alice.address, opt(0)),
-          await airdrop.connect(owner).finalizeAirdropLoading(opt(1)),
-          await airdrop.connect(owner).claimAirdropFor(alice.address, opt(2)),
+          await airdrop.connect(alice).claimAirdrop(opt(0)),
+          await airdrop.connect(owner).loadAirdropBatch([alice.address], [E(7)], gas),
+          await airdrop.connect(alice).claimAirdrop(opt(1)),
         ];
         await ethers.provider.send("evm_mine", []);
       } finally {
         await ethers.provider.send("evm_setAutomine", [true]);
       }
+      const r = await Promise.all(txs.map((t) => ethers.provider.getTransactionReceipt(t.hash)));
+      expect(new Set(r.map((x) => x.blockNumber)).size, "one block").to.equal(1);
+      expect(r[0].status, "claim before the load").to.equal(0);
+      expect(r[1].status, "load").to.equal(1);
+      expect(r[2].status, "claim after the load").to.equal(1);
+      expect(await satori.balanceOf(alice.address)).to.equal(E(7));
+    });
 
-      const receipts = await Promise.all(txs.map((t) => ethers.provider.getTransactionReceipt(t.hash)));
-      expect(new Set(receipts.map((r) => r.blockNumber)).size, "one block").to.equal(1);
-      expect(receipts.map((r) => r.status)).to.deep.equal([0, 1, 1]);
-      expect(await satori.balanceOf(alice.address)).to.equal(alloc);
-      expect(await airdrop.airdropClaimedTotal()).to.equal(alloc);
+    it("loading continues while people claim, years apart; finalize later changes nothing for claimers", async function () {
+      await airdrop.connect(owner).loadAirdropBatch([alice.address], [E(100)]);
+      await airdrop.connect(alice).claimAirdrop();
+      await time.increase(2n * YEAR);
+      await airdrop.connect(owner).loadAirdropBatch([bob.address], [E(200)]);
+      await openClaims();
+      await airdrop.connect(bob).claimAirdrop();
+      expect(await token.airdropMinted()).to.equal(E(300));
+      await expect(airdrop.connect(alice).claimAirdrop())
+        .to.be.revertedWithCustomError(airdrop, "NothingToClaim");
     });
   });
 
@@ -244,24 +189,16 @@ describe("[adv] AIRDROP — whole allocation at finalize (SatoriAirdrop)", funct
       expect(await satori.balanceOf(alice.address)).to.equal(E(1000));
     });
 
-    it("a stranger cannot finalize — not before the freeze, not after it", async function () {
+    it("a stranger cannot finalize, and a failed attempt leaves loading open", async function () {
       await airdrop.connect(owner).loadAirdropBatch([alice.address], [E(1000)]);
-      const strangersTry = async () => {
-        for (const who of [alice, bob]) {
-          await expect(airdrop.connect(who).finalizeAirdropLoading())
-            .to.be.revertedWithCustomError(airdrop, "Unauthorized");
-        }
-      };
-      await strangersTry();
-      await freezeStandingAirdrop(token, owner);
-      await strangersTry();
-
+      for (const who of [alice, bob]) {
+        await expect(airdrop.connect(who).finalizeAirdropLoading())
+          .to.be.revertedWithCustomError(airdrop, "Unauthorized");
+      }
       expect(await airdrop.airdropLoadingFinalized()).to.equal(false);
-      await expect(airdrop.connect(alice).claimAirdrop())
-        .to.be.revertedWithCustomError(airdrop, "ClaimsNotOpen");
-      // The freeze closed the table: not even the loader adds a row.
-      await expect(airdrop.connect(owner).loadAirdropBatch([bob.address], [E(1)]))
-        .to.be.revertedWithCustomError(airdrop, "AirdropLoadingClosed");
+      await airdrop.connect(owner).loadAirdropBatch([bob.address], [E(1)]);
+      await airdrop.connect(alice).claimAirdrop();
+      expect(await satori.balanceOf(alice.address)).to.equal(E(1000));
     });
 
     it("finalizing an EMPTY table closes it empty for good: every claim pays nothing", async function () {
@@ -277,47 +214,35 @@ describe("[adv] AIRDROP — whole allocation at finalize (SatoriAirdrop)", funct
   });
 
   // ================================================================
-  // A3 — OVER-LOAD: the freeze refuses it, so nobody is ever stranded
+  // A3 — OVER-LOAD: loading refuses it, so every loaded row is payable
   // ================================================================
   describe("A3 over-load (Σ load > cap)", function () {
-    it("loads 1.5x cap across 3; the freeze refuses it, so nothing ever opens", async function () {
+    it("a batch taking the table past the cap reverts BudgetExceeded atomically; earlier rows stay and pay", async function () {
       const half = TOTAL / 2n;
-      await airdrop.connect(owner).loadAirdropBatch(
-        [alice.address, bob.address, carol.address],
-        [half, half, half]
-      );
-      expect(await airdrop.airdropLoadedTotal()).to.equal((TOTAL * 3n) / 2n);
-      await expect(freezeStandingAirdrop(token, owner))
-        .to.be.revertedWithCustomError(token, "BudgetExceeded");
-      await expect(airdrop.connect(owner).finalizeAirdropLoading())
-        .to.be.revertedWithCustomError(airdrop, "AirdropNotFrozen");
-      for (const w of [alice, bob, carol]) {
-        await expect(airdrop.connect(w).claimAirdrop())
-          .to.be.revertedWithCustomError(airdrop, "ClaimsNotOpen");
-      }
-      expect(await token.airdropMinted()).to.equal(0n);
+      await airdrop.connect(owner).loadAirdropBatch([alice.address, bob.address], [half, half]);
+      await expect(airdrop.connect(owner).loadAirdropBatch([carol.address], [half]))
+        .to.be.revertedWithCustomError(airdrop, "BudgetExceeded");
+      expect(await airdrop.airdropAllocation(carol.address)).to.equal(0n);
+      expect(await airdrop.airdropLoadedTotal()).to.equal(half * 2n);
+      await airdrop.connect(dave).claimAirdropForMany([alice.address, bob.address]);
+      expect(await token.airdropMinted()).to.equal(half * 2n);
     });
 
-    it("a table 4 SATORI over the cap refuses to freeze; the corrected table freezes at exactly the cap and pays every row in full", async function () {
-      await airdrop.connect(owner).loadAirdropBatch(
-        [alice.address, dave.address, bob.address],
-        [TOTAL - E(10), E(4), E(10)]
-      );
-      await expect(freezeStandingAirdrop(token, owner))
-        .to.be.revertedWithCustomError(token, "BudgetExceeded");
-
-      const fixed = await deployAirdrop(owner.address);
-      await fixed.connect(owner).loadAirdropBatch(
-        [alice.address, dave.address, bob.address],
-        [TOTAL - E(10), E(4), E(6)]
-      );
-      await token.connect(owner).setAirdrop(await fixed.getAddress());
-      await freezeStandingAirdrop(token, owner);
-      await fixed.connect(owner).finalizeAirdropLoading();
-      await fixed.connect(carol).claimAirdropForMany([alice.address, dave.address, bob.address]);
-      expect(await satori.balanceOf(dave.address)).to.equal(E(4));
-      expect(await satori.balanceOf(bob.address)).to.equal(E(6));
+    it("the cap is 1,100,000: exactly the cap loads, one wei more is refused, and every row pays in full", async function () {
+      expect(TOTAL).to.equal(E(1100000));
+      await airdrop.connect(owner).loadAirdropBatch([alice.address, bob.address], [TOTAL - 4n, 4n]);
+      await expect(airdrop.connect(owner).loadAirdropBatch([carol.address], [1n]))
+        .to.be.revertedWithCustomError(airdrop, "BudgetExceeded");
+      await airdrop.connect(dave).claimAirdropForMany([alice.address, bob.address]);
       expect(await token.airdropMinted()).to.equal(TOTAL);
+      expect(await satori.balanceOf(bob.address)).to.equal(4n);
+    });
+
+    it("an over-cap row inside one batch reverts the whole batch, before any row lands", async function () {
+      await expect(airdrop.connect(owner).loadAirdropBatch([alice.address, bob.address], [E(1), TOTAL]))
+        .to.be.revertedWithCustomError(airdrop, "BudgetExceeded");
+      expect(await airdrop.airdropAllocation(alice.address)).to.equal(0n);
+      expect(await airdrop.airdropLoadedTotal()).to.equal(0n);
     });
   });
 
@@ -469,10 +394,8 @@ describe("[adv] AIRDROP — whole allocation at finalize (SatoriAirdrop)", funct
       // Impersonating the airdrop address, a direct airdropMint past the cap
       // reverts — the token cap is enforced regardless of the caller.
       const ad = await asRewards(airdrop);
-      await expect(
-        token.connect(ad).airdropMint(alice.address, 1n)
-      ).to.be.revertedWithCustomError(token, "AirdropNotFrozen");
-      await freezeStandingAirdrop(token, owner);
+      await token.connect(ad).airdropMint(alice.address, 1n);
+      expect(await satori.balanceOf(alice.address)).to.equal(1n);
       await expect(
         token.connect(ad).airdropMint(alice.address, TOTAL + 1n)
       ).to.be.revertedWithCustomError(token, "BudgetExceeded");
@@ -507,7 +430,6 @@ describe("[adv] AIRDROP — whole allocation at finalize (SatoriAirdrop)", funct
       ).to.be.revertedWithCustomError(airdrop, "Unauthorized");
       await airdrop.connect(alice).loadAirdropBatch([bob.address], [E(1)]);
       expect(await airdrop.airdropAllocation(bob.address)).to.equal(E(1));
-      await freezeStandingAirdrop(token, owner);
       await expect(
         airdrop.connect(owner).finalizeAirdropLoading()
       ).to.be.revertedWithCustomError(airdrop, "Unauthorized");
@@ -533,27 +455,26 @@ describe("[adv] AIRDROP — whole allocation at finalize (SatoriAirdrop)", funct
         const supply = await satori.totalSupply();
         const rmint = await satori.totalRewardsMinted();
         const amint = await airdrop.airdropClaimedTotal();
-        expect(supply).to.equal(rmint + amint);
+        expect(supply + (await burnedTotal(token))).to.equal(rmint + amint);
       };
 
       await identity();
-      await expect(airdrop.connect(alice).claimAirdrop())
-        .to.be.revertedWithCustomError(airdrop, "ClaimsNotOpen");
-      await identity();
-
-      // The genesis INITIAL_MINT already fills the round-0 on-chain reward lane,
-      // so advance a round to open fresh reward budget before the first
-      // rewardMint.
-      await openClaims();
       await time.increase(DAY);
+      await report(hub, rw, E(10));
+      await identity();
       await satori.connect(rw).rewardMint(carol.address, E(10));
       await identity();
       await airdrop.connect(alice).claimAirdrop();
       await identity();
 
-      // Advance another round; another rewardMint (fresh budget), then bob claims.
+      // Another round: another report + rewardMint, the fee booked on both paid
+      // out, then bob claims.
       await time.increase(DAY);
+      await report(hub, rw, E(50));
       await satori.connect(rw).rewardMint(dave.address, E(50));
+      await identity();
+      expect(await token.mintDevFee.staticCall()).to.be.gt(0n);
+      await token.mintDevFee();
       await identity();
       await airdrop.connect(bob).claimAirdrop();
       await identity();
@@ -575,34 +496,26 @@ describe("[adv] AIRDROP — whole allocation at finalize (SatoriAirdrop)", funct
   });
 
   // ================================================================
-  // A9 — loading after the freeze is refused, whoever holds the loader role
+  // A9 — loading after finalize is refused, whoever holds the loader role
   // ================================================================
-  describe("A9 loading after the freeze is refused", function () {
-    it("the freeze alone closes the table, before finalize: the loader, a rotated loader and a recalled one are all refused", async function () {
+  describe("A9 loading after finalize is refused", function () {
+    it("before finalize the loader, a rotated loader and a recalled one all load; after it none can", async function () {
       await airdrop.connect(owner).loadAirdropBatch([alice.address], [E(1000)]);
-      await freezeStandingAirdrop(token, owner);
-      expect(await airdrop.airdropLoadingFinalized()).to.equal(false);
-
-      await expect(airdrop.connect(owner).loadAirdropBatch([bob.address], [E(1)]))
-        .to.be.revertedWithCustomError(airdrop, "AirdropLoadingClosed");
       await airdrop.connect(owner).setAirdropAuthority(carol.address);
-      await expect(airdrop.connect(carol).loadAirdropBatch([carol.address], [TOTAL]))
-        .to.be.revertedWithCustomError(airdrop, "AirdropLoadingClosed");
-      // Move the token's appoint authority to bob and let him recall the role.
+      await airdrop.connect(carol).loadAirdropBatch([carol.address], [E(2)]);
       await token.connect(owner).setAppointAuthority(bob.address);
       await airdrop.connect(bob).setAirdropAuthority(dave.address);
-      await expect(airdrop.connect(dave).loadAirdropBatch([dave.address], [TOTAL]))
-        .to.be.revertedWithCustomError(airdrop, "AirdropLoadingClosed");
+      await airdrop.connect(dave).loadAirdropBatch([dave.address], [E(3)]);
 
-      // Exactly the table loaded before the freeze opens, and pays.
       await expect(airdrop.connect(dave).finalizeAirdropLoading())
-        .to.emit(airdrop, "AirdropLoadingFinalized").withArgs(E(1000));
-      await airdrop.connect(alice).claimAirdrop();
-      for (const w of [bob, carol, dave]) {
-        await expect(airdrop.connect(w).claimAirdrop())
-          .to.be.revertedWithCustomError(airdrop, "NothingToClaim");
-      }
-      expect(await token.airdropMinted()).to.equal(E(1000));
+        .to.emit(airdrop, "AirdropLoadingFinalized").withArgs(E(1005));
+      await expect(airdrop.connect(dave).loadAirdropBatch([bob.address], [E(1)]))
+        .to.be.revertedWithCustomError(airdrop, "AirdropLoadingClosed");
+      await airdrop.connect(bob).setAirdropAuthority(carol.address);
+      await expect(airdrop.connect(carol).loadAirdropBatch([bob.address], [E(1)]))
+        .to.be.revertedWithCustomError(airdrop, "AirdropLoadingClosed");
+      await airdrop.connect(dave).claimAirdropForMany([alice.address, carol.address, dave.address]);
+      expect(await token.airdropMinted()).to.equal(E(1005));
     });
 
     it("the loader cannot add a recipient right after finalize, after a claim, or years later", async function () {
@@ -659,16 +572,12 @@ describe("[adv] AIRDROP — whole allocation at finalize (SatoriAirdrop)", funct
   // A10 — claimableAirdrop view exactness
   // ================================================================
   describe("A10 view exactness", function () {
-    it("claimableAirdrop is 0 before finalize, the exact allocation right after, exactly what the claim mints, then 0", async function () {
+    it("claimableAirdrop is the exact allocation right after the load, exactly what the claim mints, then 0", async function () {
       // Odd wei on every row: the whole allocation must arrive to the wei.
-      const amts = [E(333333) + 7n, 1n, E(800000) + 123456789n];
+      const amts = [E(333333) + 7n, 1n, E(700000) + 123456789n];
       const who = [alice, bob, carol];
       await airdrop.connect(owner).loadAirdropBatch(who.map((w) => w.address), amts);
 
-      for (const w of who) expect(await airdrop.claimableAirdrop(w.address)).to.equal(0n);
-      await freezeStandingAirdrop(token, owner);
-      for (const w of who) expect(await airdrop.claimableAirdrop(w.address)).to.equal(0n);
-      await airdrop.connect(owner).finalizeAirdropLoading();
 
       // The sweep's dry-run quote equals the sum of the views.
       let viewSum = 0n;
@@ -764,12 +673,19 @@ describe("[adv] AIRDROP — whole allocation at finalize (SatoriAirdrop)", funct
       // Load alice for a big slice.
       await airdrop.connect(owner).loadAirdropBatch([alice.address], [E(500000)]);
       await openClaims();
-      // A fresh round: the genesis mint fills round 0's on-chain reward lane.
       await time.increase(DAY);
+      // Rewards reports everything the priced rounds allow: the on-chain lane's
+      // whole headroom.
+      await hub.connect(rw).freezeRoundGross(await hub.getCurrentRound());
+      const reported = await allowanceRoom(hub, token);
+      expect(reported).to.be.gt(0n);
+      await hub.connect(rw).noteIssued(reported);
 
       // Snapshot the reward lane before the airdrop claim.
       const rmintBefore = await satori.totalRewardsMinted();
       const onChainMintBefore = await satori.onChainMinted();
+      const ceilingBefore = await satori.onChainRewardCeiling();
+      const accruedBefore = (await token.generalAccrued()) + (await token.devFeeAccrued());
 
       // Claim 500k SATORI of airdrop.
       await airdrop.connect(alice).claimAirdrop();
@@ -777,12 +693,14 @@ describe("[adv] AIRDROP — whole allocation at finalize (SatoriAirdrop)", funct
       // The reward lane counters are UNTOUCHED by the airdrop mint.
       expect(await satori.totalRewardsMinted()).to.equal(rmintBefore);
       expect(await satori.onChainMinted()).to.equal(onChainMintBefore);
+      expect((await token.generalAccrued()) + (await token.devFeeAccrued())).to.equal(accruedBefore);
 
       // And the on-chain reward ceiling is unchanged — the airdrop didn't eat
-      // into the round budget.
+      // into the reported room.
       const ceiling = await satori.onChainRewardCeiling();
+      expect(ceiling).to.equal(ceilingBefore);
       const headroom = ceiling - (await satori.onChainMinted());
-      expect(headroom).to.be.gt(0n);
+      expect(headroom).to.equal(reported);
 
       // Sanity: a rewardMint up to the remaining headroom still succeeds AFTER
       // a 500k airdrop mint — proving the airdrop didn't steal reward budget.
@@ -800,13 +718,14 @@ describe("[adv] AIRDROP — whole allocation at finalize (SatoriAirdrop)", funct
       await openClaims();
       await time.increase(DAY);
 
-      // Fill the on-chain reward lane to its current ceiling, in the same round
-      // the claim lands in.
+      // Report the whole allowance and fill the on-chain reward lane to its
+      // ceiling, in the same round the claim lands in.
+      await hub.connect(rw).freezeRoundGross(await hub.getCurrentRound());
+      await hub.connect(rw).noteIssued(await allowanceRoom(hub, token));
       const ceiling = await satori.onChainRewardCeiling();
       const headroom = ceiling - (await satori.onChainMinted());
-      if (headroom > 0n) {
-        await satori.connect(rw).rewardMint(carol.address, headroom);
-      }
+      expect(headroom).to.be.gt(0n);
+      await satori.connect(rw).rewardMint(carol.address, headroom);
       // Reward lane is now full: a further rewardMint reverts.
       await expect(
         satori.connect(rw).rewardMint(carol.address, 1n)
@@ -820,124 +739,69 @@ describe("[adv] AIRDROP — whole allocation at finalize (SatoriAirdrop)", funct
       expect(await satori.totalRewardsMinted()).to.equal(rmintBefore);
       // The airdrop lane advanced by exactly the claimed amount.
       expect(await airdrop.airdropClaimedTotal()).to.equal(E(250000));
+      // ...and gave the full reward lane no room either.
+      await expect(
+        satori.connect(rw).rewardMint(carol.address, 1n)
+      ).to.be.revertedWithCustomError(satori, "BudgetExceeded");
     });
   });
 
   // ================================================================
-  // A13 — the door: no mint while re-pointable, no new claim once final
+  // A13 — the door: re-pointable, but never pays twice or past the cap
   // ================================================================
-  describe("A13 the airdrop door (re-pointable vs frozen)", function () {
-    it("while the door can be re-pointed no SatoriAirdrop mints — not the loaded contract, not a rival the door is pointed at", async function () {
+  describe("A13 the airdrop door (re-pointable)", function () {
+    it("only the contract the door points at mints; re-pointing switches which one pays", async function () {
       await airdrop.connect(owner).loadAirdropBatch([alice.address], [E(1000)]);
-      // A rival contract naming bob as its loader, loaded with the whole cap.
-      const rival = await deployAirdrop(bob.address);
-      await rival.connect(bob).loadAirdropBatch([bob.address], [TOTAL]);
-
-      const nothingOpens = async (label) => {
-        await expect(airdrop.connect(owner).finalizeAirdropLoading(), `${label}: finalize`)
-          .to.be.revertedWithCustomError(airdrop, "AirdropNotFrozen");
-        await expect(rival.connect(bob).finalizeAirdropLoading(), `${label}: rival finalize`)
-          .to.be.revertedWithCustomError(rival, "AirdropNotFrozen");
-        await expect(airdrop.connect(alice).claimAirdrop(), `${label}: claim`)
-          .to.be.revertedWithCustomError(airdrop, "ClaimsNotOpen");
-        await expect(rival.connect(bob).claimAirdrop(), `${label}: rival claim`)
-          .to.be.revertedWithCustomError(rival, "ClaimsNotOpen");
-        expect(await token.airdropMinted(), `${label}: minted`).to.equal(0n);
-      };
-
-      await nothingOpens("door at the loaded contract");
-      // The wiring key (wrong, or compromised) points the door at the rival.
-      await token.connect(owner).setAirdrop(await rival.getAddress());
-      await nothingOpens("door at the rival");
-      await token.connect(owner).setAirdrop(await airdrop.getAddress());
-      await nothingOpens("door pointed back");
-      expect(await satori.balanceOf(bob.address)).to.equal(0n);
-    });
-
-    it("after freeze + finalize no key and no redeploy adds anything claimable", async function () {
-      await airdrop.connect(owner).loadAirdropBatch([alice.address], [E(1000)]);
-      // A rival loaded before the freeze, waiting for the door.
       const rival = await deployAirdrop(bob.address);
       await rival.connect(bob).loadAirdropBatch([bob.address], [E(5000)]);
-      await openClaims();
-      // One deployed after the freeze cannot even be loaded.
-      const late = await deployAirdrop(bob.address);
-      await expect(late.connect(bob).loadAirdropBatch([bob.address], [E(5000)]))
-        .to.be.revertedWithCustomError(late, "AirdropLoadingClosed");
 
-      // Root hands bob the wiring slot: the door still cannot move.
-      await token.connect(owner).setWiringAuthority(bob.address);
-      for (const c of [rival, late]) {
-        await expect(token.connect(bob).setAirdrop(await c.getAddress()))
-          .to.be.revertedWithCustomError(token, "Frozen");
-        await expect(c.connect(bob).finalizeAirdropLoading())
-          .to.be.revertedWithCustomError(c, "AirdropNotFrozen");
-        await expect(c.connect(bob).claimAirdrop())
-          .to.be.revertedWithCustomError(c, "ClaimsNotOpen");
-      }
-      // Nor does the finalized table grow.
-      await expect(airdrop.connect(owner).loadAirdropBatch([bob.address], [E(5000)]))
-        .to.be.revertedWithCustomError(airdrop, "AirdropLoadingClosed");
-      await expect(airdrop.connect(bob).claimAirdrop())
-        .to.be.revertedWithCustomError(airdrop, "NothingToClaim");
-
+      await expect(rival.connect(bob).claimAirdrop())
+        .to.be.revertedWithCustomError(token, "Unauthorized");
+      await token.connect(owner).setAirdrop(await rival.getAddress());
+      await expect(airdrop.connect(alice).claimAirdrop())
+        .to.be.revertedWithCustomError(token, "Unauthorized");
+      await rival.connect(bob).claimAirdrop();
+      await token.connect(owner).setAirdrop(await airdrop.getAddress());
       await airdrop.connect(alice).claimAirdrop();
-      expect(await token.airdropMinted()).to.equal(E(1000));
-      expect(await satori.balanceOf(bob.address)).to.equal(0n);
+      expect(await token.airdropMinted()).to.equal(E(6000));
     });
 
-    it("a renounced wiring authority does not lock the door: finalize still needs the freeze", async function () {
+    it("a replacement table never pays anyone twice: it pays only past the token's airdropMintedTo", async function () {
+      await airdrop.connect(owner).loadAirdropBatch([alice.address], [E(1000)]);
+      await airdrop.connect(alice).claimAirdrop();
+      const repl = await deployAirdrop(owner.address);
+      await repl.connect(owner).loadAirdropBatch([alice.address, bob.address], [E(1000), E(10)]);
+      await token.connect(owner).setAirdrop(await repl.getAddress());
+      await expect(repl.connect(alice).claimAirdrop())
+        .to.be.revertedWithCustomError(repl, "NothingToClaim");
+      expect(await repl.connect(dave).claimAirdropForMany.staticCall([alice.address, bob.address])).to.equal(E(10));
+      await repl.connect(dave).claimAirdropForMany([alice.address, bob.address]);
+      expect(await satori.balanceOf(alice.address)).to.equal(E(1000));
+      expect(await token.airdropMinted()).to.equal(E(1010));
+    });
+
+    it("the cap binds across contracts: tables on two contracts can never mint past it together", async function () {
+      await airdrop.connect(owner).loadAirdropBatch([alice.address], [TOTAL]);
+      await airdrop.connect(alice).claimAirdrop();
+      const rival = await deployAirdrop(bob.address);
+      await rival.connect(bob).loadAirdropBatch([bob.address], [E(1)]);
+      await token.connect(owner).setAirdrop(await rival.getAddress());
+      await expect(rival.connect(bob).claimAirdrop())
+        .to.be.revertedWithCustomError(token, "BudgetExceeded");
+      expect(await token.airdropMinted()).to.equal(TOTAL);
+    });
+
+    it("an emptied wiring slot locks the door (airdropLocked) and claims keep working", async function () {
       await airdrop.connect(owner).loadAirdropBatch([alice.address], [E(1000)]);
       await token.connect(owner).setWiringAuthority(ethers.ZeroAddress);
-      // The token's airdropLocked view counts an emptied slot; finalize does not.
       expect(await token.airdropLocked()).to.equal(true);
-      expect(await token.airdropFrozen()).to.equal(false);
-
-      await expect(airdrop.connect(owner).finalizeAirdropLoading())
-        .to.be.revertedWithCustomError(airdrop, "AirdropNotFrozen");
-      await expect(airdrop.connect(alice).claimAirdrop())
-        .to.be.revertedWithCustomError(airdrop, "ClaimsNotOpen");
-      expect(await token.airdropMinted()).to.equal(0n);
-
-      await openClaims();
+      await expect(token.connect(owner).setAirdrop(bob.address))
+        .to.be.revertedWithCustomError(token, "Unauthorized");
       await airdrop.connect(alice).claimAirdrop();
       expect(await satori.balanceOf(alice.address)).to.equal(E(1000));
-    });
-
-    it("renounce wiring, root refills it, door moves to a rival: only a real freeze lets one contract finalize, never the other", async function () {
-      await airdrop.connect(owner).loadAirdropBatch([alice.address], [E(1000)]);
-      const rival = await deployAirdrop(bob.address);
-      await rival.connect(bob).loadAirdropBatch([bob.address], [E(5000)]);
-
-      await token.connect(owner).setWiringAuthority(ethers.ZeroAddress);
-      await expect(airdrop.connect(owner).finalizeAirdropLoading())
-        .to.be.revertedWithCustomError(airdrop, "AirdropNotFrozen");
-
-      // Root refills the slot and the new holder moves the door.
+      // Root can refill the slot, which unlocks the door again.
       await token.connect(owner).setWiringAuthority(bob.address);
-      await token.connect(bob).setAirdrop(await rival.getAddress());
-      await expect(rival.connect(bob).finalizeAirdropLoading())
-        .to.be.revertedWithCustomError(rival, "AirdropNotFrozen");
-      // Emptying the slot again, door at the rival, still opens nothing.
-      await token.connect(owner).setWiringAuthority(ethers.ZeroAddress);
-      await expect(rival.connect(bob).finalizeAirdropLoading())
-        .to.be.revertedWithCustomError(rival, "AirdropNotFrozen");
-      await expect(airdrop.connect(owner).finalizeAirdropLoading())
-        .to.be.revertedWithCustomError(airdrop, "AirdropNotFrozen");
-      expect(await token.airdropMinted()).to.equal(0n);
-
-      // A real freeze, to the rival: the rival can finalize; the first contract never can.
-      await freezeStandingAirdrop(token, owner);
-      await rival.connect(bob).finalizeAirdropLoading();
-      await expect(airdrop.connect(owner).finalizeAirdropLoading())
-        .to.be.revertedWithCustomError(airdrop, "AirdropNotFrozen");
-      await expect(airdrop.connect(alice).claimAirdrop())
-        .to.be.revertedWithCustomError(airdrop, "ClaimsNotOpen");
-      expect(await airdrop.airdropLoadingFinalized()).to.equal(false);
-
-      await rival.connect(bob).claimAirdrop();
-      expect(await token.airdropMinted()).to.equal(E(5000));
-      expect(await satori.balanceOf(alice.address)).to.equal(0n);
+      expect(await token.airdropLocked()).to.equal(false);
     });
   });
 });

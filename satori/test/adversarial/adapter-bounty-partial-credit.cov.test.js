@@ -11,7 +11,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { loadFixture, time } = require("@nomicfoundation/hardhat-network-helpers");
-const { deploySatoriFixture } = require("../fixtures");
+const { deploySatoriFixture, ensureAdapterBountyToken } = require("../fixtures");
 
 const ROUND = 86400;
 async function advanceRound() { await time.increase(ROUND); }
@@ -35,6 +35,7 @@ async function stakeFor(bounties, user, token, amount) {
 async function fundBounty(bounties, funder, gameId, token, amount, rate) {
   await token.mint(funder.address, amount);
   await token.connect(funder).approve(await bounties.getAddress(), amount);
+  await ensureAdapterBountyToken(bounties, gameId, token);
   await bounties.connect(funder).fundBounty(gameId, await token.getAddress(), amount, rate);
 }
 

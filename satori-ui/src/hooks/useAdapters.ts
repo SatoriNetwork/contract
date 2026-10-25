@@ -3,7 +3,6 @@ import { ethers } from 'ethers';
 import { useContracts } from './useContracts';
 import { multicallRead } from '../utils/multicall';
 import { explainError } from '../utils/errors';
-import { getStreamBurn } from '../lib/chainValues';
 import { afterTx } from '../lib/afterTx';
 
 // A registered STREAM adapter as enumerated from contracts.registry. Adapter
@@ -46,7 +45,7 @@ export function useAdapters(): {
     try {
       const [next, fee] = await Promise.all([
         contracts.cached.live.registry.nextAdapterId(),
-        getStreamBurn(),
+        contracts.reads.lens.registrationFee(),   // admin-set, so read live
       ]);
       setSpamFee(BigInt(fee));
 
@@ -97,8 +96,8 @@ export function useAdapters(): {
 
   useEffect(() => { load(); }, [load]);
 
-  // Permissionless registration. Charges streamBurn() SATORI via token.transferFrom
-  // to the hub (the caller must first approve the hub for streamBurn) and returns the freshly minted
+  // Permissionless registration. Charges registrationFee() SATORI via token.transferFrom
+  // to the hub (the caller must first approve the hub for registrationFee) and returns the freshly minted
   // adapter id parsed from the AdapterRegistered event in the receipt.
   //
   // The AdapterRegistered event is declared on the SatoriRegistry ABI (the

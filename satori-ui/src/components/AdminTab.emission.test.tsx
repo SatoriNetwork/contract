@@ -33,9 +33,9 @@ beforeEach(() => {
       rootPublisher: ZERO, offchainReporter: ZERO, merkleWired: false,
       devFeeBpsMin: 500, devFeeBpsMax: 2500, pendingDevFeeBps: 0, platformFeeBps: 1500,
       protocolFeePerRound: E(127), platformFeeRecipient: ADMIN, emissionRatePerRound: E(846.62),
-      currentRound: 3, offchainBudget: BigInt(0), onChainRewardCeiling: BigInt(0), merkleReserveCeiling: BigInt(0),
-      defaultStreamInitialized: true, airdropLoadedTotal: BigInt(0), airdropCap: E(1200000), airdropLoadingFinalized: false,
-      airdropPointsHere: true, airdropFrozen: false, freezeAuthority: ADMIN,
+      currentRound: 3, offchainBudget: BigInt(0), onChainRewardCeiling: BigInt(0), merkleReserveCeiling: BigInt(0), registrationFee: BigInt(1000000000000000),
+      defaultStreamInitialized: true, airdropLoadedTotal: BigInt(0), airdropCap: E(1100000), airdropLoadingFinalized: false,
+      airdropPointsHere: true, freezeAuthority: ADMIN,
       emission: {
         rateNow: E(846.62), rateNext: E(846.62), rateAfterStep: E(523.24),
         ratioWad: BigInt('618033988749894848'), stepsTaken: 0,
@@ -81,9 +81,8 @@ it('is disabled for a wallet that is not the holder', () => {
   expect((screen.getByTestId('btn-set-emission-ratio') as HTMLButtonElement).disabled).toBe(true);
 });
 
-describe('airdrop: load, freeze the door, then finalize', () => {
+describe('airdrop: load (claimable at once), then finalize to close loading', () => {
   const btn = (id: string) => screen.getByTestId(id) as HTMLButtonElement;
-  const typeChecked = (v: string) => fireEvent.change(screen.getByTestId('input-freeze-total'), { target: { value: v } });
   const typeBatch = () => fireEvent.change(screen.getByTestId('input-load-airdrop'), { target: { value: '0x00000000000000000000000000000000000000bb, 5' } });
   beforeEach(() => {
     mockOwner.data.airdropHolder = ADMIN;
@@ -99,28 +98,34 @@ describe('airdrop: load, freeze the door, then finalize', () => {
     expect(screen.queryByTestId('airdrop-load-closed')).toBeNull();
   });
 
-  it('the freeze closes the table: Load is shut, with the reason', () => {
-    mockOwner.data.airdropFrozen = true;
+  it('there is no freeze step anywhere on the page', () => {
+    render(<AdminTab />);
+    expect(screen.queryByTestId('btn-freeze-airdrop')).toBeNull();
+    expect(screen.queryByTestId('input-freeze-total')).toBeNull();
+    expect(screen.queryByTestId('airdrop-freeze-state')).toBeNull();
+    expect(screen.queryByText(/Freeze Airdrop Door/)).toBeNull();
+  });
+
+  it('says rows are claimable as soon as they land', () => {
+    render(<AdminTab />);
+    expect(screen.getByText(/claim their whole allocation from the moment its batch lands/)).toBeTruthy();
+  });
+
+  it('after finalize Load is shut, with the reason', () => {
+    mockOwner.data.airdropLoadingFinalized = true;
     render(<AdminTab />);
     typeBatch();
     expect((screen.getByTestId('input-load-airdrop') as HTMLTextAreaElement).disabled).toBe(true);
     expect(btn('btn-load-airdrop').disabled).toBe(true);
-    expect(screen.getByTestId('airdrop-load-closed').textContent).toMatch(/table is closed.*nothing more can be loaded/);
+    expect(screen.getByTestId('airdrop-load-closed').textContent).toMatch(/table is closed \(finalized\).*nothing more can be loaded/);
   });
 
-  it('a door frozen to another contract closes this table too', () => {
-    Object.assign(mockOwner.data, { airdropFrozen: true, airdropPointsHere: false });
+  it('a door pointing at another contract shuts Load and says why', () => {
+    mockOwner.data.airdropPointsHere = false;
     render(<AdminTab />);
     typeBatch();
     expect(btn('btn-load-airdrop').disabled).toBe(true);
-  });
-
-  it('after finalize Load stays shut', () => {
-    Object.assign(mockOwner.data, { airdropFrozen: true, airdropLoadingFinalized: true });
-    render(<AdminTab />);
-    typeBatch();
-    expect(btn('btn-load-airdrop').disabled).toBe(true);
-    expect(screen.getByTestId('airdrop-load-closed').textContent).toMatch(/finalized/);
+    expect(screen.getByTestId('airdrop-load-elsewhere')).toBeTruthy();
   });
 
   it('a refused batch stays in the box, with the reason', async () => {
@@ -142,103 +147,36 @@ describe('airdrop: load, freeze the door, then finalize', () => {
     expect((screen.getByTestId('input-load-airdrop') as HTMLTextAreaElement).value).toBe('');
   });
 
-  it('shows the loaded total against the ceiling', () => {
+  it('shows the loaded total against the 1,100,000 ceiling', () => {
     render(<AdminTab />);
-    expect(screen.getByTestId('airdrop-freeze-loaded').textContent).toBe('Loaded 1,000 of 1,200,000 SATORI.');
-    expect(screen.getByTestId('airdrop-finalize-loaded').textContent).toBe('Loaded 1,000 of 1,200,000 SATORI.');
-    expect(screen.queryByTestId('airdrop-freeze-loaded-over')).toBeNull();
+    expect(screen.getByTestId('airdrop-load-loaded').textContent).toBe('Loaded 1,000 of 1,100,000 SATORI.');
+    expect(screen.getByTestId('airdrop-finalize-loaded').textContent).toBe('Loaded 1,000 of 1,100,000 SATORI.');
   });
 
-  it('warns when the table is over the ceiling', () => {
-    mockOwner.data.airdropLoadedTotal = E(1200001);
+  it('finalize is open to the loader before it runs, whatever the door', () => {
     render(<AdminTab />);
-    expect(screen.getByTestId('airdrop-freeze-loaded-over').textContent).toMatch(/refuses to freeze a table it cannot pay in full/);
-    expect(screen.getByTestId('airdrop-finalize-loaded-over')).toBeTruthy();
-    expect(btn('btn-freeze-airdrop').disabled).toBe(true);
-  });
-
-  it('a table exactly at the ceiling is not over it', () => {
-    mockOwner.data.airdropLoadedTotal = E(1200000);
-    render(<AdminTab />);
-    expect(screen.queryByTestId('airdrop-freeze-loaded-over')).toBeNull();
-    typeChecked('1200000');
-    expect(btn('btn-freeze-airdrop').disabled).toBe(false);
-  });
-
-  it('freeze is shut with nothing loaded', () => {
-    mockOwner.data.airdropLoadedTotal = BigInt(0);
-    render(<AdminTab />);
-    expect(btn('btn-freeze-airdrop').disabled).toBe(true);
-    expect(screen.getByTestId('airdrop-freeze-empty')).toBeTruthy();
-  });
-
-  it('finalize is shut, with the reason, until the door is frozen', () => {
-    render(<AdminTab />);
-    expect(screen.getByTestId('airdrop-freeze-state').textContent).toBe('not frozen');
-    typeChecked('1000');
-    expect(btn('btn-freeze-airdrop').disabled).toBe(false);
-    expect(btn('btn-finalize-airdrop').disabled).toBe(true);
-    expect(screen.getByTestId('airdrop-finalize-blocked').textContent).toBe('Freeze the airdrop door first.');
-  });
-
-  it('once frozen to this airdrop, freeze is done and finalize opens', () => {
-    mockOwner.data.airdropFrozen = true;
-    render(<AdminTab />);
-    expect(screen.getByTestId('airdrop-freeze-state').textContent).toBe('frozen');
-    expect(screen.getByTestId('airdrop-finalize-state').textContent).toBe('table closed');
-    expect(btn('btn-freeze-airdrop').disabled).toBe(true);
+    expect(screen.getByTestId('airdrop-finalize-state').textContent).toBe('loading open');
     expect(btn('btn-finalize-airdrop').disabled).toBe(false);
-    expect(screen.queryByTestId('airdrop-finalize-blocked')).toBeNull();
   });
 
-  it('a door pointing at another contract blocks both buttons and says to point it here', () => {
-    mockOwner.data.airdropPointsHere = false;
+  it('only the loader can finalize', () => {
+    mockOwner.isAirdropHolder = false;
     render(<AdminTab />);
-    expect(btn('btn-freeze-airdrop').disabled).toBe(true);
-    expect(btn('btn-finalize-airdrop').disabled).toBe(true);
-    expect(screen.getByTestId('airdrop-finalize-blocked').textContent)
-      .toBe('The airdrop door points at a different contract, or at none. If that is a corrected airdrop, update this page\'s address book; otherwise point the door here (setAirdrop) before freezing.');
-    expect(btn('btn-load-airdrop').disabled).toBe(true);
-    expect(screen.getByTestId('airdrop-load-elsewhere')).toBeTruthy();
-  });
-
-  it('a door frozen to another contract: nothing to freeze, and finalize can never open', () => {
-    Object.assign(mockOwner.data, { airdropFrozen: true, airdropPointsHere: false });
-    render(<AdminTab />);
-    expect(screen.getByTestId('airdrop-freeze-state').textContent).toBe('frozen elsewhere');
-    expect(btn('btn-freeze-airdrop').disabled).toBe(true);
-    expect(btn('btn-finalize-airdrop').disabled).toBe(true);
-    expect(screen.getByTestId('airdrop-finalize-blocked').textContent).toMatch(/can never be finalized/);
-  });
-
-  it('after finalize: claims open and the button stays shut', () => {
-    Object.assign(mockOwner.data, { airdropFrozen: true, airdropLoadingFinalized: true });
-    render(<AdminTab />);
-    expect(screen.getByTestId('airdrop-finalize-state').textContent).toBe('claims open');
     expect(btn('btn-finalize-airdrop').disabled).toBe(true);
   });
 
-  it('only the freeze authority can freeze', () => {
-    mockOwner.isFreezeAuthority = false;
+  it('after finalize: loading closed and the button stays shut', () => {
+    mockOwner.data.airdropLoadingFinalized = true;
     render(<AdminTab />);
-    expect(btn('btn-freeze-airdrop').disabled).toBe(true);
+    expect(screen.getByTestId('airdrop-finalize-state').textContent).toBe('loading closed');
+    expect(btn('btn-finalize-airdrop').disabled).toBe(true);
   });
 
-  it('freeze stays shut until the checked total is typed, and shows the exact total on chain', () => {
-    mockOwner.data.airdropLoadedTotal = E(1000) + BigInt(1);
+  it('the finalize button calls finalizeAirdropLoading and reports loading closed', async () => {
+    mockOwner.finalizeAirdropLoading = jest.fn().mockResolvedValue({ ok: true });
     render(<AdminTab />);
-    expect(screen.getByTestId('airdrop-freeze-exact').textContent).toMatch(/On chain now: 1000\.000000000000000001\./);
-    expect(btn('btn-freeze-airdrop').disabled).toBe(true);
-    typeChecked('not a number');
-    expect(btn('btn-freeze-airdrop').disabled).toBe(true);
-  });
-
-  it('the freeze button sends the total the operator typed, not the one the page read', async () => {
-    mockOwner.freezeAirdrop = jest.fn().mockResolvedValue({ ok: true });
-    render(<AdminTab />);
-    typeChecked('999.5');
-    fireEvent.click(btn('btn-freeze-airdrop'));
-    expect(await screen.findByText(/Airdrop door frozen/)).toBeTruthy();
-    expect(mockOwner.freezeAirdrop).toHaveBeenCalledWith(E(999.5));
+    fireEvent.click(btn('btn-finalize-airdrop'));
+    expect(await screen.findByText(/Airdrop finalized\. Loading is closed\./)).toBeTruthy();
+    expect(mockOwner.finalizeAirdropLoading).toHaveBeenCalled();
   });
 });

@@ -1,7 +1,8 @@
 # Satori dapp stack on Satori Central (network.satorinet.io host, 157.180.104.175).
 #
-# Serves app.satorinet.io: the dapp at /, the indexer at /api, the Nostr relay at
-# /relay. All three sit behind the EXISTING nginx-proxy container (/root/nginx),
+# Serves games.satorinet.io (the dapp at /, the indexer at /api, the gasless relayer at /relayer),
+# index.satorinet.io (the indexer) and nostr.satorinet.io (the Nostr relay). All sit
+# behind the EXISTING nginx-proxy container (/root/nginx),
 # which owns 80/443 and already terminates TLS for network.satorinet.io — that is
 # why nothing here publishes a port. Everything joins `central-lite_default` so
 # nginx-proxy can reach it by container name.
@@ -38,7 +39,7 @@ services:
     networks: [central-lite_default]
 
   # Gasless relayer (docs/design/gasless-relay.md) — pays Base gas for users who
-  # sign a RelayRequest + a SATORI fee. Served at app.satorinet.io/relayer (nginx
+  # sign a RelayRequest + a SATORI fee. Served at games.satorinet.io/relayer (nginx
   # strips the prefix; the service keeps its own /gasless/* routes). No published
   # port; reached by container name over central-lite_default. Its private key is
   # a runtime secret from .env.deploy, never in the image. fees.json is bind-

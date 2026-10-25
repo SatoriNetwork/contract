@@ -24,11 +24,6 @@
     },
     {
       "inputs": [],
-      "name": "AirdropNotFrozen",
-      "type": "error"
-    },
-    {
-      "inputs": [],
       "name": "AlreadySet",
       "type": "error"
     },
@@ -39,7 +34,7 @@
     },
     {
       "inputs": [],
-      "name": "ClaimsNotOpen",
+      "name": "BudgetExceeded",
       "type": "error"
     },
     {

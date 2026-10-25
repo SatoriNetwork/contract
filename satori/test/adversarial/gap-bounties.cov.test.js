@@ -27,7 +27,7 @@ const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { loadFixture, time, impersonateAccount, setBalance } =
   require("@nomicfoundation/hardhat-network-helpers");
-const { deploySatoriFixture, pack1 } = require("../fixtures");
+const { deploySatoriFixture, pack1, ensureAdapterBountyToken } = require("../fixtures");
 
 const ROUND = 86400, YES = 1;
 const TOL = ethers.parseEther("0.01");
@@ -59,6 +59,7 @@ async function stakeFor(bounties, user, token, amount) {
 async function fundBountyOn(bounties, funder, token, gameId, poolEth = "1000", rateEth = "1000") {
   await token.mint(funder.address, ethers.parseEther("100000"));
   await token.connect(funder).approve(await bounties.getAddress(), ethers.MaxUint256);
+  await ensureAdapterBountyToken(bounties, gameId, token);
   await bounties.connect(funder).fundBounty(
     gameId, await token.getAddress(), ethers.parseEther(poolEth), ethers.parseEther(rateEth));
 }

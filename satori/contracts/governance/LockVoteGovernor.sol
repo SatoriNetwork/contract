@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import "../interfaces/ILockVoteHub.sol";
+
 /// The owner's self-contained voting path (docs/design/lock-vote-governor.md).
 
 interface ILockVoteToken {
@@ -8,10 +10,6 @@ interface ILockVoteToken {
     function totalSupply() external view returns (uint256);
     function getCurrentRound() external view returns (uint256);
     function lockUntil(address user, uint8 lane) external view returns (uint24);
-}
-
-interface ILockVoteHub {
-    function voteLock(address user, uint256 untilRound) external;
 }
 
 contract LockVoteGovernor {
@@ -52,6 +50,7 @@ contract LockVoteGovernor {
         uint256 endRound,
         uint256 minTurnoutBps,
         uint256 approvalBps,
+        uint256 supplyAtPropose,
         string  description
     );
     event VoteCast(uint256 indexed proposalId, address indexed voter, VoteType support, uint256 weight);
@@ -111,7 +110,7 @@ contract LockVoteGovernor {
         p.supplyAtPropose = TOKEN.totalSupply();
         p.descriptionHash = keccak256(bytes(description));
 
-        emit ProposalCreated(proposalId, endRound, minTurnoutBps, approvalBps, description);
+        emit ProposalCreated(proposalId, endRound, minTurnoutBps, approvalBps, p.supplyAtPropose, description);
     }
 
     /// A lane-A (prediction) lock does NOT block voting — those tokens cannot

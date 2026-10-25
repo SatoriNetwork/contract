@@ -1,5 +1,5 @@
 const { expect } = require("chai");
-const { deploySatoriFixtureNoFee, RAW_TOLERANCE, pack1, voteFor, VOTE, warmUpLoyalty } = require("./fixtures");
+const { deploySatoriFixtureNoFee, RAW_TOLERANCE, pack1, voteFor, VOTE } = require("./fixtures");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
 
@@ -317,11 +317,7 @@ describe("Prediction Delegation", function () {
 
       // Alice delegates to Bob
       await satori.connect(alice).delegatePredictionPower(bob.address);
-      // Delegator weight is capital x loyalty and a fresh delegation starts
-      // at L = 0, so the splits below read zero without a warm-up. The helper
-      // drains predictor and delegators to `platform`, leaving bob's ownPower
-      // and each delegator's capital exactly as the setup left them.
-      await warmUpLoyalty(satori, registry, null, bob, [alice], platform, stream1);
+      await time.increase(86400);
 
       // No re-voting: burnt weight is PERMANENT, so stream1 keeps the weight
       // alice bought it in the setup. (A vote here would also revert `Locked`:
@@ -472,11 +468,7 @@ describe("Prediction Delegation", function () {
 
       // Carol delegates to Bob (Bob has own 500 + Carol's 300 = 800 total)
       await satori.connect(carol).delegatePredictionPower(bob.address);
-      // Delegator weight is capital x loyalty and a fresh delegation starts
-      // at L = 0, so the splits below read zero without a warm-up. The helper
-      // drains predictor and delegators to `platform`, leaving bob's ownPower
-      // and each delegator's capital exactly as the setup left them.
-      await warmUpLoyalty(satori, registry, null, bob, [carol], platform, stream1);
+      await time.increase(86400);
 
       // No re-voting: burnt weight is PERMANENT, so stream1 keeps the weight
       // alice bought it in the setup. (A vote here would also revert `Locked`:
@@ -696,11 +688,7 @@ describe("Prediction Delegation", function () {
       await satori.connect(alice).delegatePredictionPower(bob.address);
       await satori.connect(carol).delegatePredictionPower(bob.address);
       await satori.connect(dave).delegatePredictionPower(bob.address);
-      // Delegator weight is capital x loyalty and a fresh delegation starts
-      // at L = 0, so the splits below read zero without a warm-up. The helper
-      // drains predictor and delegators to `platform`, leaving bob's ownPower
-      // and each delegator's capital exactly as the setup left them.
-      await warmUpLoyalty(satori, registry, null, bob, [alice, carol, dave], platform, stream1);
+      await time.increase(86400);
 
       // No re-voting: burnt weight is PERMANENT, so stream1 keeps the weight
       // alice bought it in the setup. (A vote here would also revert `Locked`:
@@ -812,11 +800,7 @@ describe("Prediction Delegation", function () {
 
       // Alice delegates to Bob
       await satori.connect(alice).delegatePredictionPower(bob.address);
-      // Delegator weight is capital x loyalty and a fresh delegation starts
-      // at L = 0, so the splits below read zero without a warm-up. The helper
-      // drains predictor and delegators to `platform`, leaving bob's ownPower
-      // and each delegator's capital exactly as the setup left them.
-      await warmUpLoyalty(satori, registry, null, bob, [alice], platform, stream1);
+      await time.increase(86400);
 
       // No re-voting: burnt weight is PERMANENT, so stream1 keeps the weight
       // alice bought it in the setup. (A vote here would also revert `Locked`:
@@ -884,11 +868,8 @@ describe("Prediction Delegation", function () {
       // delegatorAmount: a phantom mint. Anchored on the event payload, not on
       // a sum of the two halves.
       const [alicePendingGross] = await lens.pendingDelegatorRewards(alice.address);
-      // closeTo, not equal: the loyalty-weighted denominator carries a small
-      // deliberate UPWARD bias (32 units of L per unit of capital, ~3.2e-17)
-      // so that Σ cᵢLᵢ ≤ W holds by construction and the invariant-only
-      // conservation rail cannot be tripped by rounding. It costs ~12k wei
-      // here, in the strand-dust direction — never over-mint.
+      // closeTo, not equal: the rate and the payout are floored, so the pull
+      // sits a few wei under the pot — the strand-dust direction, never over-mint.
       expect(alicePendingGross).to.be.closeTo(
         delegatorAmount, RAW_TOLERANCE,
         "delegator pulls her share against the FROZEN 4U denominator"

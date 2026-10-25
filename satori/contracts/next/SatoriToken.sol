@@ -7,17 +7,7 @@ import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
 import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "@openzeppelin/contracts/interfaces/IERC1271.sol";
-
-interface ITransferHook {
-    function onTokenTransfer(address from, address to, uint256 value) external;
-}
-
-/// SatoriAirdrop closes its loading once `airdropFrozen` is set, so the total
-/// read at the freeze is the table that pays.
-interface IAirdropTable {
-    function token() external view returns (address);
-    function airdropLoadedTotal() external view returns (uint256);
-}
+import "../interfaces/ITransferHook.sol";
 
 interface IBridgeAuthority {
     /// `view` is load-bearing: it compiles to STATICCALL, so a hostile registry
@@ -43,9 +33,9 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
     uint256 public immutable deploymentBlock;
 
     // The one deployment allowed to emit. Off-home every emission path is closed
-    // in the BYTECODE, not by deploy config, because `mintDevFee` is
-    // permissionless — never wiring a controller would still leave anyone able
-    // to pull the dev fee forever. See docs/design/superchain-native-token.md.
+    // in the BYTECODE, not by deploy config: the controller can never be set
+    // there, `rewardCeiling()` reads zero so no accrual fits, and genesis books
+    // nothing, so there is no fee to pull. See docs/design/superchain-native-token.md.
     uint256 public immutable HOME_CHAIN_ID;
 
     /// TIER 1 bridge: the OP Stack predeploy, same address on every OP Stack
@@ -55,24 +45,21 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
         0x4200000000000000000000000000000000000028;
 
     uint256 public constant ROUND_REWARD_BUDGET = 1440 ether;
-    /// Ceiling over ALL airdropped tokens. `freezeAirdrop` refuses a table over
-    /// it and nothing mints before the freeze, so a table that freezes is paid
-    /// in full. A table that needs more takes a new token.
-    uint256 public constant AIRDROP_TOTAL_SUPPLY = 1_200_000 ether;
+    /// Ceiling over ALL airdropped tokens. SatoriAirdrop refuses to load past
+    /// it, so every loaded allocation can be paid in full.
+    uint256 public constant AIRDROP_TOTAL_SUPPLY = 1_100_000 ether;
     /// MUST equal `SatoriHub.BASE_EMISSION_PER_ROUND`, the hub's deploy-time
     /// default rate (mirrored constant, pinned by a lockstep test — the token
-    /// cannot read the hub at construction). The hub seeds `onChainMinted` from
-    /// `INITIAL_MINT - devGenesis` under its own cap; larger here and every hub
-    /// mint reverts from block zero.
+    /// cannot read the hub at construction): genesis pays the deploy round.
     uint256 public constant INITIAL_MINT = 846621902397116230417;
 
-    // Dev fee = a share of `totalRewardsMinted` (on-chain + merkle lanes, both
-    // via rewardMint). EXCLUDES the airdrop and the bridge. Since
-    // totalRewardsMinted == general + dev, the share rearranges to a ratio on
-    // the general lane: dev = general * bps / (10000 - bps). The general lane
-    // may consume (10000-bps)/10000 of the ceiling with the rest RESERVED —
-    // held back, not clawed back — so minting cannot dilute the fee and the
-    // protocol never halts waiting for mintDevFee.
+    // Dev fee = a share of every reward the controller reports as EARNED
+    // (`accrueRewards`: on-chain credits and the merkle reserve), booked at the
+    // rate in force when it is reported. EXCLUDES the airdrop and the bridge.
+    // Since gross == general + dev, the share is a ratio on the general lane:
+    // dev = general * bps / (10000 - bps). `rewardMint` pays only what was
+    // reported, so a controller that stops reporting pays nobody, and a rate
+    // change touches nothing already booked.
 
     /// The band the fee may occupy. The band itself is unalterable; a governor
     /// chooses within it.
@@ -86,19 +73,23 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
     /// Point at a LOCKED splitter slot for an end-to-end guarantee (design 7.2).
     address public immutable PLATFORM_FEE_RECIPIENT;
 
-    uint256 public totalRewardsMinted;
+    /// General rewards reported as earned (genesis included), and the fee booked
+    /// on them. COUNTERS, not timestamps: the fee is a share of what was
+    /// earned, not of elapsed time. Only ever grow.
+    uint256 public generalAccrued;
+    uint256 public devFeeAccrued;
+    uint256 public generalMinted;
     uint256 public devFeeMinted;
 
     /// Movable only within [DEV_FEE_BPS_MIN, DEV_FEE_BPS_MAX].
     uint256 public devFeeBps;
 
-    /// Checkpoints that let the rate move without revaluing history: at each
-    /// accepted change the ended segment folds into `devAccruedCheckpoint` and
-    /// the general counter into `generalMintedCheckpoint`, so tokens minted
-    /// under the old rate stay valued at it. COUNTERS, not timestamps — the fee
-    /// is a share of what was issued, not of elapsed time.
-    uint256 public devAccruedCheckpoint;
-    uint256 public generalMintedCheckpoint;
+    /// A round's budget is sized at the rate live when the round starts, but
+    /// its rewards are booked at the rate live when they are scored, so a
+    /// change moves the dev's booking on the rounds in flight. Spacing the
+    /// changes bounds what a fee authority can gain by timing them.
+    uint256 public constant DEV_FEE_CHANGE_GAP_ROUNDS = 30;
+    uint256 public lastDevFeeChangeRound;
 
     /// `pendingDevFeeBps == 0` = nothing pending (0 is outside the legal band).
     /// Acceptance must land in a LATER block than the proposal.
@@ -108,9 +99,10 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
     uint256 public airdropMinted;
     mapping(address => uint256) public airdropMintedTo;
 
-    /// Telemetry, gates nothing: every hop burns on one chain and mints on
-    /// another, so Σburned must equal Σminted across deployments and the gap is
-    /// what is in flight. `totalSupply()` cannot substitute — voting burns
+    /// Every hop burns on one chain and mints on another, so Σburned must equal
+    /// Σminted across deployments and the gap is what is in flight. On the home
+    /// chain they also GATE: `crosschainMint` reverts `CrosschainLimit` once
+    /// minted would pass burned. `totalSupply()` cannot substitute — voting burns
     /// confound it.
     uint256 public crosschainMinted;
     uint256 public crosschainBurned;
@@ -150,7 +142,6 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
     bool public hookFrozen;
     bool public bridgeAuthorityFrozen;
     bool public devFeeBpsFrozen;
-    bool public airdropFrozen;
 
     /// TIER 2 bridge registry: which third-party bridges are authorized. Zero
     /// (the default) = no third-party transport at all.
@@ -217,9 +208,12 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
     event BridgeAuthoritySet(address indexed authority);
     event LockSet(address indexed user, uint8 indexed lane, uint24 untilRound);
     event Participated(address indexed user);
+    event ParticipationCleared(address indexed user);
     event HookReasonSet(address indexed user, uint8 indexed reason, bool on);
     event TransferHookFailed(address indexed from, address indexed to, uint256 value);
     event DevFeeMinted(address indexed recipient, uint256 amount, uint256 round);
+    /// Running totals included so the counters rebuild from logs alone.
+    event RewardsAccrued(uint256 general, uint256 devFee, uint256 generalTotal, uint256 devFeeTotal);
 
     event AuthoritySet(string slot, address indexed oldHolder, address indexed newHolder);
     event RootAuthorityTransferStarted(address indexed oldRoot, address indexed pendingRoot);
@@ -227,23 +221,21 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
 
     event ControllerFrozen(address finalController);
     event HookFrozen(address finalHook);
-    event AirdropFrozen(address finalAirdrop);
     event BridgeAuthorityFrozen(address finalAuthority);
     event DevFeeBpsFrozen(uint256 finalBps);
 
     event DevFeeBpsProposed(uint256 newBps, uint256 atBlock);
     event DevFeeBpsCancelled(uint256 cancelledBps);
-    event DevFeeBpsSet(uint256 oldBps, uint256 newBps, uint256 devAccrued, uint256 generalMinted);
+    event DevFeeBpsSet(uint256 oldBps, uint256 newBps);
 
     error Unauthorized();
     error BadInput();
     error BudgetExceeded();
+    error NotAccrued();
+    error DevFeeChangeTooSoon();
     error Locked();
     error HookFailedWithoutReason();
     error ControllerNotSet();
-    error AirdropNotSet();
-    error AirdropNotFrozen();
-    error AirdropChanged();
     error NotHomeChain();
     error CrosschainLimit();
     error Frozen();
@@ -278,10 +270,10 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
         _;
     }
 
-    /// On `setController` this transitively closes rewardMint / setLock /
-    /// markParticipated (all `onlyController`, so off-home the controller is
-    /// never set), and on `setAirdrop` it closes airdropMint the same way; also
-    /// gates `mintDevFee`, which has no other gate.
+    /// On `setController` this transitively closes accrueRewards / rewardMint /
+    /// setLock / markParticipated (all `onlyController`, so off-home the
+    /// controller is never set), and on `setAirdrop` it closes airdropMint the
+    /// same way; also gates `mintDevFee`, which has no other gate.
     modifier onlyHomeChain() {
         if (block.chainid != HOME_CHAIN_ID) revert NotHomeChain();
         _;
@@ -304,11 +296,9 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
         appointAuthority = root_;
         freezeAuthority  = root_;
         devFeeBps = DEV_FEE_BPS_DEFAULT;
-        // Checkpoints start at ZERO, not the genesis figures, so the genesis
-        // mint is valued at the default rate by the same formula every later
-        // mint uses — no special case.
         deploymentRound = block.timestamp / TIME_UNIT_SECONDS;
         deploymentBlock = block.number;
+        lastDevFeeChangeRound = deploymentRound;
         PLATFORM_FEE_RECIPIENT = devRecipient_;
         HOME_CHAIN_ID = homeChainId_;
 
@@ -316,20 +306,28 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
         // ungated genesis would mint a fresh INITIAL_MINT on each — real supply
         // outside the schedule that gameplay can never burn back down.
         if (block.chainid == homeChainId_) {
-            // GENERAL FIRST, dev takes the remainder — order matters to the wei:
-            // the hub seeds its lane from `INITIAL_MINT - devGenesis` under a
-            // floor(85%) cap, so flooring the DEV share instead leaves general
-            // one wei over that cap and the hub's first mint reverts.
+            // GENERAL FIRST, dev takes the remainder: for INITIAL_MINT the
+            // remainder equals the rounded-up fee `accrueRewards` books (pinned
+            // by a test), so genesis is the same formula as every later report.
             uint256 generalGenesis = INITIAL_MINT * (10000 - DEV_FEE_BPS_DEFAULT) / 10000;
             uint256 devGenesis = INITIAL_MINT - generalGenesis;
-            _mint(devRecipient_, devGenesis);
+            generalAccrued = generalGenesis;
+            generalMinted = generalGenesis;
+            devFeeAccrued = devGenesis;
             devFeeMinted = devGenesis;
+            _mint(devRecipient_, devGenesis);
             _mint(root_, generalGenesis);
-            totalRewardsMinted = INITIAL_MINT;
+            emit RewardsAccrued(generalGenesis, devGenesis, generalGenesis, devGenesis);
             emit DevFeeMinted(devRecipient_, devGenesis, deploymentRound);
         }
 
         emit RootAuthorityTransferred(address(0), root_);
+        emit AuthoritySet("fee", address(0), root_);
+        emit AuthoritySet("upgrade", address(0), root_);
+        emit AuthoritySet("wiring", address(0), root_);
+        emit AuthoritySet("appoint", address(0), root_);
+        emit AuthoritySet("freeze", address(0), root_);
+        emit DevFeeBpsSet(0, DEV_FEE_BPS_DEFAULT);
     }
 
     // ------------------------------------------------------------------
@@ -352,46 +350,9 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
         return ROUND_REWARD_BUDGET * _roundsElapsed();
     }
 
-    function generalMinted() public view returns (uint256) {
-        return totalRewardsMinted - devFeeMinted;
-    }
-
-    /// Cumulative dev entitlement (owed on all rewards minted, pulled or not).
-    /// SEGMENTED so a rate change never revalues history: accrual before the
-    /// change is frozen in `devAccruedCheckpoint`, only what is minted since
-    /// uses the new rate. MONOTONIC and CONTINUOUS across a change (the new
-    /// segment starts at zero width) — `mintDevFee` relies on both. Floors,
-    /// under-paying by at most a wei (the safe direction).
-    function devFeeCeiling() public view returns (uint256) {
-        uint256 bps = devFeeBps;
-        return devAccruedCheckpoint
-             + (generalMinted() - generalMintedCheckpoint) * bps / (10000 - bps);
-    }
-
-    /// The most the GENERAL lanes may have minted against `ceiling`, fee share
-    /// reserved off the top. Takes `ceiling` as an arg so the hub reuses this
-    /// one formula against ITS stricter decaying ceiling (no second copy).
-    ///
-    /// NOT the naive `ceiling * (10000 - bps) / 10000`: recomputed live against
-    /// a rate that can RISE, that applies the new rate retroactively and can put
-    /// `generalMinted()` above the new cap, reverting every reward mint until the
-    /// ceiling grows out from under it — the protocol bricking on a routine
-    /// governance action. Segmenting against the checkpoints removes it: at a
-    /// change the general lane gets zero new headroom (a raise) or more (a cut),
-    /// never negative.
-    function generalCeilingFor(uint256 ceiling) public view returns (uint256) {
-        uint256 bps = devFeeBps;
-        // Saturating: a view must not panic if asked about a ceiling below the
-        // accrual (e.g. an off-home read).
-        uint256 base = ceiling > devAccruedCheckpoint ? ceiling - devAccruedCheckpoint : 0;
-        return base * (10000 - bps) / 10000
-             + generalMintedCheckpoint * bps / 10000;
-    }
-
-    /// This contract's own general-lane ceiling, against its constitutional
-    /// `1440 x rounds` envelope.
-    function generalCeiling() public view returns (uint256) {
-        return generalCeilingFor(rewardCeiling());
+    /// Both reward lanes plus the fee; excludes the airdrop and the bridge.
+    function totalRewardsMinted() public view returns (uint256) {
+        return generalMinted + devFeeMinted;
     }
 
     function lockUntil(address user, uint8 lane) external view returns (uint24) {
@@ -427,35 +388,48 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
     // Controller operations
     // ------------------------------------------------------------------
 
+    /// The controller reports `general` rewards as earned; the fee on them is
+    /// booked here, at this contract's own rate, never one the caller supplies.
+    /// Rounded UP per report so splitting a report into dust cannot round the
+    /// fee away. The `1440 x rounds` envelope binds here, on general plus fee;
+    /// `rewardMint` then needs no envelope of its own.
+    function accrueRewards(uint256 general)
+        external onlyController returns (uint256 generalTotal, uint256 fee)
+    {
+        uint256 bps = devFeeBps;
+        uint256 residual = 10000 - bps;
+        fee = (general * bps + residual - 1) / residual;
+        generalTotal = generalAccrued + general;
+        uint256 devFeeTotal = devFeeAccrued + fee;
+        if (generalTotal + devFeeTotal > rewardCeiling()) revert BudgetExceeded();
+        generalAccrued = generalTotal;
+        devFeeAccrued = devFeeTotal;
+        emit RewardsAccrued(general, fee, generalTotal, devFeeTotal);
+    }
+
+    /// Pays only what `accrueRewards` reported, so the fee on every reward wei
+    /// was booked before the wei could exist, and a controller that stops
+    /// reporting cannot pay anyone.
     function rewardMint(address to, uint256 amount) external onlyController {
-        // The fee's share is held back off the top (not clawed back), so minting
-        // cannot dilute it and the protocol never halts on a dev pull. NOT
-        // `rewardCeiling() - devFeeCeiling()`: devFeeCeiling depends on
-        // generalMinted, so that subtraction is circular.
-        if (generalMinted() + amount > generalCeiling()) revert BudgetExceeded();
-        totalRewardsMinted += amount;
+        uint256 minted = generalMinted + amount;
+        if (minted > generalAccrued) revert NotAccrued();
+        generalMinted = minted;
         _mint(to, amount);
     }
 
     /// Permissionless: funds only ever reach the immutable PLATFORM_FEE_RECIPIENT,
-    /// so no griefing surface, and no cap check is needed — rewardMint's carve-out
-    /// already keeps totalRewardsMinted within rewardCeiling().
+    /// so no griefing surface. Minting never waits on this: `rewardMint` reads
+    /// neither counter below.
     function mintDevFee() external onlyHomeChain returns (uint256 amount) {
-        uint256 ceiling = devFeeCeiling();
-        // Saturating, not a bare subtraction: genesis floors the general share
-        // and devFeeCeiling floors the fee's, so the fee can sit a wei ahead of
-        // the ceiling and a bare subtraction would panic.
-        if (ceiling <= devFeeMinted) return 0;
-        amount = ceiling - devFeeMinted;
+        uint256 accrued = devFeeAccrued;
+        amount = accrued - devFeeMinted;   // devFeeMinted is only ever set to a past devFeeAccrued
         if (amount == 0) return 0;
-        devFeeMinted = ceiling;
-        totalRewardsMinted += amount;      // shares the ONE global cap
+        devFeeMinted = accrued;
         _mint(PLATFORM_FEE_RECIPIENT, amount);
         emit DevFeeMinted(PLATFORM_FEE_RECIPIENT, amount, getCurrentRound());
     }
 
     function airdropMint(address to, uint256 amount) external onlyAirdrop {
-        if (!airdropFrozen) revert AirdropNotFrozen();
         if (airdropMinted + amount > AIRDROP_TOTAL_SUPPLY) revert BudgetExceeded();
         airdropMinted += amount;
         airdropMintedTo[to] += amount;
@@ -483,11 +457,14 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
     /// Clears the delegator gate. Called by rewards.delegatePredictionPower on
     /// undelegate — the symmetric partner of markParticipated on delegate — so a
     /// wallet stops running the transfer hook the instant it stops being a
-    /// delegator. Idempotent. Silent: Participated means "became one", so the
-    /// clear does not re-emit it.
+    /// delegator. Idempotent; emits only when the bit was set.
     function unmarkParticipated(address user) external onlyController {
         if (user == address(0)) revert BadInput();
-        _userState[user] &= ~_PARTICIPATED_BIT;
+        uint256 w = _userState[user];
+        if (w & _PARTICIPATED_BIT != 0) {
+            _userState[user] = w & ~_PARTICIPATED_BIT;
+            emit ParticipationCleared(user);
+        }
     }
 
     /// Set or clear one hook-reason bit for `user`. Reserved surface: no caller
@@ -535,8 +512,8 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
     /// transport can create real SATORI on the home chain beyond what departed —
     /// the bound that makes an evolvable tier-2 registry tolerable in an
     /// immutable contract. Remote deployments are deliberately UNBOUNDED (a chain
-    /// that cannot mint on arrival is no bridge destination). Never touches
-    /// `totalRewardsMinted`: bridging is outside the emission budget.
+    /// that cannot mint on arrival is no bridge destination). Never touches the
+    /// reward counters: bridging is outside the emission budget.
     function crosschainMint(address to, uint256 amount) external {
         _authorizedBridge(msg.sender);
         if (block.chainid == HOME_CHAIN_ID && crosschainMinted + amount > crosschainBurned) {
@@ -583,7 +560,6 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
     }
 
     function setAirdrop(address newAirdrop) external onlyWiring onlyHomeChain {
-        if (airdropFrozen) revert Frozen();
         if (newAirdrop == address(0)) revert BadInput();
         airdrop = newAirdrop;
         emit AirdropSet(newAirdrop);
@@ -603,7 +579,9 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
 
     // THE FEE DIAL. Two-step, NOT a timelock — the only guarantee is that the
     // two transactions cannot share a block, so they cannot be bundled
-    // atomically. Any time delay is the DAO's job, not this contract's.
+    // atomically. Any notice period is the DAO's job, not this contract's; the
+    // one spacing rule here (DEV_FEE_CHANGE_GAP_ROUNDS) bounds timing games,
+    // it is not a notice.
     // ------------------------------------------------------------------
 
     /// Re-proposing overwrites a standing proposal and resets its block.
@@ -626,22 +604,21 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
     /// Enact in a LATER block than the proposal. In the SAME block, an
     /// `eth_estimateGas` reverts (the node simulates against a head where
     /// block.number still equals pendingDevFeeBlock), so a wallet waits a block;
-    /// nothing is wrong. `devFeeCeiling()` MUST be read before `devFeeBps` is
-    /// reassigned, or the ended segment is revalued at the incoming rate.
+    /// nothing is wrong. Touches no counter: everything already reported stays
+    /// booked at the rate it was reported under.
     function acceptDevFeeBps() external onlyFee onlyHomeChain {
         if (devFeeBpsFrozen) revert Frozen();
         uint256 newBps = pendingDevFeeBps;
         if (newBps == 0) revert BadInput();
         if (block.number <= pendingDevFeeBlock) revert BadInput();
+        uint256 cur = getCurrentRound();
+        if (cur < lastDevFeeChangeRound + DEV_FEE_CHANGE_GAP_ROUNDS) revert DevFeeChangeTooSoon();
 
-        uint256 oldBps = devFeeBps;
-        devAccruedCheckpoint = devFeeCeiling();   // OLD rate, read first
-        generalMintedCheckpoint = generalMinted();
+        emit DevFeeBpsSet(devFeeBps, newBps);
         devFeeBps = newBps;
-
+        lastDevFeeChangeRound = cur;
         pendingDevFeeBps = 0;
         pendingDevFeeBlock = 0;
-        emit DevFeeBpsSet(oldBps, newBps, devAccruedCheckpoint, generalMintedCheckpoint);
     }
 
     // PER-LEVER FREEZES. Each stops one pointer moving, forever (one-way, no
@@ -649,9 +626,9 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
     // report either a freeze or the driving slot being emptied.
 
     /// Freezes mint authority at the current controller. THE VALUABLE ONE:
-    /// unminted headroom (the 85% cap minus the hub's far-lower decaying mint)
-    /// banks up forever, and a re-pointed controller could reach all of it, so
-    /// setController is the protocol's most valuable call. Does NOT freeze mint
+    /// unreported envelope (1440 x rounds minus the hub's far-lower decaying
+    /// issuance) banks up forever, and a re-pointed controller could report and
+    /// mint all of it, so setController is the protocol's most valuable call. Does NOT freeze mint
     /// LOGIC — the controller is the hub's PROXY, so hub upgrades still change
     /// minting; only re-pointing to a different address is given up. Refuses an
     /// unset controller, which would brick minting permanently.
@@ -669,23 +646,6 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
     function freezeHook() external onlyFreeze {
         hookFrozen = true;
         emit HookFrozen(hook);
-    }
-
-    /// Pins the airdrop door, and with it the table that pays. Takes the door
-    /// and table total that were checked, so a `setAirdrop` or a loaded row
-    /// that lands while the freeze is queued makes it revert instead of
-    /// standing for good.
-    function freezeAirdrop(address expectedAirdrop, uint256 expectedLoadedTotal)
-        external onlyFreeze onlyHomeChain
-    {
-        address door = airdrop;
-        if (door == address(0)) revert AirdropNotSet();
-        if (door != expectedAirdrop) revert AirdropChanged();
-        if (IAirdropTable(door).token() != address(this)) revert BadInput();
-        if (IAirdropTable(door).airdropLoadedTotal() != expectedLoadedTotal) revert AirdropChanged();
-        if (expectedLoadedTotal > AIRDROP_TOTAL_SUPPLY) revert BudgetExceeded();
-        airdropFrozen = true;
-        emit AirdropFrozen(door);
     }
 
     function freezeBridgeAuthority() external onlyFreeze {
@@ -710,7 +670,7 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
         return hookFrozen || wiringAuthority == address(0);
     }
     function airdropLocked() external view returns (bool) {
-        return airdropFrozen || wiringAuthority == address(0);
+        return wiringAuthority == address(0);
     }
     function bridgeAuthorityLocked() external view returns (bool) {
         return bridgeAuthorityFrozen || wiringAuthority == address(0);
@@ -852,7 +812,7 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
 
         address h = hook;
         // The hook fires when either side carries a GATE bit: the delegator bit
-        // (240) or any hook-reason bit (241..244). Both slots are already loaded
+        // (240) or any hook-reason bit (241..255). Both slots are already loaded
         // by the lock check / gate, so the reason bits cost nothing here. The bit
         // lifecycle is owned by its setter — the delegator bit by
         // rewards.delegatePredictionPower (set on delegate, cleared on

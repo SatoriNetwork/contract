@@ -50,7 +50,7 @@ const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { loadFixture, time, impersonateAccount, setBalance } =
   require("@nomicfoundation/hardhat-network-helpers");
-const { deploySatoriFixture, pack1, voteFor, VOTE, warmUpLoyalty } = require("../fixtures");
+const { deploySatoriFixture, pack1, voteFor, VOTE } = require("../fixtures");
 
 const ROUND = 86400;
 const YES = 1;
@@ -505,12 +505,7 @@ describe("game-adapters.cov — adversarial coverage for the adapter score/recor
       await expect(voteFor(satori, voter, yesNoGameId))
         .to.be.revertedWithCustomError(voting, "GameNotMintEligible");
       await voteFor(satori, voter, binaryGameId);
-      // Delegator weight is capital x loyalty and a fresh delegation starts at
-      // L = 0. Warm on the BINARY game -- the adapter game is deliberately
-      // ineligible here, which is the asymmetry under test.
-      await warmUpLoyalty(satori, registry, null, predictor, [delegator], voter, binaryGameId, 40, 4);
-      // The warm-up spans several cadence periods, so the host stream needs a
-      // fresh anchor in THIS round or the predict below reverts PredictExpired.
+      await time.increase(86400 * 4); // clears the host stream's 4-round cadence
       await registry.connect(owner).setValue(streamId, 100);
 
       // Predictor predicts YES on the adapter game AND UP on the binary game,

@@ -92,7 +92,7 @@ describe("Uniswap TWAP window", function () {
 
   it("rejects a window below the floor before touching the pool", async function () {
     await expect(
-      satori["createAdapterDataStream(string,uint16,address,bytes)"](
+      satori["createAdapterDataStream(string,uint32,address,bytes)"](
         "TOO SHORT", 2, await mockPool.getAddress(), enc(899)
       )
     ).to.be.revertedWithCustomError(uniswapAdapter, "TwapWindowTooShort");
@@ -103,7 +103,7 @@ describe("Uniswap TWAP window", function () {
   // may have one. A 4-hour window is fine given the ring for it.
   it("allows a long window when the pool's ring can back it", async function () {
     await mockPool.setCardinality(14400, 0);
-    const tx = await satori["createAdapterDataStream(string,uint16,address,bytes)"](
+    const tx = await satori["createAdapterDataStream(string,uint32,address,bytes)"](
       "FOUR HOUR", 2, await mockPool.getAddress(), enc(14400)
     );
     expect(await getStreamIdFromTx(tx, satori)).to.be.gte(1);
@@ -118,7 +118,7 @@ describe("Uniswap TWAP window", function () {
   it("refuses a window one second past what any ring can hold", async function () {
     await mockPool.setCardinality(65535, 0);
     await expect(
-      satori["createAdapterDataStream(string,uint16,address,bytes)"](
+      satori["createAdapterDataStream(string,uint32,address,bytes)"](
         "PAST THE CEILING", 2, await mockPool.getAddress(), enc(65536)
       )
     ).to.be.revertedWithCustomError(uniswapAdapter, "InsufficientCardinality")

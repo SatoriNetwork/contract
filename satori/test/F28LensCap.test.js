@@ -9,7 +9,7 @@
  */
 
 const { expect } = require("chai");
-const { deploySatoriFixtureNoFee, pack1, VOTE, warmUpLoyalty } = require("./fixtures");
+const { deploySatoriFixtureNoFee, pack1, VOTE } = require("./fixtures");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
 
@@ -51,10 +51,7 @@ describe("F28/F29 — lens pending walk is budgeted and reports completeness", f
     // NONZERO pending, then many rounds pass with no claim so the forward walk
     // spans well past the harness budget.
     await satori.connect(alice).delegatePredictionPower(bob.address);
-    // Delegator weight is capital x loyalty and a fresh delegation starts at
-    // L = 0, so the lens would report zero pending and the truncation this
-    // test is about would be invisible. Drains to `dave`.
-    await warmUpLoyalty(satori, registry, null, bob, [alice], dave, quickId);
+    await time.increase(86400);
     await registry.setValue(quickId, 100);
     await satori.connect(bob).predictMultipleWithPayloads([{ gameId: quickId, payload: pack1(UP) }]);
     await advanceRound();
@@ -112,7 +109,7 @@ describe("F28/F29 — lens pending walk is budgeted and reports completeness", f
     await advanceRound();
 
     await satori.connect(alice).delegatePredictionPower(bob.address);
-    await warmUpLoyalty(satori, registry, null, bob, [alice], dave, quickId);
+    await time.increase(86400);
     await registry.setValue(quickId, 100);
     await satori.connect(bob).predictMultipleWithPayloads([{ gameId: quickId, payload: pack1(UP) }]);
     await advanceRound();

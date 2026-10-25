@@ -83,11 +83,6 @@
     },
     {
       "inputs": [],
-      "name": "NonMonotonicRound",
-      "type": "error"
-    },
-    {
-      "inputs": [],
       "name": "NotPullStream",
       "type": "error"
     },
@@ -136,9 +131,9 @@
       "inputs": [
         {
           "indexed": true,
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "adapterId",
-          "type": "uint16"
+          "type": "uint32"
         },
         {
           "indexed": true,
@@ -191,9 +186,9 @@
         },
         {
           "indexed": false,
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "adapterId",
-          "type": "uint16"
+          "type": "uint32"
         },
         {
           "indexed": false,
@@ -241,9 +236,9 @@
       "inputs": [
         {
           "indexed": true,
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "adapterId",
-          "type": "uint16"
+          "type": "uint32"
         }
       ],
       "name": "NamedAdapterSet",
@@ -304,6 +299,25 @@
         }
       ],
       "name": "SatoriCoreSet",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "uint32",
+          "name": "streamId",
+          "type": "uint32"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "checkedAt",
+          "type": "uint256"
+        }
+      ],
+      "name": "StreamChecked",
       "type": "event"
     },
     {
@@ -422,9 +436,9 @@
     {
       "inputs": [
         {
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "",
-          "type": "uint16"
+          "type": "uint32"
         }
       ],
       "name": "adapter",
@@ -441,9 +455,9 @@
     {
       "inputs": [
         {
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "",
-          "type": "uint16"
+          "type": "uint32"
         }
       ],
       "name": "adapterName",
@@ -483,9 +497,9 @@
           "type": "string"
         },
         {
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "adapterId",
-          "type": "uint16"
+          "type": "uint32"
         },
         {
           "internalType": "address",
@@ -866,6 +880,11 @@
           "internalType": "bool",
           "name": "named",
           "type": "bool"
+        },
+        {
+          "internalType": "int232",
+          "name": "latestValue",
+          "type": "int232"
         }
       ],
       "stateMutability": "view",
@@ -1013,9 +1032,9 @@
     {
       "inputs": [
         {
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "",
-          "type": "uint16"
+          "type": "uint32"
         }
       ],
       "name": "isCommunityAdapter",
@@ -1053,9 +1072,9 @@
       "name": "namedAdapterId",
       "outputs": [
         {
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "",
-          "type": "uint16"
+          "type": "uint32"
         }
       ],
       "stateMutability": "view",
@@ -1085,9 +1104,9 @@
       "name": "nextAdapterId",
       "outputs": [
         {
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "",
-          "type": "uint16"
+          "type": "uint32"
         }
       ],
       "stateMutability": "view",
@@ -1145,9 +1164,9 @@
       "name": "registerAdapter",
       "outputs": [
         {
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "id",
-          "type": "uint16"
+          "type": "uint32"
         }
       ],
       "stateMutability": "nonpayable",
@@ -1233,9 +1252,9 @@
     {
       "inputs": [
         {
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "id",
-          "type": "uint16"
+          "type": "uint32"
         }
       ],
       "name": "setNamedAdapterId",
@@ -1301,29 +1320,6 @@
         }
       ],
       "name": "setValue",
-      "outputs": [],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "uint32",
-          "name": "streamId",
-          "type": "uint32"
-        },
-        {
-          "internalType": "int232",
-          "name": "newValue",
-          "type": "int232"
-        },
-        {
-          "internalType": "uint24",
-          "name": "round",
-          "type": "uint24"
-        }
-      ],
-      "name": "setValueForRound",
       "outputs": [],
       "stateMutability": "nonpayable",
       "type": "function"
@@ -1440,9 +1436,9 @@
           "type": "uint24"
         },
         {
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "adapterId",
-          "type": "uint16"
+          "type": "uint32"
         },
         {
           "internalType": "bool",
@@ -1506,6 +1502,38 @@
         }
       ],
       "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32[]",
+          "name": "streamIds",
+          "type": "uint32[]"
+        }
+      ],
+      "name": "updateValuesStrict",
+      "outputs": [
+        {
+          "internalType": "uint32",
+          "name": "failed",
+          "type": "uint32"
+        }
+      ],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "upgradeGovernor",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
       "type": "function"
     },
     {

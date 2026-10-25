@@ -197,11 +197,9 @@ export function OffchainTab() {
             Merkle channel is not deployed on this stack
           </div>
           <p className="text-xs text-gray-500 dark:text-gray-400">
-            <code>SatoriMerkle</code> was skipped at deploy time because
-            <code> ROOT_PUBLISHER</code> was unset, so there is no contract to publish a root
-            to and nothing to claim against. Deploying and wiring it is a governor action
-            (<code>scripts/wire-merkle.js</code>, then the Governor tab), after which these
-            controls become live.
+            <code>SatoriMerkle</code> is not wired on this stack, so there is no contract to
+            publish a root to and nothing to claim against. Wiring it is a governor action
+            on the Governor tab, after which these controls become live.
           </p>
         </div>
       ) : (

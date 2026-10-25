@@ -115,6 +115,12 @@
           "internalType": "bool",
           "name": "approved",
           "type": "bool"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "newTotalBurnedWeight",
+          "type": "uint256"
         }
       ],
       "name": "GameApprovedSet",
@@ -221,6 +227,12 @@
           "internalType": "uint256",
           "name": "newGameWeight",
           "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "newTotalBurnedWeight",
+          "type": "uint256"
         }
       ],
       "name": "Voted",
@@ -269,6 +281,12 @@
           "indexed": false,
           "internalType": "uint256",
           "name": "newToWeight",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "newTotalBurnedWeight",
           "type": "uint256"
         }
       ],
@@ -804,6 +822,19 @@
           "internalType": "uint256",
           "name": "",
           "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "upgradeGovernor",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
         }
       ],
       "stateMutability": "view",

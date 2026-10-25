@@ -193,9 +193,10 @@ describe("COVERAGE: one binary (type-0) game auto-created per stream + dup guard
     expect(meta.authority).to.equal(await satori.getAddress());
     expect(meta.dataStreamId).to.equal(DEFAULT_STREAM_ID);
 
-    // Creating a SECOND binary game on the default stream reverts the guard.
+    // Creating a SECOND binary game on the default stream reverts: it is a Coined
+    // stream, and a Sentiment stream carries exactly one game.
     await expect(
       satori.connect(owner).createGame(DEFAULT_STREAM_ID, 0, "0x", "dup-default")
-    ).to.be.revertedWithCustomError(games, "DuplicateBinaryGame");
+    ).to.be.revertedWithCustomError(games, "NamedStreamSingleGame");
   });
 });

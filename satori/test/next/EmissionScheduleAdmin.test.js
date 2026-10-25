@@ -11,6 +11,7 @@ const {
 const SIMPLE3 = "createSimpleDataStream(string,address,uint24)";
 const UINT64_MAX = 2n ** 64n - 1n;
 const HALF = ONE / 2n;
+const MIN_RATIO = 10n ** 15n; // SatoriHub.MIN_EMISSION_RATIO
 
 // rewards.admin() is a dedicated signer so the holder, the token's appoint
 // authority (the deployer) and a stranger are three different wallets.
@@ -98,7 +99,7 @@ describe("SatoriHub — emission ratio lever", function () {
     it("the appoint authority recalls the slot; zero falls back to rewards.admin()", async function () {
       await hub.connect(admin).setEmissionAuthority(carol.address);
       await expect(hub.connect(owner).setEmissionAuthority(ethers.ZeroAddress))
-        .to.emit(hub, "EmissionAuthorityChanged").withArgs(carol.address, ethers.ZeroAddress);
+        .to.emit(hub, "EmissionAuthorityChanged").withArgs(carol.address, admin.address);
       expect(await hub.emissionAuthority()).to.equal(ethers.ZeroAddress);
       expect(await hub.emissionHolder()).to.equal(admin.address);
       await expect(hub.connect(carol).setEmissionRatio(HALF))
@@ -113,10 +114,14 @@ describe("SatoriHub — emission ratio lever", function () {
   });
 
   describe("bounds", function () {
-    it("accepts 1 wei and uint64 max; rejects 0 and uint64 max + 1", async function () {
+    it("accepts the 0.001 floor and uint64 max; rejects 0, dust, and uint64 max + 1", async function () {
       await expect(hub.connect(admin).setEmissionRatio(0n))
         .to.be.revertedWithCustomError(hub, "BadInput");
-      await expect(hub.connect(admin).setEmissionRatio(1n)).to.not.be.reverted;
+      await expect(hub.connect(admin).setEmissionRatio(1n))
+        .to.be.revertedWithCustomError(hub, "BadInput");
+      await expect(hub.connect(admin).setEmissionRatio(MIN_RATIO - 1n))
+        .to.be.revertedWithCustomError(hub, "BadInput");
+      await expect(hub.connect(admin).setEmissionRatio(MIN_RATIO)).to.not.be.reverted;
       await expect(hub.connect(admin).setEmissionRatio(UINT64_MAX)).to.not.be.reverted;
       expect((await hub.emission()).ratioWad).to.equal(UINT64_MAX);
       await expect(hub.connect(admin).setEmissionRatio(UINT64_MAX + 1n))
@@ -228,7 +233,7 @@ describe("SatoriHub — emission ratio lever", function () {
     it("mid-round sets leave emissionRateNow and emissionRateNext alone", async function () {
       const e0 = await hub.emission();
       await hub.connect(admin).setEmissionRatio(HALF);
-      await hub.connect(admin).setEmissionRatio(1n);
+      await hub.connect(admin).setEmissionRatio(MIN_RATIO);
       expect(await hub.emissionRateNow()).to.equal(BASE);
       expect(await hub.emissionRateNext()).to.equal(BASE);
       const e1 = await hub.emission();
@@ -247,7 +252,7 @@ describe("SatoriHub — emission ratio lever", function () {
       expect(await hub.emissionRateNext()).to.equal(s1);
       await advanceRound();
       expect(await hub.emissionRateNow()).to.equal(s1);
-      await hub.connect(admin).setEmissionRatio(1n);
+      await hub.connect(admin).setEmissionRatio(MIN_RATIO);
       expect(await hub.emissionRateNow()).to.equal(s1);
       expect(await hub.emissionRateNext()).to.equal(s1);
       await advanceRound();
@@ -274,9 +279,12 @@ describe("SatoriHub — emission ratio lever", function () {
       const earned = await rewards.unclaimedRewards(alice.address);
       expect(earned).to.be.gt(0n);
 
-      // A dust ratio (1 wei) is the only way down: two steps floor the rate to 0.
-      await hub.connect(admin).setEmissionRatio(1n);
-      await issueTo(hub, token, rw, T0 + ONE);
+      // The 0.001 floor is the only way down: each step takes a thousandth, so
+      // the rate floors to 0 after enough steps.
+      await hub.connect(admin).setEmissionRatio(MIN_RATIO);
+      for (let i = 0; i < 12 && (await hub.emissionRateNext()) > 0n; i++) {
+        await issueTo(hub, token, rw, (await hub.emission()).nextStepAt + ONE);
+      }
       await advanceRound();
       expect(await hub.emissionRateNow()).to.equal(0n);
       expect(await hub.devRateNow()).to.equal(0n);

@@ -7,7 +7,7 @@
 //   SET=1 node scripts/set-capabilities.js -bounty +createGame
 //
 // Capabilities ship OFF (launch checklist E1) so the protocol opens with only
-// predict / vote / claim, and each surface is turned on deliberately. That makes
+// delegation on (voting included is OFF), and each surface is turned on deliberately. That makes
 // this the tool for the whole progressive rollout, not a one-off.
 //
 // ── WHY THE READ-MODIFY-WRITE MATTERS ─────────────────────────────────────
@@ -93,6 +93,7 @@ async function main() {
   const rewardsAddr = process.env.REWARDS_ADDRESS || book.addresses.rewards;
 
   const provider = new ethers.JsonRpcProvider(rpc);
+  await require('./chain-guard').requireChain(provider, book);
   const rewards = new ethers.Contract(rewardsAddr, REWARDS_ABI, provider);
   const admin = await retry(() => rewards.admin());
 

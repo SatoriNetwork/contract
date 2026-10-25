@@ -7,12 +7,7 @@ import { indexerSentimentSplit } from '../utils/indexerClient';
 import { DEFAULT_CHAIN_ID } from '../contracts/addresses';
 import { chainCache } from './useChainRead';
 import { cacheKey } from '../lib/chainCache';
-import { getDeploymentBlock, getCurrentRound, getDeploymentRound } from '../lib/chainValues';
-import { shiftToDescribedRound, DEFAULT_STREAM_ID } from '../lib/defaultStreamSeries';
-
-// DEFAULT_STREAM_ID comes from lib/defaultStreamSeries — stream 1 is the
-// protocol's own stream and the ONLY one whose value describes the previous
-// round rather than its own.
+import { getDeploymentBlock, getCurrentRound } from '../lib/chainValues';
 
 export interface StreamDetail {
   id: number;
@@ -155,44 +150,7 @@ export function useStreamDetail(streamId: number | null) {
         });
       }
 
-      // The default stream reports the PREVIOUS round's prediction count, so
-      // its stamped rounds are one ahead of the rounds they describe, and its
-      // newest value is not written until somebody predicts. Correct both, for
-      // stream 1 only — see lib/defaultStreamSeries.ts. The helpers are
-      // ROUND-keyed; stream 1 is written once per 24h round, so its hour
-      // stamps are exact multiples of 24 and hour/24 is lossless both ways.
-      let series = history;
-      if (streamId === DEFAULT_STREAM_ID) {
-        try {
-          const deploymentRound = Number(await getDeploymentRound(contracts.reads));
-          // shiftToDescribedRound's contract: `round` on INPUT is the absolute
-          // HOUR stamp (it divides by 24 internally). Passing roundOfHour(hour)
-          // here pre-divided it, so the function divided a second time
-          // (20721 -> 862), every point then failed the `>= deploymentRound`
-          // filter, and the default-stream chart went permanently blank. Hand it
-          // the raw hour.
-          const roundKeyed = history.map((p) => ({ ...p, round: p.hour }));
-          const shifted = shiftToDescribedRound(roundKeyed, deploymentRound);
-
-          // No tail fill. Rounds nobody predicted in are never stamped, and the
-          // gap used to be filled from `roundPredictionCount` — correct while
-          // the stream carried a COUNT, wrong since it became a 1e18-scaled
-          // participation ratio. A headcount of 3 next to 4.2e17 plots as a
-          // flat zero. The ratio needs `deployedBalance`, which the engine does
-          // not expose, so an unstamped round is now shown as the gap it is.
-          // See lib/defaultStreamSeries.
-          // Back to the hour-keyed row shape the chart expects, restamping the
-          // hour from the (shifted) round.
-          series = shifted
-            .map(({ round, ...rest }) => ({ ...rest, hour: round * 24 }))
-            .sort((a, b) => a.hour - b.hour);
-        } catch (e) {
-          // A failed read must not blank the chart. Fall back to the raw
-          // stamped series — mislabelled by one round, but present.
-          console.warn('default-stream series correction failed:', e);
-          series = history;
-        }
-      }
+      const series = history;
 
       setDetail({ id: streamId, history: series, prevOfFirst });
     } catch (e) {

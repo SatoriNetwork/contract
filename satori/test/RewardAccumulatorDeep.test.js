@@ -26,7 +26,7 @@
  */
 
 const { expect } = require("chai");
-const { deploySatoriFixture, wrapSatoriForGames, pack1, voteFor, warmUpLoyalty } = require("./fixtures");
+const { deploySatoriFixture, wrapSatoriForGames, pack1, voteFor } = require("./fixtures");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
 
@@ -104,11 +104,7 @@ describe("Deep reward refactor — round-keyed accumulator", function () {
         await voteFor(satori, carol, s3);
 
         await satori.connect(alice).delegatePredictionPower(bob.address);
-        // Delegator weight is capital x loyalty and a fresh delegation starts at
-        // L = 0, so the rates measured below credit nothing without a warm-up.
-        // These streams are daily, hence cadence 2. Drains to `platform`, so
-        // ownPower and delegated capital are untouched.
-        await warmUpLoyalty(satori, registry, null, bob, [alice], platform, s1, 40, CADENCE_ROUNDS);
+        await time.increase(86400);
         await registry.setValue(s1, 100);
         await registry.setValue(s2, 200);
         await registry.setValue(s3, 300);
@@ -221,11 +217,7 @@ describe("Deep reward refactor — round-keyed accumulator", function () {
 
         // Carol delegates today.
         await satori.connect(carol).delegatePredictionPower(bob.address);
-        // Delegator weight is capital x loyalty and a fresh delegation starts at
-        // L = 0, so the rates measured below credit nothing without a warm-up.
-        // These streams are daily, hence cadence 2. Drains to `platform`, so
-        // ownPower and delegated capital are untouched.
-        await warmUpLoyalty(satori, registry, null, bob, [carol], platform, sid, 40, CADENCE_ROUNDS);
+        await time.increase(86400);
         await registry.setValue(sid, 100);
 
         // Bob wins one more round.
@@ -303,11 +295,7 @@ describe("Deep reward refactor — round-keyed accumulator", function () {
         await voteFor(satori, dave, sid);
 
         await satori.connect(carol).delegatePredictionPower(bob.address);
-        // Delegator weight is capital x loyalty and a fresh delegation starts at
-        // L = 0, so the rates measured below credit nothing without a warm-up.
-        // These streams are daily, hence cadence 2. Drains to `platform`, so
-        // ownPower and delegated capital are untouched.
-        await warmUpLoyalty(satori, registry, null, bob, [carol], platform, sid, 40, CADENCE_ROUNDS);
+        await time.increase(86400);
         await registry.setValue(sid, 100);
 
         // In-period win
@@ -446,11 +434,7 @@ describe("Deep reward refactor — round-keyed accumulator", function () {
         await voteFor(satori, carol, sX);
 
         await satori.connect(alice).delegatePredictionPower(bob.address);
-        // Delegator weight is capital x loyalty and a fresh delegation starts at
-        // L = 0, so the rates measured below credit nothing without a warm-up.
-        // These streams are daily, hence cadence 2. Drains to `platform`, so
-        // ownPower and delegated capital are untouched.
-        await warmUpLoyalty(satori, registry, null, bob, [alice], platform, sX, 40, CADENCE_ROUNDS);
+        await time.increase(86400);
         await registry.setValue(sX, 100);
         await registry.setValue(sY, 100);   // Y is predicted below too
 

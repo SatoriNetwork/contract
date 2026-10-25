@@ -38,7 +38,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
-const { deploySatoriFixtureNoFee, pack1, VOTE, voteFor, warmUpLoyalty } = require("../fixtures");
+const { deploySatoriFixtureNoFee, pack1, VOTE, voteFor } = require("../fixtures");
 
 const UP = 1;
 
@@ -108,11 +108,7 @@ describe("adv_7 prediction-delegation: undelegating mid-round forfeits that roun
     // A and B delegate their EQUAL stakes to D.
     await satori.connect(A).delegatePredictionPower(D.address);
     await satori.connect(B).delegatePredictionPower(D.address);
-    // Delegator weight is capital x loyalty and a fresh delegation starts at
-    // L = 0, so every share measured below reads zero without a warm-up.
-    // Both delegators share ONE warm-up so their L is equal and cancels out
-    // of the by-balance split this test pins. Drains to `owner`.
-    await warmUpLoyalty(satori, registry, null, D, [A, B], owner, stream);
+    await time.increase(86400);
 
     // Sanity: D's delegated power = A + B.
     expect((await rewards.predictionDelegateInfo(D.address)).power).to.equal(STAKE * 2n);

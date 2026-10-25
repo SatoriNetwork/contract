@@ -12,7 +12,7 @@ const TOKEN = '0x' + '33'.repeat(20);
 const ME = '0x' + '44'.repeat(20);
 const FEE = BigInt('1000000000000000');
 const NAMED_ID = 7;
-const SIG5 = 'createAdapterDataStream(string,uint16,address,bytes,uint24)';
+const SIG5 = 'createAdapterDataStream(string,uint32,address,bytes,uint24)';
 
 let mockContracts: any;
 

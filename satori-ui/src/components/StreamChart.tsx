@@ -324,7 +324,7 @@ export function StreamChart({ stream, height = 320, isFavorite, onToggleFavorite
                 title="A stream that is just a name: its value is the network's own prediction flow, shown as a shape, never a number."
                 data-testid="stream-named-badge"
               >
-                named
+                sentiment
               </span>
             )}
             {stream.isEligible ? (

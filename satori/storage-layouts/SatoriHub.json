@@ -3,126 +3,168 @@
     "label": "voting",
     "slot": "0",
     "offset": 0,
-    "type": "t_contract(ISatoriVoting)"
+    "type": "t_contract(ISatoriVoting)",
+    "shape": "contract ISatoriVoting/20"
   },
   {
     "label": "rewards",
     "slot": "1",
     "offset": 0,
-    "type": "t_contract(ISatoriRewards)"
+    "type": "t_contract(ISatoriRewards)",
+    "shape": "contract ISatoriRewards/20"
   },
   {
     "label": "registry",
     "slot": "2",
     "offset": 0,
-    "type": "t_contract(ISatoriRegistry)"
+    "type": "t_contract(ISatoriRegistry)",
+    "shape": "contract ISatoriRegistry/20"
   },
   {
     "label": "games",
     "slot": "3",
     "offset": 0,
-    "type": "t_contract(ISatoriGames)"
+    "type": "t_contract(ISatoriGames)",
+    "shape": "contract ISatoriGames/20"
   },
   {
     "label": "bounties",
     "slot": "4",
     "offset": 0,
-    "type": "t_contract(ISatoriBounties)"
+    "type": "t_contract(ISatoriBounties)",
+    "shape": "contract ISatoriBounties/20"
   },
   {
     "label": "merkle",
     "slot": "5",
     "offset": 0,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "onChainMinted",
     "slot": "6",
     "offset": 0,
-    "type": "t_uint256"
+    "type": "t_uint256",
+    "shape": "uint256/32"
   },
   {
     "label": "merkleMinted",
     "slot": "7",
     "offset": 0,
-    "type": "t_uint256"
+    "type": "t_uint256",
+    "shape": "uint256/32"
   },
   {
     "label": "merkleReserveCumulative",
     "slot": "8",
     "offset": 0,
-    "type": "t_uint256"
+    "type": "t_uint256",
+    "shape": "uint256/32"
   },
   {
     "label": "_merkleReserveRate",
     "slot": "9",
     "offset": 0,
-    "type": "t_uint256"
+    "type": "t_uint256",
+    "shape": "uint256/32"
   },
   {
     "label": "_merkleReserveLastRound",
     "slot": "10",
     "offset": 0,
-    "type": "t_uint256"
+    "type": "t_uint256",
+    "shape": "uint256/32"
   },
   {
     "label": "defaultStreamInitialized",
     "slot": "11",
     "offset": 0,
-    "type": "t_bool"
+    "type": "t_bool",
+    "shape": "bool/1"
   },
   {
     "label": "_guard",
     "slot": "12",
     "offset": 0,
-    "type": "t_uint256"
+    "type": "t_uint256",
+    "shape": "uint256/32"
   },
   {
     "label": "_initialized",
     "slot": "13",
     "offset": 0,
-    "type": "t_bool"
+    "type": "t_bool",
+    "shape": "bool/1"
   },
   {
     "label": "satoriToken",
     "slot": "13",
     "offset": 1,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "allowedDelegator",
     "slot": "14",
     "offset": 0,
-    "type": "t_mapping(t_address,t_address)"
+    "type": "t_mapping(t_address,t_address)",
+    "shape": "mapping(address/20=>address/20)"
   },
   {
     "label": "voteLockGovernor",
     "slot": "15",
     "offset": 0,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "relayNonces",
     "slot": "16",
     "offset": 0,
-    "type": "t_mapping(t_address,t_uint256)"
+    "type": "t_mapping(t_address,t_uint256)",
+    "shape": "mapping(address/20=>uint256/32)"
   },
   {
     "label": "lastPredictionDelegation",
     "slot": "17",
     "offset": 0,
-    "type": "t_mapping(t_address,t_struct(LastDelegation)_storage)"
+    "type": "t_mapping(t_address,t_struct(LastDelegation)_storage)",
+    "shape": "mapping(address/20=>struct SatoriHub.LastDelegation{delegate@0.0:address/20,undelegatedRound@0.20:uint24/3})"
   },
   {
     "label": "emission",
     "slot": "18",
     "offset": 0,
-    "type": "t_struct(EmissionSchedule)_storage"
+    "type": "t_struct(EmissionSchedule)_storage",
+    "shape": "struct SatoriHub.EmissionSchedule{issued@0.0:uint128/16,nextStepAt@0.16:uint128/16,rate@1.0:uint128/16,prevRate@1.16:uint128/16,from@2.0:uint64/8,ratioWad@2.8:uint64/8,stepsTaken@2.16:uint32/4,banked@3.0:uint256/32}"
   },
   {
     "label": "emissionAuthority",
     "slot": "22",
     "offset": 0,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
+  },
+  {
+    "label": "onChainAllowance",
+    "slot": "23",
+    "offset": 0,
+    "type": "t_uint192",
+    "shape": "uint192/24"
+  },
+  {
+    "label": "onChainPricedRound",
+    "slot": "23",
+    "offset": 24,
+    "type": "t_uint64",
+    "shape": "uint64/8"
+  },
+  {
+    "label": "voteLockGovernorFrozen",
+    "slot": "24",
+    "offset": 0,
+    "type": "t_bool",
+    "shape": "bool/1"
   }
 ]

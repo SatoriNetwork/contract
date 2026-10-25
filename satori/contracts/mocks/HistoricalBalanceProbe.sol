@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {RLPReader} from "./libraries/RLPReader.sol";
-import {MerklePatricia} from "./libraries/MerklePatricia.sol";
+import {RLPReader} from "../governance/libraries/RLPReader.sol";
+import {MerklePatricia} from "../governance/libraries/MerklePatricia.sol";
 
 /// @title Phase 1 of `docs/design/holder-voting-proposal.txt` — the standalone
 ///        proof prototype, and nothing else.

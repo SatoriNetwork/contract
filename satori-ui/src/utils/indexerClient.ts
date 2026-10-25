@@ -127,8 +127,7 @@ export function indexerPredictions(
 
 // --- Each game's latest prediction (the predict gate) ----------------------
 // `hour` is PredictionMade.hour, the clock hour that prediction's window opened
-// on; a named game reopens to the address at hour + 24. Null hour: a row
-// indexed before the event carried one.
+// on. Null hour: a row indexed before the event carried one.
 
 export interface IndexerLastPrediction {
   gameId: number;

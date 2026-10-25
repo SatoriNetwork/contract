@@ -18,13 +18,13 @@
 // an address can be allocated exactly once, ever. A wrong AMOUNT cannot be
 // corrected and a wrong ADDRESS cannot be reclaimed in this contract — the
 // allocation simply exists and pays whoever holds that key. The only way back is
-// a corrected SatoriAirdrop and `token.setAirdrop`, which works until
-// `freezeAirdrop`; the abandoned contract cannot finalize while the token points
-// elsewhere, and never can once the door is frozen on the corrected one. So the
-// plan step prints every entry and refuses to proceed on anything it can check:
-// bad addresses, zero amounts, duplicates within the file, addresses already
-// allocated on chain, a total that would take the loaded table past the cap, a
-// table the freeze has closed, and a contract the token does not point at.
+// a corrected SatoriAirdrop and `token.setAirdrop`, and an allocation is
+// claimable the block it lands, so it may already be paid by then. So the plan
+// step prints every entry and refuses to proceed on anything it can check: bad
+// addresses, zero amounts, duplicates within the file, addresses already
+// allocated on chain, a total that would take the loaded table past the cap
+// (the contract refuses it too), a finalized table, and a contract the token
+// does not point at.
 //
 // ── HOW IT GETS SENT ──────────────────────────────────────────────────────
 // `loadAirdropBatch` is loader-only and after handoff the loader is a Safe. Two
@@ -37,20 +37,9 @@
 //     UI, and stops.
 //
 // ── WHEN IT PAYS ───────────────────────────────────────────────────────────
-// Loading mints nothing and opens nothing. The sequence is:
-//   1. load every batch (this script, as the loader);
-//   2. check the table on chain, for as long as that takes;
-//   3. `token.freezeAirdrop(airdrop, loadedTotal)` (the freeze authority, with
-//      the address and total it checked) closes the table and pins the door
-//      here, both for good. The token refuses it if either has moved since, or
-//      if the total is over the cap. Run this script with an empty batch `{}`
-//      to print that call and its calldata for the table as it stands;
-//   4. `finalizeAirdropLoading()` (the loader) opens claims.
-// From that block every recipient can claim their whole allocation. Finalize
-// reverts AirdropNotFrozen until step 3 is done, so the order cannot be
-// swapped. Freeze only after the LAST batch is loaded and checked: from then
-// on no entry can be added or fixed, and since the door can never be re-pointed
-// after a freeze, a freeze before loading leaves this airdrop empty for good
+// At once: every allocation is claimable in full from the block its batch lands
+// in. Load batches whenever addresses arrive. `finalizeAirdropLoading()` (the
+// loader) closes loading for good, once the last batch is in
 // (docs/issues/airdrop-claim-at-finalize.md).
 const fs = require('fs');
 const path = require('path');
@@ -69,14 +58,13 @@ const AIRDROP_ABI = [
   'function airdropAllocation(address) view returns (uint256)',
   'function claimableAirdrop(address) view returns (uint256)',
   'function airdropLoadedTotal() view returns (uint256)',
+  'function airdropLoadingFinalized() view returns (bool)',
   'function AIRDROP_TOTAL_SUPPLY() view returns (uint256)',
   'function airdropAuthority() view returns (address)',
   'function token() view returns (address)',
 ];
 const TOKEN_ABI = [
   'function airdrop() view returns (address)',
-  'function airdropFrozen() view returns (bool)',
-  'function freezeAirdrop(address expectedAirdrop, uint256 expectedLoadedTotal)',
 ];
 const SAFE_ABI = [
   'function nonce() view returns (uint256)',
@@ -118,6 +106,7 @@ async function main() {
   }
 
   const provider = new ethers.JsonRpcProvider(rpc);
+  await require('./chain-guard').requireChain(provider, book);
   const airdrop = new ethers.Contract(airdropAddr, AIRDROP_ABI, provider);
 
   // ---- validate the file before touching the chain -----------------------
@@ -143,20 +132,18 @@ async function main() {
     retry(() => airdrop.token()),
   ]);
   const token = new ethers.Contract(tokenAddr, TOKEN_ABI, provider);
-  const [door, frozen] = await Promise.all([
-    retry(() => token.airdrop()), retry(() => token.airdropFrozen()),
+  const [door, finalized] = await Promise.all([
+    retry(() => token.airdrop()), retry(() => airdrop.airdropLoadingFinalized()),
   ]);
-  // Finalize implies the freeze, so this one check also covers a finalized table.
-  if (frozen) {
-    console.error(`\n  REFUSING: the token's airdrop door is frozen (on ${door}), which closed the ` +
-      'table for good. Nothing can be loaded into this or any other airdrop now; ' +
+  if (finalized) {
+    console.error('\n  REFUSING: loading is finalized, which closed the table for good; ' +
       'loadAirdropBatch reverts AirdropLoadingClosed.\n');
     process.exit(1);
   }
-  // Finalize needs the token's door frozen on THIS contract, so a table loaded
-  // into any other (an abandoned one, say) can never be claimed.
+  // The token mints only through its `airdrop` pointer, so a table loaded into
+  // any other contract (an abandoned one, say) can never be claimed.
   if (door.toLowerCase() !== airdropAddr.toLowerCase()) {
-    problems.push(`token.airdrop is ${door}, not this contract; finalize refuses until the token points here`);
+    problems.push(`token.airdrop is ${door}, not this contract; nothing loaded here can be claimed`);
   }
 
   // Already allocated on chain? loadAirdropBatch reverts the WHOLE batch on the
@@ -179,7 +166,7 @@ async function main() {
   for (const e of entries) console.log(`    ${e.addr}  ${ethers.formatEther(e.wei)}`);
 
   if (total + loadedTotal > cap) {
-    problems.push(`batch would take the table past the cap, and the freeze would refuse it ` +
+    problems.push(`batch would take the table past the cap, and loadAirdropBatch would refuse it ` +
       `(${ethers.formatEther(total)} + ${ethers.formatEther(loadedTotal)} loaded > ${ethers.formatEther(cap)})`);
   }
 
@@ -189,16 +176,8 @@ async function main() {
     process.exit(1);
   }
 
-  const printFreeze = (t) => {
-    console.log(`    token.freezeAirdrop(${airdropAddr}, ${t})   (${ethers.formatEther(t)} SATORI)`);
-    console.log(`    to   ${tokenAddr}`);
-    console.log(`    data ${token.interface.encodeFunctionData('freezeAirdrop', [airdropAddr, t])}`);
-  };
   if (entries.length === 0) {
-    console.log('\n  No rows: the freeze call for the table as it stands now. Check the table first;');
-    console.log('  the freeze authority sends this, and the token refuses it if the table moves.');
-    printFreeze(loadedTotal);
-    console.log('');
+    console.log('\n  No rows: nothing to load.\n');
     return;
   }
   console.log('\n  checks passed: addresses valid, no duplicates, none already allocated, cap respected, ' +
@@ -207,9 +186,6 @@ async function main() {
   const iface = new ethers.Interface(AIRDROP_ABI);
   const data = iface.encodeFunctionData('loadAirdropBatch',
     [entries.map((e) => e.addr), entries.map((e) => e.wei)]);
-
-  console.log('\n  If this is the last batch, the freeze call once it lands is:');
-  printFreeze(loadedTotal + total);
 
   if (!process.env.LOAD) {
     console.log('\n  PLAN ONLY. To send:');
@@ -295,8 +271,8 @@ async function main() {
     console.log(`    ${ok ? 'ok  ' : 'FAIL'} ${e.addr}  ${ethers.formatEther(got)}`);
   }
   console.log(bad === 0
-    ? '\n  all allocations present. Once the LAST batch is in and the whole table checks out, ' +
-      'freeze (closes the table for good), then finalizeAirdropLoading.'
+    ? '\n  all allocations present and claimable now. finalizeAirdropLoading closes loading ' +
+      'for good once the LAST batch is in.'
     : `\n  ${bad} still absent after 90s — the inner call reverted (check the Safe's ExecutionSuccess vs the revert selector).`);
   if (bad) process.exit(1);
 
@@ -311,14 +287,10 @@ async function main() {
     await new Promise((r) => setTimeout(r, 3000));
   }
   if (loadedNow < want) {
-    console.log(`\n  the loaded total still reads ${loadedNow}, below ${want}; run again with {} for the freeze call.`);
-  } else {
-    if (loadedNow > want) {
-      console.log(`\n  WARNING: the loaded total is ${loadedNow}, more than this batch accounts for (${want}):` +
-        ' something else changed the table. Check it again before the freeze.');
-    }
-    console.log('\n  freeze call for the table as it stands now:');
-    printFreeze(loadedNow);
+    console.log(`\n  the loaded total still reads ${loadedNow}, below ${want}.`);
+  } else if (loadedNow > want) {
+    console.log(`\n  WARNING: the loaded total is ${loadedNow}, more than this batch accounts for (${want}):` +
+      ' something else changed the table. Check it.');
   }
 }
 

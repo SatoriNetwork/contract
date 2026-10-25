@@ -19,7 +19,7 @@
  */
 
 const { expect } = require("chai");
-const { deploySatoriFixtureNoFee, RAW_TOLERANCE, pack1, VOTE, warmUpLoyalty } = require("./fixtures");
+const { deploySatoriFixtureNoFee, RAW_TOLERANCE, pack1, VOTE } = require("./fixtures");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
 
@@ -85,12 +85,7 @@ describe("Delegator lookup across rounds", function () {
         // and pool pending {50, D+1}; rate pool stays at 100 for
         // round-D predictions.
         await satori.connect(carol).delegatePredictionPower(bob.address);
-        // Delegator weight is capital x loyalty and a fresh delegation starts
-        // at L = 0, so the credits measured below read zero without a warm-up.
-        // Drains to `platform`, leaving carol's balance (her delegated capital)
-        // and bob's ownPower exactly as set up. The warm-up eats rounds, so the
-        // stream needs a fresh value before the next predict.
-        await warmUpLoyalty(satori, registry, null, bob, [carol], platform, s1);
+        await time.increase(86400);
         await registry.setValue(s1, 100);
         await satori.transfer(carol.address, ethers.parseEther("50"));
         await satori.connect(bob).predictMultipleWithPayloads([{ gameId: s1, payload: pack1(UP) }]);
@@ -158,12 +153,7 @@ describe("Delegator lookup across rounds", function () {
         // Day D: Carol delegates 100 to Bob. Receives 25 mid-day-D —
         // schedules cp(D+1)=125 and pool pending {25, D+1}.
         await satori.connect(carol).delegatePredictionPower(bob.address);
-        // Delegator weight is capital x loyalty and a fresh delegation starts
-        // at L = 0, so the credits measured below read zero without a warm-up.
-        // Drains to `platform`, leaving carol's balance (her delegated capital)
-        // and bob's ownPower exactly as set up. The warm-up eats rounds, so the
-        // stream needs a fresh value before the next predict.
-        await warmUpLoyalty(satori, registry, null, bob, [carol], platform, sid);
+        await time.increase(86400);
         await registry.setValue(sid, 100);
         await satori.transfer(carol.address, ethers.parseEther("25"));
 

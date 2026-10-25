@@ -53,6 +53,7 @@ describe("LockVoteGovernor — the lock is the integrity model", function () {
     const { id, end, ev } = await proposeRounds(3, 1000, 6000, text);
     expect(id).to.equal(1n);
     expect(ev.args.description).to.equal(text);
+    expect(ev.args.supplyAtPropose).to.equal(await token.totalSupply());
     const p = await gov.proposal(id);
     expect(p.descriptionHash).to.equal(ethers.keccak256(ethers.toUtf8Bytes(text)));
     expect(p.endRound).to.equal(end);
@@ -226,6 +227,38 @@ describe("LockVoteGovernor — the lock is the integrity model", function () {
 
     await expect(hub.connect(alice).setVoteLockGovernor(alice.address))
       .to.be.revertedWithCustomError(hub, "Unauthorized");       // wiring authority only
+  });
+
+  it("M29: freezing the vote-lock pointer pins it, and only the wiring authority can freeze", async function () {
+    expect(await hub.voteLockGovernorFrozen()).to.equal(false);
+    await expect(hub.connect(alice).freezeVoteLockGovernor())
+      .to.be.revertedWithCustomError(hub, "Unauthorized");
+    expect(await hub.voteLockGovernorFrozen()).to.equal(false);
+
+    await expect(hub.connect(dep).freezeVoteLockGovernor())
+      .to.emit(hub, "VoteLockGovernorFrozen");
+    expect(await hub.voteLockGovernorFrozen()).to.equal(true);
+
+    // The pointer cannot move after, to anything, severing included.
+    await expect(hub.connect(dep).setVoteLockGovernor(alice.address))
+      .to.be.revertedWithCustomError(hub, "AlreadySet");
+    await expect(hub.connect(dep).setVoteLockGovernor(ethers.ZeroAddress))
+      .to.be.revertedWithCustomError(hub, "AlreadySet");
+    expect(await hub.voteLockGovernor()).to.equal(await gov.getAddress());
+
+    // Voting through the pinned governor still works.
+    const { id } = await proposeRounds(2);
+    await expect(gov.connect(alice).castVote(id, 1)).to.not.be.reverted;
+  });
+
+  it("M29: a pointer frozen while severed stays severed", async function () {
+    await (await hub.connect(dep).setVoteLockGovernor(ethers.ZeroAddress)).wait();
+    await (await hub.connect(dep).freezeVoteLockGovernor()).wait();
+    await expect(hub.connect(dep).setVoteLockGovernor(await gov.getAddress()))
+      .to.be.revertedWithCustomError(hub, "AlreadySet");
+    const { id } = await proposeRounds(2);
+    await expect(gov.connect(alice).castVote(id, 1))
+      .to.be.revertedWithCustomError(hub, "Unauthorized");
   });
 
   it("proposer hands itself over; a stranger cannot", async function () {

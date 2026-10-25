@@ -39,6 +39,11 @@
     },
     {
       "inputs": [],
+      "name": "MixedDigits",
+      "type": "error"
+    },
+    {
+      "inputs": [],
       "name": "MixedScript",
       "type": "error"
     },

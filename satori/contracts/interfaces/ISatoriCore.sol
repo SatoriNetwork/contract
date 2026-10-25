@@ -25,9 +25,21 @@ interface ISatoriCore {
     function residualNext() external view returns (uint256);
 
     /// @notice Count a general-lane reward commit (`userPortion +
-    ///         committedDelegatorShare`) toward the issuance counter that
-    ///         triggers emission steps. Restricted to SatoriRewards.
+    ///         committedDelegatorShare`): reported to the token as earned (the
+    ///         token books the dev fee on it) and toward the issuance counter
+    ///         that triggers emission steps. Refuses a commit beyond the rounds
+    ///         priced by `freezeRoundGross`. Restricted to SatoriRewards.
     function noteIssued(uint256 general) external;
+
+    /// @notice The on-chain gross a fresh round is priced at: the residual
+    ///         after the dev fee, net of the dial (which yields to a 1-wei floor).
+    function onChainGrossNow() external view returns (uint256);
+
+    /// @notice Price the current round once, on its first touch, returning its
+    ///         on-chain gross; the on-chain lane may commit that much more. A
+    ///         repeat call for the same round returns 0 and adds nothing.
+    ///         Restricted to SatoriRewards.
+    function freezeRoundGross(uint256 round) external returns (uint256 gross);
 
     /// @notice Which round's vote weights govern `round`. The identity — a
     ///         prediction is paid against its OWN round's weights.
@@ -65,9 +77,8 @@ interface ISatoriCore {
      * @notice Mark `user` as a protocol participant. Read by
      *         SatoriToken._update's participation skip-mask to decide whether
      *         to fire the hub transfer hook (which runs the child sync calls).
-     *         Child contracts call this on first state-mutating engagement
-     *         (e.g. `stakeBountyToken`). Restricted by an inline caller check
-     *         to the five child contracts and the engine (SatoriHub.markParticipated).
+     *         Only SatoriRewards calls it (when a user delegates); the hub
+     *         reverts `Unauthorized` for any other caller.
      */
     function markParticipated(address user) external;
 
@@ -76,20 +87,19 @@ interface ISatoriCore {
     function unmarkParticipated(address user) external;
 
     /**
-     * @notice Charge the upfront bounty burn (heavy SATORI fee) on `funder`,
-     *         locking it into the core (compounding the default-stream
-     *         self-upvote). Called by SatoriBounties.fundBounty when a bounty is
+     * @notice Burn the upfront bounty fee (heavy SATORI tier) from `funder`.
+     *         Called by SatoriBounties.fundBounty when a bounty is
      *         posted in a NON-SATORI token. Reverts if `funder` is short on
      *         SATORI. Restricted to the bounties child.
      * @return fee The SATORI amount burned.
      */
     function chargeBountyBurn(address funder) external returns (uint256 fee);
 
-    /// @notice Look up a user's Prediction at a specific (stream, round).
+    /// @notice Look up a user's Prediction on a specific (game, round).
     /// @dev Used by SatoriRewardsLens.userWeightByDirection to re-derive the
     ///      committed weight from `rawPredictionPower` + `multiplier` without a
     ///      dedicated storage mapping. Returns the zero-valued Prediction when
     ///      no slot matches.
-    function predictions(address user, uint32 streamId, uint256 round)
+    function predictions(address user, uint32 gameId, uint256 round)
         external view returns (SatoriTypes.Prediction memory);
 }

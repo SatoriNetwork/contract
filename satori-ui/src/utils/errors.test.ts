@@ -98,7 +98,7 @@ describe('explainError on the named-stream create path', () => {
   it('says the name is taken', () => {
     const msg = explainError({ message: 'execution reverted: NameTaken()' });
     expect(msg).not.toMatch(/execution reverted|Contract error/);
-    expect(msg).toMatch(/already a named stream/i);
+    expect(msg).toMatch(/already a Sentiment stream/i);
   });
 
   it('turns the create race into "try again"', () => {
@@ -116,7 +116,7 @@ describe('explainError on the named-stream create path', () => {
   it('refuses a bounty on a named game, decoded from the bounties ABI', () => {
     const iface = new Interface(BountiesAbi.abi.filter((f: any) => f.type === 'error'));
     const data = iface.encodeErrorResult('NamedGame', []);
-    expect(explainError({ data, message: 'unknown custom error' })).toBe('Named games take no bounties.');
+    expect(explainError({ data, message: 'unknown custom error' })).toBe('Sentiment games take no bounties.');
   });
 
   it('explains an unwired named adapter', () => {
@@ -145,7 +145,7 @@ describe('explainError on the named-stream create path', () => {
 
   it('decodes Coined\'s errors from raw revert data via the adapter ABI', () => {
     const iface = new Interface(NamedStreamAdapterAbi.abi.filter((f: any) => f.type === 'error'));
-    for (const [name, re] of [['EmptyName', /empty/i], ['BadName', /allow/i], ['MixedScript', /writing system/i]] as const) {
+    for (const [name, re] of [['EmptyName', /empty/i], ['BadName', /allow/i], ['MixedScript', /writing system/i], ['MixedDigits', /numeral system/i]] as const) {
       const data = iface.encodeErrorResult(name, []);
       expect(explainError({ data, message: 'unknown custom error' })).toMatch(re);
     }
@@ -263,9 +263,8 @@ describe('sendPreflighted on the predict and vote paths', () => {
   it('explains DuplicatePrediction rather than leaving it raw', () => {
     const msg = explainError({ message: 'execution reverted: DuplicatePrediction()' });
     expect(msg).not.toMatch(/execution reverted/);
-    // A named game also refuses a second call within 24 hours, across rounds.
     expect(msg).toMatch(/this round/);
-    expect(msg).toMatch(/24 hours on a named stream/);
+    expect(msg).not.toMatch(/24 hours/);
   });
 });
 

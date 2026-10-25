@@ -253,17 +253,16 @@ describe("Scoring-walk direction (newest-to-oldest)", function () {
     // weight and paid nothing — the extra gas is the reward SSTOREs, not extra
     // ring walking. Measured 232,118.
     //
-    // 240k -> 260k for loyalty weighting
-    // (docs/design/delegation-loyalty-weighting.md). The settle path now also
-    // counts the round's win (`_roundWins`) and reads the predict-time weight
-    // pin, and this scenario's predictor has delegators, so it walks the
-    // loyalty accumulator too. Measured 248,777 — a ~7% rise, still far below
-    // the O(32-walk) regression this bound exists to catch. The bound is a
-    // short-circuit guard, not a micro-budget.
+    // The bound is a short-circuit guard against the O(32-walk) regression, not
+    // a micro-budget.
     //
     // 260k -> 280k for the issuance-indexed emission schedule: a winning score
     // reports to the hub's counter (SatoriHub.noteIssued), ~14k cold in a
     // single-score tx. Measured 270,263 (255,242 without it).
-    expect(Number(rc.gasUsed)).to.be.lt(280_000);
+    //
+    // 280k -> 300k for the earn-time dev fee (M03): the hub now reports each
+    // winning score to the TOKEN (accrueRewards books the fee then), a cold
+    // call and two counter writes. Measured 289,304.
+    expect(Number(rc.gasUsed)).to.be.lt(300_000);
   });
 });

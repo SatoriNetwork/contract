@@ -28,10 +28,8 @@
 // and an interrupted run is resumed by simply running it again.
 //
 // ── WHEN IT CAN RUN ────────────────────────────────────────────────────────
-// Claims open the moment the loader calls `finalizeAirdropLoading` (which needs
-// the token's `freezeAirdrop` first), and each claim then pays the whole
-// allocation (docs/issues/airdrop-claim-at-finalize.md). Before that every
-// claim reverts ClaimsNotOpen, so the plan stops early.
+// Any time: an allocation is claimable in full from the block it is loaded in
+// (docs/issues/airdrop-claim-at-finalize.md).
 const fs = require('fs');
 const path = require('path');
 
@@ -112,6 +110,7 @@ async function main() {
   }
 
   const provider = new ethers.JsonRpcProvider(rpc);
+  await require('./chain-guard').requireChain(provider, book);
   const airdrop = new ethers.Contract(airdropAddr, AIRDROP_ABI, provider);
 
   if (!files.length) {
@@ -129,8 +128,7 @@ async function main() {
     console.log('');
   }
 
-  const [finalized, cap, claimedTotal] = await Promise.all([
-    retry(() => airdrop.airdropLoadingFinalized()),
+  const [cap, claimedTotal] = await Promise.all([
     retry(() => airdrop.AIRDROP_TOTAL_SUPPLY()),
     retry(() => airdrop.airdropClaimedTotal()),
   ]);
@@ -139,10 +137,6 @@ async function main() {
   console.log(`  recipients     ${addresses.length} unique, from ${files.length ? `${files.length} file(s)` : 'AirdropAllocated logs'}`);
   console.log(`  cap            ${ethers.formatEther(cap)} SATORI`);
   console.log(`  claimed so far ${ethers.formatEther(claimedTotal)} SATORI\n`);
-  if (!finalized) {
-    console.log('  loading is not finalized, so nothing is claimable yet.\n');
-    return;
-  }
 
   // ---- who is actually owed something ------------------------------------
   // Filtering here is what makes a re-run cheap AND makes the plan honest: the

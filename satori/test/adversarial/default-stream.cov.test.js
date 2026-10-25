@@ -40,6 +40,12 @@ let BUDGET;
 // weight makes the denominator 11e18, and the default is exactly 1/11 of it.
 const DEFAULT_SHARE_DIVISOR = 11n;
 
+async function rewards_budget(satori, r) {
+  const rewards = await ethers.getContractAt("SatoriRewards", await satori.satoriRewards());
+  const ev = await rewards.queryFilter(rewards.filters.RoundBudgetFrozen(r), 0, "latest");
+  return ev[0].args.budget;
+}
+
 async function advanceRound() {
   const t = await time.latest();
   await time.increaseTo(Math.floor(t / 86400) * 86400 + 86400 + 1);
@@ -68,195 +74,71 @@ async function setup() {
 describe("default-stream COVERAGE: derived weight, denominator integrity, provider gating", function () {
   this.timeout(120000);
 
-  // GAP (high): the default's slice is real and is paid IN FULL.
-  // Replaces defaultCut_conservation / "pays a solo default predictor the FULL
-  // slice". With the default as the SOLE game predicted that round, its derived
-  // weight IS the whole denominator, so its lone predictor must receive the
-  // entire round budget — proving nothing is skimmed off the default's pool
-  // (the 5% cut deduction that used to live in _computeReward is gone).
-  it("pays a solo default predictor the FULL round budget (nothing is skimmed off its pool)", async function () {
-    const { satori, voting, registry, signers, lens } = await setup();
-    const [owner, alice] = signers;
+  // GAP (high): the default game is a Sentiment game, so it pays pari-mutuel: a side
+  // is paid out of the OTHER side's weight. A crowd that all leans the same way
+  // draws nothing, and nothing is skimmed on the way (no cut, no bonus).
+  it("pays nothing when nobody opposes the winning side, and mints nothing for it", async function () {
+    const { satori, voting, signers, lens, registry } = await setup();
+    const [, alice, bob] = signers;
     await satori.transfer(alice.address, ethers.parseEther("10"));
-    // Fillers are FUNDED with real balance (10 each, same as alice) so their
-    // predictions add real CAPITAL to the round's deployedPower. The default
-    // game's flushed value is now a participation-by-capital ratio
-    // (deployedPower * 1e18 / totalSupply), so only committed capital — never a
-    // bare prediction count — can move it. (Total supply is a tight 1440, so the
-    // per-wallet amounts are kept small.)
-    for (let k = 2; k < 20; k++) await satori.transfer(signers[k].address, ethers.parseEther("10"));
+    await satori.transfer(bob.address, ethers.parseEther("10"));
 
-    // Filler stream with NO burnt weight -> recordGameVotesForRound skips it, so
-    // it never enters the denominator and the default stays the SOLE entry. Used
-    // only to let FUNDED predictors commit capital on successive rounds so the
-    // default's value (yesterday's deployedPower ratio) climbs and alice's UP
-    // prediction wins.
-    //
-    // It is created at cadence 1 as the ADMIN (`satori` is connected to the
-    // deployer, which is rewards.admin() here). A public stream is cadence 2 or
-    // slower, and this filler has to take a fresh value on THREE CONSECUTIVE
-    // rounds so predictors can deploy capital against it every round — the
-    // default game is cadence 1 and that is the rhythm under test. The filler is
-    // pure scaffolding: it carries no weight and is never asserted on.
-    const filler = await streamIdFrom(
-      await satori["createSimpleDataStream(string,address,uint24)"]("Filler", owner.address, 720),
-      satori
-    );
-
-    let sigIdx = 2;
-    async function fillerPredicts(n, val) {
-      await registry.setValue(filler, val);
-      for (let i = 0; i < n; i++) {
-        await satori.connect(signers[sigIdx++]).predictMultipleWithPayloads([{ gameId: filler, payload: pack1(UP) }]);
-      }
-    }
-
-    // R1: alice predicts UP on the default game. Committed CAPITAL rises across
-    // the two scored rounds — deployedPower(R1) = alice(10) + 1 funded filler
-    // (10) = 20, deployedPower(R2) = 3 funded fillers (30) — so the default's
-    // value B (deployedPower(R1) ratio, flushed at R1+1) is below C
-    // (deployedPower(R2) ratio, flushed at R1+2), and her UP prediction wins.
-    // (R3's 5 fillers = 50 keeps the ramp rising but does not affect alice's
-    // R1 ABC score, which reads only R1 vs R2.)
     await advanceRound();
     const r1 = await satori.getCurrentRound();
-    await satori.flushDefaultStream();
     await satori.connect(alice).predictMultipleWithPayloads([{ gameId: DEFAULT_ID, payload: pack1(UP) }]);
-    await fillerPredicts(1, 100);
+    await satori.connect(bob).predictMultipleWithPayloads([{ gameId: DEFAULT_ID, payload: pack1(UP) }]);
+    // Nobody opposes: alice's UP is right (bob's flow came after her), but there
+    // is no DOWN weight to pay her from.
+    await time.increase(25 * 3600);
+    await registry.updateValue(DEFAULT_ID);
 
-    await advanceRound();
-    await satori.flushDefaultStream();
-    await fillerPredicts(3, 110);
-
-    await advanceRound();
-    await satori.flushDefaultStream();
-    await fillerPredicts(5, 120);
-
-    await advanceRound();
-    await satori.flushDefaultStream();
-
-    // Nobody burned anything, so the default sits on its 1e18 derived FLOOR and
-    // is the only game in the round's denominator.
-    const dv = await voting.getGameVotesAtRound(DEFAULT_ID, r1);
-    expect(dv).to.equal(ethers.parseEther("1"));            // DEFAULT_WEIGHT_FLOOR
-    expect(dv).to.equal(await voting.defaultDerivedWeight());
-    expect(dv).to.equal(await voting.roundDenominator(r1));  // sole entry
-    // The zero-weight filler game never made it into the denominator.
-    expect(await voting.getGameVotesAtRound(filler, r1)).to.equal(0n);
-
+    expect(await voting.getGameVotesAtRound(DEFAULT_ID, r1)).to.equal(await voting.defaultDerivedWeight());
     const claimableBefore = await getClaimable(lens, alice.address);
     const marketingBefore = await getMarketingBucket(satori);
+    const engine = await ethers.getContractAt("SatoriEngine", await satori.engine());
     await satori.settlePrediction(alice.address, DEFAULT_ID);
-    const claimableAfter = await getClaimable(lens, alice.address);
-    const marketingAfter = await getMarketingBucket(satori);
-
-    // Sole producer => streamPool == budget => the solo predictor's GROSS reward
-    // is the full budget. Under eager credit the 5% referral skim moves to the
-    // marketing bucket at credit time, so alice's net claimable + the marketing
-    // cut reconstruct the full budget exactly. (Tolerance for rawPower
-    // quantization.)
-    const aliceReward = claimableAfter - claimableBefore;
-    const marketingCut = marketingAfter - marketingBefore;
-    const gross = aliceReward + marketingCut;
-    expect(gross).to.be.closeTo(BUDGET, ethers.parseEther("0.001"));
-    // The skim really did fire (this is a reward credit, not a raw mint): the
-    // marketing cut is exactly floor(gross * 5%), so alice's net is strictly
-    // below the gross full slice.
-    expect(marketingCut).to.equal((gross * 500n) / 10000n);
-    expect(aliceReward).to.be.lt(gross);
+    const scored = (await engine.queryFilter(engine.filters.PredictionScored(alice.address)))
+      .filter((e) => Number(e.args[1]) === DEFAULT_ID);
+    expect(scored.length).to.equal(1);
+    expect(scored[0].args.correct).to.equal(true);
+    expect(await getClaimable(lens, alice.address)).to.equal(claimableBefore);
+    expect(await getMarketingBucket(satori)).to.equal(marketingBefore);
   });
 
-  // GAP (high): the default's FLOORED share of the round is paid to its
-  // predictor exactly. Replaces
-  // defaultCut_conservation_mint_equals_predictor_deduction: the mint side is
-  // gone, so the whole conservation statement collapses to
-  //     defaultPredictorGross == BUDGET * defaultDerivedWeight / roundDenominator
-  // with the derived weight on its 1e18 floor (the 1% derivation of a 10-ether
-  // burn is ≈0.101, under the floor), making that ratio precisely 1/11.
-  it("pays the default's predictor exactly its floored 1/11 share of the round denominator", async function () {
-    const { satori, voting, registry, signers, lens } = await setup();
+  // GAP (high): the default's FLOORED share of the round. With one user game
+  // carrying 10 burnt weight the default's 1% derivation (10 * 100/9900 ~ 0.101)
+  // is under the 1e18 floor, so it sits ON its floor: weight 1, denominator 11,
+  // and the default is exactly 1/11 of it. That share is the game's slice P, the
+  // most the pari-mutuel can pay out of it.
+  it("gives the default exactly its floored 1/11 share of the round denominator", async function () {
+    const { satori, voting, registry, signers } = await setup();
     const [owner, alice, bob, voter] = signers;
     await satori.transfer(alice.address, ethers.parseEther("20"));
     await satori.transfer(bob.address, ethers.parseEther("20"));
     await satori.transfer(voter.address, ethers.parseEther("20"));
-    // Fillers FUNDED (20 each) so their predictions deploy real capital — the
-    // default's value is a deployedPower ratio now, not a prediction count.
-    for (let k = 4; k < 20; k++) await satori.transfer(signers[k].address, ethers.parseEther("20"));
 
-    // One user game carrying 10 burnt weight. The default's 1% derivation of that
-    // (10 * 100/9900 ≈ 0.101) is under the 1e18 floor, so the default sits ON its
-    // floor: weight 1, denominator 11, and the default is exactly 1/11 of it.
     const user = await streamIdFrom(await satori.createSimpleDataStream("User", owner.address), satori);
     await voteFor(satori, voter, user, ethers.parseEther("10"));
     expect(await voting.weightOf(user)).to.equal(ethers.parseEther("10"));
     expect(await voting.defaultDerivedWeight()).to.equal(ethers.parseEther("1"));
-
-    // No-weight filler stream that FUNDED predictors deploy capital against so
-    // the default's deployedPower ratio rises (B < C) and alice's UP prediction
-    // wins. Cadence 1, created as the ADMIN: it must be writable on three
-    // consecutive rounds so capital can be committed every round, which a public
-    // (cadence >= 2) stream cannot do. Scaffolding only — no weight, never
-    // asserted on.
-    const filler = await streamIdFrom(
-      await satori["createSimpleDataStream(string,address,uint24)"]("Filler", owner.address, 720),
-      satori
-    );
-    let sigIdx = 4;
-    async function fill(n, v) {
-      await registry.setValue(filler, v);
-      for (let i = 0; i < n; i++) {
-        await satori.connect(signers[sigIdx++]).predictMultipleWithPayloads([{ gameId: filler, payload: pack1(UP) }]);
-      }
-    }
 
     // R1: BOTH the user game and the default are predicted, so both enter the
     // round's accumulated denominator.
     await advanceRound();
     const r1 = await satori.getCurrentRound();
     await registry.setValue(user, 100);
-    await satori.flushDefaultStream();
     await satori.connect(alice).predictMultipleWithPayloads([{ gameId: DEFAULT_ID, payload: pack1(UP) }]);
     await satori.connect(bob).predictMultipleWithPayloads([{ gameId: user, payload: pack1(UP) }]);
-    await fill(1, 100);
-    // deployedPower(R1) = alice(20) + bob(20) + 1 funded filler(20) = 60.
-
-    // R2..R4: keep committed CAPITAL rising so C > B. `user` is a normal PUBLIC
-    // stream (cadence 2), so it produces every OTHER round — writing it at R2
-    // would trip CadenceRoundsNotElapsed. Only the default's deployedPower has to
-    // move every round, and the funded cadence-1 fillers supply that.
     await advanceRound();
-    await satori.flushDefaultStream();
-    await fill(4, 110); // deployedPower(R2) = 4 funded fillers(20) = 80 > 60 => alice's UP wins
-
-    await advanceRound();
-    await registry.setValue(user, 120); // one full cadence period after the R1 write
-    await satori.flushDefaultStream();
-    await fill(6, 120); // deployedPower(R3) = 6 funded fillers(20) = 120 (keeps the ramp rising)
-
-    await advanceRound();
-    await satori.flushDefaultStream();
 
     const dv = await voting.getGameVotesAtRound(DEFAULT_ID, r1);
     const total = await voting.roundDenominator(r1);
     expect(dv).to.equal(ethers.parseEther("1"));    // on the floor
     expect(total).to.equal(ethers.parseEther("11")); // 10 burnt + 1 floored
-    // The structural claim: the floored default is exactly 1/11 of the round.
     expect(dv * DEFAULT_SHARE_DIVISOR).to.equal(total);
-
-    const before = await getClaimable(lens, alice.address);
-    const marketingBefore = await getMarketingBucket(satori);
-    await satori.settlePrediction(alice.address, DEFAULT_ID);
-    const predReward = (await getClaimable(lens, alice.address)) - before;
-    const predCut = (await getMarketingBucket(satori)) - marketingBefore;
-    expect(predReward).to.be.gt(0n);
-
-    // The predictor's reward is credited through the referral chokepoint, so 5%
-    // is skimmed to the marketing bucket at credit time. Reconstruct the GROSS
-    // and pin it to the nominal allocation — no cut, no bonus, no residue.
-    const nominal = (BUDGET * dv) / total;
-    expect(nominal).to.equal(BUDGET / DEFAULT_SHARE_DIVISOR);
-    expect(predCut).to.equal((predReward + predCut) * 500n / 10000n); // skim is floor(gross*5%)
-    expect(predReward + predCut).to.be.closeTo(nominal, ethers.parseEther("0.0001"));
+    // The slice the default game may pay out of: the round budget at that share.
+    const frozen = await rewards_budget(satori, r1);
+    expect((frozen * dv) / total).to.equal(frozen / DEFAULT_SHARE_DIVISOR);
   });
 
   // GAP (med): default_activeVotes_counted_once_per_round.
@@ -287,7 +169,6 @@ describe("default-stream COVERAGE: derived weight, denominator integrity, provid
     const r = await satori.getCurrentRound();
     await registry.setValue(a, 100);
     await registry.setValue(b, 100);
-    await satori.flushDefaultStream();
 
     // alice predicts BOTH user games in one batch; erin predicts the default.
     await satori.connect(alice).predictMultipleWithPayloads([

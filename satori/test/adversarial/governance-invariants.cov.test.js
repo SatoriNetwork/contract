@@ -154,7 +154,6 @@ describe("ADV COV governance-invariants", function () {
     const ROUNDS = 12;
     for (let r = 0; r < ROUNDS; r++) {
       await advanceOneRound();
-      await satori.flushDefaultStream(); // publishes last round's count on the default stream
       await assertUnderCap(`round ${r} post-flush`);
 
       vA = Math.floor(vA * 1.02);
@@ -189,7 +188,6 @@ describe("ADV COV governance-invariants", function () {
 
     // Final settle + claim sweep, then assert the tight cap one last time.
     await advanceOneRound();
-    await satori.flushDefaultStream();
     await registry.connect(provider1).setValue(gA, Math.floor(vA * 1.02));
     await registry.connect(provider2).setValue(gB, Math.floor(vB * 1.02));
     for (const u of predictors) {
@@ -357,8 +355,7 @@ describe("ADV COV governance-invariants", function () {
     const ROUNDS = 6;
     for (let r = 0; r < ROUNDS; r++) {
       await advanceOneRound();
-      await satori.flushDefaultStream();
-      val = Math.floor(val * 1.03);
+        val = Math.floor(val * 1.03);
       await registry.connect(provider).setValue(gLive, val);
 
       // Only the first HALF of the voters predict, and only on gLive.
@@ -389,7 +386,6 @@ describe("ADV COV governance-invariants", function () {
 
     // Drain the last round and re-check.
     await advanceOneRound();
-    await satori.flushDefaultStream();
     await registry.connect(provider).setValue(gLive, Math.floor(val * 1.03));
     for (const v of voters.slice(0, 2)) {
       try { await satori.settlePrediction(v.address, gLive); } catch (e) {}

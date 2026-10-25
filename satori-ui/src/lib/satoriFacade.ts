@@ -37,7 +37,6 @@ export const ENGINE_METHODS = new Set<string>([
   'eligibilityRound',
   'predictedStreamsCount',
   'userPredictions',
-  'flushDefaultStream',
 ]);
 
 // Methods served by the immutable token (ERC20 + round clock + participation).

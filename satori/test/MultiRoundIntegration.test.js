@@ -865,7 +865,7 @@ describe("Multi-Round Integration", function () {
   // ─── 14. default stream (Predictions) ──────────────────────────────
 
   describe("default stream behavior", function () {
-    it("default stream value tracks daily prediction count", async function () {
+    it("default stream gets history once someone predicts it, with no flush and no vote", async function () {
       const { satori, registry, rewards, owner, signers } = await loadFixture(deploySatoriFixture);
       const [, alice, bob] = signers;
 
@@ -893,7 +893,7 @@ describe("Multi-Round Integration", function () {
         { gameId: eth, payload: pack1(1) },
       ]);
 
-      // Round 2: Bob predicts → flushDefaultStream writes round-1 count
+      // Round 2: Bob predicts
       await advanceCadence();
       await registry.setValue(btc, 67000);
       await registry.setValue(eth, 3700);
@@ -902,10 +902,13 @@ describe("Multi-Round Integration", function () {
         { gameId: eth, payload: pack1(1) },
       ]);
 
-      // The default stream should have been flushed
+      // The default stream is a Sentiment stream: nothing writes it until a
+      // prediction's own pull does.
+      expect(Number((await registry.getHistory(defaultId))[2])).to.equal(0);
+      await satori.connect(owner).predictMultipleWithPayloads([{ gameId: defaultId, payload: pack1(1) }]);
       const history = await registry.getHistory(defaultId);
       const count = Number(history[2]);
-      expect(count).to.be.gt(0, "Default stream should have history after flush");
+      expect(count).to.be.gt(0, "Default stream should have history after a prediction");
     });
   });
 

@@ -1,8 +1,8 @@
 {
   "SatoriEngine": {
     "PredictionMade": {
-      "signature": "event PredictionMade(address indexed predictor, uint32 indexed gameId, uint256 indexed round, uint8 direction, uint256 streak, uint256 predictionPower, uint64 hour)",
-      "topic": "0x902e31c90e6fd2c4253cab7752832fe694d40ea5f01beb39b5d1abe0133a1cd4"
+      "signature": "event PredictionMade(address indexed predictor, uint32 indexed gameId, uint256 indexed round, uint8 direction, uint256 streak, uint256 predictionPower, uint64 hour, uint256 multiplier, uint256 weight)",
+      "topic": "0x16f5cedc6ed9556249c363a267f14ab09b0faf870dcd7217d9873b6cfbbf8eea"
     },
     "PredictionScored": {
       "signature": "event PredictionScored(address indexed user, uint32 indexed gameId, uint256 indexed round, bool correct, uint256 streak, uint256 scaledWeight)",
@@ -27,6 +27,10 @@
     "CurveConfigSet": {
       "signature": "event CurveConfigSet(uint16 dustFloor, uint16 topGradient, uint16 bottomGradient, uint16 topShift)",
       "topic": "0xe9013ff5888919dd45de0d871b7ce61cd5ae4c48e385f10fe4ee82f96d8c29a9"
+    },
+    "NamedCounterMoved": {
+      "signature": "event NamedCounterMoved(uint32 indexed gameId, int232 value)",
+      "topic": "0x9fb3d902eda0cb00f5432f131f071e20ba4b7dd060a6103397f74613ade9e875"
     }
   },
   "SatoriBounties": {
@@ -107,30 +111,34 @@
     "OffchainBudgetSet": {
       "signature": "event OffchainBudgetSet(uint256 newOffchainBudget, uint256 roundSet, address indexed setter)",
       "topic": "0x032c04a6e8c878762fe1b67bd12c7b6fc609f2b6349dbff1102dced8e5c0658b"
+    },
+    "GameRoundWeight": {
+      "signature": "event GameRoundWeight(uint32 indexed gameId, uint256 indexed round, uint256 up, uint256 down)",
+      "topic": "0x25d6630ff185bccfbc65c96ce1d94ce52b9b7e563a123d27461ca521d57b485f"
     }
   },
   "SatoriVoting": {
     "Voted": {
-      "signature": "event Voted(address indexed voter, uint32 indexed gameId, uint256 indexed round, uint256 amountBurned, uint256 weightAdded, uint256 newGameWeight)",
-      "topic": "0x66a909853b33357ebbe1799b8afaa0fe48a7c97c2ae365c00d3f9de2da01b9b4"
+      "signature": "event Voted(address indexed voter, uint32 indexed gameId, uint256 indexed round, uint256 amountBurned, uint256 weightAdded, uint256 newGameWeight, uint256 newTotalBurnedWeight)",
+      "topic": "0xd05efa6075c003d90810541aad74c409f8e97348814271ff35aed7d787b6286a"
     },
     "GameApprovedSet": {
-      "signature": "event GameApprovedSet(uint32 indexed gameId, bool approved)",
-      "topic": "0xe9793af35802791235152df8e2e2cfb0f4c7e6ef8de75eb1c005961609f66ce0"
+      "signature": "event GameApprovedSet(uint32 indexed gameId, bool approved, uint256 newTotalBurnedWeight)",
+      "topic": "0x26b02415492b907d99eca4ea5540a92e17a0d12e4040b1e381d688afc69761be"
     },
     "VotesMoved": {
-      "signature": "event VotesMoved(address indexed voter, uint32 indexed fromGame, uint32 indexed toGame, uint256 round, uint256 amount, uint256 newFromWeight, uint256 newToWeight)",
-      "topic": "0x8b929a4cc23e3fa8308c13be4a73ea931a9645e0836014cdad707f6393f0fc06"
+      "signature": "event VotesMoved(address indexed voter, uint32 indexed fromGame, uint32 indexed toGame, uint256 round, uint256 amount, uint256 newFromWeight, uint256 newToWeight, uint256 newTotalBurnedWeight)",
+      "topic": "0x6409cdeaafd1c97451d21f4ff48b5e71db073fed3ca98340ec95e694627f43f1"
     }
   },
   "SatoriRegistry": {
     "DataStreamCreated": {
-      "signature": "event DataStreamCreated(uint32 indexed streamId, address indexed creator, address indexed provider, uint16 adapterId, uint24 minCadenceMinutes, bytes config, string name)",
-      "topic": "0xb82d9c40771dcc7c2958c09fd5b1d3d907a889a7da6d97c08f9e420b35859d0e"
+      "signature": "event DataStreamCreated(uint32 indexed streamId, address indexed creator, address indexed provider, uint32 adapterId, uint24 minCadenceMinutes, bytes config, string name)",
+      "topic": "0x2438a2ef8a87b9669658ea3443a7006e02b3f07cae28724b9f1129ddd8183210"
     },
     "NamedAdapterSet": {
-      "signature": "event NamedAdapterSet(uint16 indexed adapterId)",
-      "topic": "0xdb890e912615cb9d8f09c053828b62a9622e000149c9b5b9cbbeafaa22218ee9"
+      "signature": "event NamedAdapterSet(uint32 indexed adapterId)",
+      "topic": "0x0ec7b02fb8a562815ca90853c6e45cab10609247b6fedd4b10488fc6b651cf96"
     },
     "NamedStreamCreated": {
       "signature": "event NamedStreamCreated(uint32 indexed streamId, bytes32 indexed nameKey)",
@@ -151,8 +159,8 @@
   },
   "SatoriGames": {
     "GameCreated": {
-      "signature": "event GameCreated(uint32 indexed gameId, uint32 indexed dataStreamId, address indexed authority, uint16 gameTypeId, uint24 targetMinutes, string name, bytes gameConfig)",
-      "topic": "0x54bd9998e1f21142b261f52ae976d8f99630ec5e12f1e4f74a7c7e9eccb58cd3"
+      "signature": "event GameCreated(uint32 indexed gameId, uint32 indexed dataStreamId, address indexed authority, uint32 gameTypeId, uint24 targetMinutes, string name, bytes gameConfig)",
+      "topic": "0xfdfabbdf39b8aecfb709a9b09510d7816e261d842e9edbd7ff64b80ea17cd18d"
     },
     "GameNameUpdated": {
       "signature": "event GameNameUpdated(uint32 indexed gameId, string newName)",

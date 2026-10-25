@@ -98,9 +98,9 @@ describe("gap adapters — createGame propagates validateForStream InvalidConfig
 
     expect(gameId).to.be.greaterThan(0);
     expect(await games.gameCount()).to.equal(gamesBefore + 1n);
-    // Fee moved from caller to the contract.
+    // The fee was burned from the caller; the contract holds none of it.
     expect(await satori.balanceOf(owner.address)).to.equal(ownerBefore - fee);
-    expect(await satori.balanceOf(await satori.getAddress())).to.equal(contractBefore + fee);
+    expect(await satori.balanceOf(await satori.getAddress())).to.equal(contractBefore);
   });
 
   for (const [label, makeCfg] of [

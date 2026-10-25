@@ -15,6 +15,8 @@ import "../../contracts/SatoriGames.sol";
 import "../../contracts/SatoriRewardsLens.sol";
 import "../../contracts/libraries/SatoriTypes.sol";
 import "../../contracts/adapters/CustomAdapter.sol";
+import "../../contracts/adapters/NamedStreamAdapter.sol";
+import "../../contracts/mocks/MockCoined.sol";
 import "../../contracts/mocks/YesNoGame.sol";
 import "../../contracts/mocks/EveryoneWinsGame.sol";
 import "../../contracts/mocks/ReentrantGameAdapter.sol";
@@ -70,9 +72,9 @@ contract Handler is Test {
     ReentrantGameAdapter public reentrantGame;
 
     // gameTypeIds assigned by registerGameAdapter (1+; 0 is the inline binary).
-    uint16 public yesNoTypeId;
-    uint16 public everyoneWinsTypeId;
-    uint16 public reentrantTypeId;
+    uint32 public yesNoTypeId;
+    uint32 public everyoneWinsTypeId;
+    uint32 public reentrantTypeId;
 
     // The adapter game IDs (created on stream 2). Enumerated by the adapter
     // conservation invariants. Game IDs 1,2 are the auto-created binary games;
@@ -160,9 +162,10 @@ contract Handler is Test {
     // action calls — if one is ever added it MUST add to this ghost too, or
     // Conservation INV-1 will report a phantom shortfall.
     //
-    // The fee "burns" (streamBurn / gameBurn / bountyBurn) are misnomers: they
-    // transferFrom into the hub sink, which is a touched address, and do not
-    // move totalSupply at all.
+    // The hub's fees (streamBurn / gameBurn / bountyBurn) burn too. Their amount
+    // depends on whether the pool is new, so the actions that pay them add the
+    // measured supply drop (`_noteFeeBurn`), and the constructor adds what its
+    // setup paid.
     //
     // This is what replaced `Σ getVotingPower == totalSupply` as the suite's
     // supply-conservation anchor. Weight is no longer a view over the supply, so
@@ -233,15 +236,22 @@ contract Handler is Test {
     address public constant MERKLE = address(0x4E4B1E);
     bytes32 internal constant REWARD_SPLIT = keccak256("RewardSplit(address,uint32,uint256,uint256,uint256,uint256)");
 
-    /// Mirror of `satori.emission().issued`: genesis, plus every `noteIssued`
-    /// argument rewards sends, plus every positive write to
-    /// `merkleReserveCumulative`, each grossed up by the dev fee separately.
+    /// Mirror of `satori.emission().issued`: the token's accrued total —
+    /// genesis, plus every `accrueRewards` report the hub sends (a scoring
+    /// credit and the reserve it banks go in one report) with the fee the
+    /// token books on it, rounded up per report.
     uint256 public ghostIssued;
     /// RewardSplit events with no matching `noteIssued(u + d·[W≠0])` call.
     uint256 public ghostSplitMismatch;
     uint256 public ghostSplitsMatched;
     uint256 public ghostSplitsWithDelegatorShare;
     uint256 public ghostNoteIssuedCalls;
+    /// Σ of every successful `noteIssued` argument: the scoring credits (and the
+    /// fuzz bumps). With the banked reserve this is everything the hub may have
+    /// reported to the token, counted from the hub's INPUTS rather than from its
+    /// outgoing `accrueRewards` calls.
+    uint256 public ghostNotedGeneral;
+    uint256 public generalGenesis;
     uint256 public ghostReserveBanks;
 
     uint256 public callCount_setEmissionRatio;
@@ -251,7 +261,6 @@ contract Handler is Test {
     uint256 public callCount_merkleMint;
 
     bytes32 internal _reserveCumulativeSlot;
-    uint256 internal _roundWeightSnapshotSlot;
 
     /// Wraps every action: `issued` can move on any path that reaches the hub
     /// (scoring, claims, dial changes, transfers' delegation sync), so an
@@ -314,10 +323,10 @@ contract Handler is Test {
             address(satoriToken), address(engine), address(voting), address(rewards),
             address(registry), address(games), address(bounties)
         );
-        ghostIssued = satoriToken.totalRewardsMinted();
+        ghostIssued = satoriToken.generalAccrued() + satoriToken.devFeeAccrued();
+        generalGenesis = satoriToken.generalAccrued();
         satori.setSatoriMerkle(MERKLE);
         _reserveCumulativeSlot = bytes32(_layoutSlot("SatoriHub", "merkleReserveCumulative"));
-        _roundWeightSnapshotSlot = _layoutSlot("SatoriRewards", "_roundWeightSnapshot");
         require(
             uint256(vm.load(address(satori), bytes32(_layoutSlot("SatoriHub", "onChainMinted"))))
                 == satori.onChainMinted(),
@@ -384,7 +393,7 @@ contract Handler is Test {
         customAdapter = new CustomAdapter();
         // Official (community = false): deployer is the admin (rewards was
         // deployed with admin = deployer), so it uses the admin-only path.
-        uint16 customAdapterId = satori.registerAdapter(address(customAdapter), "Custom");
+        uint32 customAdapterId = satori.registerAdapter(address(customAdapter), "Custom");
 
         // Default stream + a Custom stream that we can predict against.
         // initializeDefaultStream creates the DEFAULT game (id 1) on the
@@ -397,6 +406,13 @@ contract Handler is Test {
         // by creation order.
         mockStream = new MockDataStream();
         mockStream.setValue(100);
+        // The default stream is the Sentiment stream "satori": the Sentiment adapter
+        // must be registered and wired before the stream is created, and
+        // setNamedAdapterId requires that no stream exists yet.
+        NamedStreamAdapter namedAdapter = new NamedStreamAdapter(
+            address(engine), address(registry), address(new MockCoined())
+        );
+        registry.setNamedAdapterId(satori.registerAdapter(address(namedAdapter), "Sentiment"));
         satori.initializeDefaultStream();
         bytes memory cfg = "";
         // createAdapterDataStream(name, adapterId, provider, config,
@@ -514,6 +530,14 @@ contract Handler is Test {
         bountyStreamId = satori.createSimpleDataStream("fuzz-2h-bounty", address(this), uint24(120));
         bountyGameId = games.binaryGameByStream(bountyStreamId);
         _roundBudgetSlot = _layoutSlot("SatoriRewards", "_roundBudget");
+        _noteFeeBurn(satoriToken.totalRewardsMinted() + satoriToken.airdropMinted());
+    }
+
+    /// Adds what left supply since `expectedSupply` to the burn ghost. Only for
+    /// calls that mint nothing and vote nothing, so the drop is all fee.
+    function _noteFeeBurn(uint256 expectedSupply) internal {
+        uint256 supply = satoriToken.totalSupply();
+        if (supply < expectedSupply) ghostBurned += expectedSupply - supply;
     }
 
     /// What Rewards may credit game `g` in round `r`: the round's frozen
@@ -540,6 +564,8 @@ contract Handler is Test {
     function _registerAdapterGame(uint32 gameId) internal {
         adapterGameIds.push(gameId);
         isAdapterGame[gameId] = true;
+        // The handler authored the game: it names the one token the game pays in.
+        bounties.setAdapterBountyToken(gameId, address(bountyToken));
     }
 
     function adapterGameCount() external view returns (uint256) {
@@ -596,18 +622,27 @@ contract Handler is Test {
         return type(uint256).max;
     }
 
-    function _roundWeightSnapshot(address user, uint256 round) internal view returns (uint256) {
-        bytes32 inner = keccak256(abi.encode(user, _roundWeightSnapshotSlot));
-        return uint256(vm.load(address(rewards), keccak256(abi.encode(round, inner))));
-    }
-
     function _ghostIssued(Vm.AccountAccess[] memory accesses, Vm.Log[] memory logs) internal {
         uint256 bps = satoriToken.devFeeBps();
         uint256[] memory notes = new uint256[](accesses.length);
+        uint256[] memory revertedNotes = new uint256[](accesses.length);
         uint256 nNotes;
+        uint256 nReverted;
         for (uint256 i = 0; i < accesses.length; i++) {
             Vm.AccountAccess memory a = accesses[i];
-            if (a.reverted) continue;
+            if (a.reverted) {
+                if (a.kind == VmSafe.AccountAccessKind.Call && a.account == address(satori) && a.data.length == 36) {
+                    bytes memory data = a.data;
+                    bytes4 sel;
+                    uint256 general;
+                    assembly {
+                        sel := mload(add(data, 32))
+                        general := mload(add(data, 36))
+                    }
+                    if (sel == SatoriHub.noteIssued.selector) revertedNotes[nReverted++] = general;
+                }
+                continue;
+            }
             if (a.kind == VmSafe.AccountAccessKind.Call && a.account == address(satori) && a.data.length == 36) {
                 bytes memory data = a.data;
                 bytes4 sel;
@@ -619,18 +654,25 @@ contract Handler is Test {
                 if (sel == SatoriHub.noteIssued.selector) {
                     notes[nNotes++] = general;
                     ghostNoteIssuedCalls++;
-                    ghostIssued += general * 10000 / (10000 - bps);
+                    ghostNotedGeneral += general;
+                }
+            }
+            if (a.kind == VmSafe.AccountAccessKind.Call && a.account == address(satoriToken) && a.data.length == 36) {
+                bytes memory data = a.data;
+                bytes4 sel;
+                uint256 general;
+                assembly {
+                    sel := mload(add(data, 32))
+                    general := mload(add(data, 36))
+                }
+                if (sel == SatoriToken.accrueRewards.selector) {
+                    ghostIssued += general + (general * bps + (10000 - bps) - 1) / (10000 - bps);
                 }
             }
             for (uint256 k = 0; k < a.storageAccesses.length; k++) {
                 Vm.StorageAccess memory s = a.storageAccesses[k];
                 if (s.reverted || !s.isWrite || s.account != address(satori) || s.slot != _reserveCumulativeSlot) continue;
-                uint256 prev = uint256(s.previousValue);
-                uint256 next = uint256(s.newValue);
-                if (next > prev) {
-                    ghostReserveBanks++;
-                    ghostIssued += (next - prev) * 10000 / (10000 - bps);
-                }
+                if (uint256(s.newValue) > uint256(s.previousValue)) ghostReserveBanks++;
             }
         }
         uint256 j;
@@ -643,17 +685,31 @@ contract Handler is Test {
             address predictor = address(uint160(uint256(l.topics[1])));
             uint256 round = uint256(l.topics[3]);
             (uint256 u, uint256 d,) = abi.decode(l.data, (uint256, uint256, uint256));
-            if (d != 0 && _roundWeightSnapshot(predictor, round) == 0) d = 0;
+            uint256 m = j;
+            while (m < nNotes && notes[m] != u + d) m++;
+            if (m == nNotes && _takeReverted(revertedNotes, nReverted, u + d)) continue;
             _noteBinaryCredit(uint32(uint256(l.topics[2])), round, u + d);
-            while (j < nNotes && notes[j] != u + d) j++;
-            if (j == nNotes) {
+            if (m == nNotes) {
+                j = m;
                 ghostSplitMismatch++;
             } else {
-                j++;
+                j = m + 1;
                 ghostSplitsMatched++;
                 if (d != 0) ghostSplitsWithDelegatorShare++;
             }
         }
+    }
+
+    /// The recorder keeps the logs of a reverted frame, so a `RewardSplit` whose
+    /// `noteIssued` reverted with it (the hub failing closed) is not a missed commit.
+    function _takeReverted(uint256[] memory reverted, uint256 n, uint256 amount) internal pure returns (bool) {
+        for (uint256 i = 0; i < n; i++) {
+            if (reverted[i] == amount) {
+                reverted[i] = type(uint256).max;
+                return true;
+            }
+        }
+        return false;
     }
 
     function _noteBinaryCredit(uint32 g, uint256 r, uint256 amount) internal {
@@ -889,10 +945,12 @@ contract Handler is Test {
             satoriToken.transfer(funder, burn);
         }
         if (bountyToken.balanceOf(funder) >= 150 ether) {
+            uint256 supplyBefore = satoriToken.totalSupply();
             vm.prank(funder);
             try bounties.fundBounty(bountyGameId, address(bountyToken), 150 ether, 100 ether) {
                 ghostBountyFunded[bountyGameId][address(bountyToken)] += 150 ether;
                 callCount_fundBounty++;
+                _noteFeeBurn(supplyBefore);
             } catch {}
         }
         address[2] memory stakers = [up, down];
@@ -970,10 +1028,12 @@ contract Handler is Test {
             vm.prank(deployer);
             satoriToken.transfer(actor, burn);
         }
+        uint256 supplyBefore = satoriToken.totalSupply();
         vm.prank(actor);
         try bounties.fundBounty(gameId, address(token), amount, proposedRate) {
             ghostBountyFunded[gameId][address(token)] += amount;
             callCount_fundBounty++;
+            _noteFeeBurn(supplyBefore);
         } catch {}
     }
 
@@ -1169,9 +1229,11 @@ contract Handler is Test {
     function registerCommunityAdapter(uint256 actorSeed, uint256 which) external trackIssued {
         address actor = _actor(actorSeed);
         address impl = (which & 1) == 0 ? address(everyoneWinsGame) : address(reentrantGame);
+        uint256 supplyBefore = satoriToken.totalSupply();
         vm.prank(actor);
         try satori.registerCommunityGameAdapter(impl, "fuzz") {
             callCount_registerCommunityAdapter++;
+            _noteFeeBurn(supplyBefore);
         } catch {}
     }
 
@@ -1299,9 +1361,38 @@ contract Handler is Test {
 
     /// Stands in for issuance a fuzz sequence is too short to earn: real scoring
     /// adds at most about one round's rate per round, and the first threshold
-    /// is FLAT_ROUNDS rounds away.
+    /// is FLAT_ROUNDS rounds away. The hub lets rewards report only what its
+    /// priced rounds allow and the token only what its envelope allows, so the
+    /// bump first warps far enough for both, then prices the rounds skipped.
     function bumpIssued(uint256 amountSeed) external trackIssued {
         uint256 amount = (amountSeed % 6) * 500_000 ether + bound(amountSeed >> 8, 0, 500_000 ether);
+        uint256 gross = satori.onChainGrossNow();
+        if (gross == 0) return;
+        uint256 bps = satoriToken.devFeeBps();
+        uint256 reported = satoriToken.generalAccrued() - satori.merkleReserveCumulative();
+        uint256 allowance = satori.onChainAllowance();
+        uint256 cur = satori.getCurrentRound();
+        uint256 need;
+        if (reported + amount > allowance) {
+            uint256 short = reported + amount - allowance;
+            uint256 covered = gross * (cur - satori.onChainPricedRound());
+            if (short > covered) need = (short - covered + gross - 1) / gross;
+        }
+        uint256 used = satoriToken.generalAccrued() + satoriToken.devFeeAccrued()
+            + amount + (amount * bps + (10000 - bps) - 1) / (10000 - bps);
+        uint256 envRounds = (used + 1440 ether - 1) / 1440 ether;
+        uint256 elapsed = cur - satoriToken.deploymentRound() + 1;
+        if (envRounds > elapsed + need) need = envRounds - elapsed;
+        // Once a ratio cut has dropped the gross to a few wei, covering the amount
+        // would take longer than any real chain runs, and the clamp at NO_STEP is not
+        // the behaviour under test.
+        if (need > 5000) return;
+        if (need > 0) vm.warp(block.timestamp + need * 1 days);
+        // Price the round through Rewards' own first touch, so Rewards records
+        // the same gross the hub priced (a direct freeze would leave Rewards'
+        // budget for this round unset).
+        vm.prank(address(registry));
+        try rewards.onStreamProduced(0) {} catch {}
         vm.prank(address(rewards));
         try satori.noteIssued(amount) { callCount_bumpIssued++; } catch {}
     }

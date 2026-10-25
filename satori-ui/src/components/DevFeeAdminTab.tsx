@@ -29,7 +29,7 @@ export function DevFeeAdminTab() {
   const {
     loading, root, nodes, error,
     refresh, readProposal, approveRotation, revokeRotation, rotateAt,
-    transferAuthority, renounceAuthority,
+    transferAuthority, acceptAuthority, renounceAuthority,
   } = useDevFee();
   const [busy, setBusy] = useState<string | null>(null);
   const [txError, setTxError] = useState<string | null>(null);
@@ -44,6 +44,7 @@ export function DevFeeAdminTab() {
   }
 
   const mine = nodes.filter((n) => n.iAmAuthority);
+  const offered = nodes.filter((n) => n.iAmPendingAuthority);
 
   return (
     <div className="space-y-4" data-testid="devfee-admin-tab">
@@ -72,7 +73,24 @@ export function DevFeeAdminTab() {
         </div>
       )}
 
-      {mine.length === 0 && (
+      {offered.map((n) => (
+        <div key={`offer-${n.address}`} className="card-themed p-4 space-y-2" data-testid="devfee-admin-offer">
+          <div className="text-sm">
+            The authority on <span className="font-mono">{n.address}</span> has offered you the role.
+            It moves to you only when you accept.
+          </div>
+          <button
+            onClick={() => run(`accept-${n.address}`, () => acceptAuthority(n))}
+            disabled={busy !== null}
+            className="w-full py-1.5 bg-amber-600 hover:bg-amber-700 disabled:bg-gray-400 dark:disabled:bg-gray-600 !text-white text-xs font-medium rounded transition-colors"
+            data-testid="devfee-admin-accept"
+          >
+            {busy === `accept-${n.address}` ? 'Accepting…' : 'Accept the role'}
+          </button>
+        </div>
+      ))}
+
+      {mine.length === 0 && offered.length === 0 && (
         <div className="card-themed p-4 text-sm text-gray-500">
           Your address is not the authority on any splitter in this tree.
         </div>
@@ -169,13 +187,13 @@ function AdminNode({
           className="w-full text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 underline"
           data-testid="devfee-admin-hand-open"
         >
-          Hand this role to another address
+          Offer this role to another address
         </button>
       ) : (
         <div className="pt-2 border-t border-gray-200 dark:border-gray-700 space-y-2" data-testid="devfee-admin-hand">
           <div className="text-xs text-gray-600 dark:text-gray-400">
-            The new address gets the power to redirect this splitter on its own. Yours
-            loses it immediately. Give it to someone you would give the income to.
+            The new address gets the power to redirect this splitter on its own once it
+            accepts; until then you keep it. Offer it to someone you would give the income to.
           </div>
           <input
             value={handTo}
@@ -208,7 +226,7 @@ function AdminNode({
               className="flex-1 py-1.5 bg-amber-600 hover:bg-amber-700 disabled:bg-gray-400 dark:disabled:bg-gray-600 !text-white text-xs font-medium rounded transition-colors"
               data-testid="devfee-admin-hand-submit"
             >
-              {busy === `hand-${node.address}` ? 'Handing over…' : 'Hand over the role'}
+              {busy === `hand-${node.address}` ? 'Offering…' : 'Offer the role'}
             </button>
             <button
               onClick={() => { setHandOpen(false); setHandTo(''); setHandConfirm(''); }}

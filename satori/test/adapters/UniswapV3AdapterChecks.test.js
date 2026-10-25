@@ -1,4 +1,4 @@
-// UniswapV3Adapter — fee tier + pool age validation.
+// UniswapV3Adapter — fee tier + pool history validation.
 //
 // These checks live in `validate` (called once at create) and are the
 // permissionless guards against the lowest-effort manipulation
@@ -62,58 +62,67 @@ describe("UniswapV3Adapter — fee tier check", function () {
   });
 });
 
-describe("UniswapV3Adapter — 1-day pool-age check", function () {
-  it("accepts a pool whose oldest observation is 2 days old (default mock state)", async function () {
-    const { satori, authority, pool } = await deployFixture();
-    // Default mock: oldest observation is 2 days ago, comfortably past the
-    // 1-day minimum.
-    await expect(
-      createUniswapStream(satori, "Old Pool", await pool.getAddress(), authority.address)
-    ).to.not.be.reverted;
+describe("UniswapV3Adapter — pool history check (M33)", function () {
+  // A ring that has not wrapped starts at the pool's first observation, so its
+  // oldest entry IS the pool's age. A wrapped ring only shows how far back it
+  // reaches, which on a busy pool is hours, so it is held to the TWAP window.
+  describe("ring not yet full (oldest slot uninitialized): true pool age", function () {
+    it("accepts a pool exactly 1 day + 1s old", async function () {
+      const { satori, authority, pool } = await deployFixture();
+      const now = await time.latest();
+      await pool.setOldestObservation(now - 86400 - 1, false);
+      await expect(
+        createUniswapStream(satori, "Edge Old", await pool.getAddress(), authority.address)
+      ).to.not.be.reverted;
+    });
+
+    it("rejects a pool just under 1 day old", async function () {
+      const { satori, authority, pool, uniswapAdapter } = await deployFixture();
+      const now = await time.latest();
+      // Margin of 100s to absorb the +1s block advance the next tx introduces.
+      await pool.setOldestObservation(now - 86400 + 100, false);
+      await expect(
+        createUniswapStream(satori, "Just Too Young", await pool.getAddress(), authority.address)
+      ).to.be.revertedWithCustomError(uniswapAdapter, "PoolTooYoung");
+    });
+
+    it("rejects a brand-new pool", async function () {
+      const { satori, authority, pool, uniswapAdapter } = await deployFixture();
+      const now = await time.latest();
+      await pool.setOldestObservation(now, false);
+      await expect(
+        createUniswapStream(satori, "Brand New", await pool.getAddress(), authority.address)
+      ).to.be.revertedWithCustomError(uniswapAdapter, "PoolTooYoung");
+    });
   });
 
-  it("accepts a pool exactly 1 day + 1s old", async function () {
-    const { satori, authority, pool } = await deployFixture();
-    const now = await time.latest();
-    await pool.setOldestObservation(now - 86400 - 1, true);
-    await expect(
-      createUniswapStream(satori, "Edge Old", await pool.getAddress(), authority.address)
-    ).to.not.be.reverted;
-  });
+  describe("ring wrapped (oldest slot initialized): reach must cover the TWAP window", function () {
+    it("accepts a busy pool whose ring reaches back only 3 hours", async function () {
+      const { satori, authority, pool } = await deployFixture();
+      const now = await time.latest();
+      await pool.setOldestObservation(now - 3 * 3600, true);
+      await expect(
+        createUniswapStream(satori, "Busy Pool", await pool.getAddress(), authority.address)
+      ).to.not.be.reverted;
+    });
 
-  it("rejects a pool just under 1 day old", async function () {
-    const { satori, authority, pool, uniswapAdapter } = await deployFixture();
-    const now = await time.latest();
-    // Margin of 100s to absorb the +1s block advance the next tx introduces.
-    await pool.setOldestObservation(now - 86400 + 100, true);
-    await expect(
-      createUniswapStream(satori, "Just Too Young", await pool.getAddress(), authority.address)
-    ).to.be.revertedWithCustomError(uniswapAdapter, "PoolTooYoung");
-  });
+    it("accepts a ring that reaches back exactly the default 30-minute window", async function () {
+      const { satori, authority, pool } = await deployFixture();
+      const now = await time.latest();
+      await pool.setOldestObservation(now - 1800 - 5, true);
+      await expect(
+        createUniswapStream(satori, "Exact Reach", await pool.getAddress(), authority.address)
+      ).to.not.be.reverted;
+    });
 
-  it("rejects a brand-new pool (oldest observation = current block)", async function () {
-    const { satori, authority, pool, uniswapAdapter } = await deployFixture();
-    const now = await time.latest();
-    await pool.setOldestObservation(now, true);
-    await expect(
-      createUniswapStream(satori, "Brand New", await pool.getAddress(), authority.address)
-    ).to.be.revertedWithCustomError(uniswapAdapter, "PoolTooYoung");
-  });
-
-  it("falls back to index-0 timestamp when oldest slot is uninitialized (buffer not full)", async function () {
-    // When cardinality slots haven't all been written yet, the "next-to-
-    // overwrite" slot isn't initialized and the adapter falls back to
-    // index 0. This test simulates that by marking the oldest slot
-    // uninitialized while index 0 (also mocked to the same field) returns
-    // a 2-day-old timestamp.
-    const { satori, authority, pool } = await deployFixture();
-    const now = await time.latest();
-    // Mock returns the same timestamp for both `oldestIdx` and index-0 —
-    // marking it uninitialized exercises the fallback branch.
-    await pool.setOldestObservation(now - 2 * 86400, false);
-    await expect(
-      createUniswapStream(satori, "Fallback Branch", await pool.getAddress(), authority.address)
-    ).to.not.be.reverted;
+    it("rejects a ring that reaches back less than the window", async function () {
+      const { satori, authority, pool, uniswapAdapter } = await deployFixture();
+      const now = await time.latest();
+      await pool.setOldestObservation(now - 600, true);
+      await expect(
+        createUniswapStream(satori, "Short Reach", await pool.getAddress(), authority.address)
+      ).to.be.revertedWithCustomError(uniswapAdapter, "PoolNotReady");
+    });
   });
 });
 

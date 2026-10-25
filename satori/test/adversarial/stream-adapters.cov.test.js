@@ -388,10 +388,10 @@ describe("[adversarial-cov] stream-adapters", function () {
       ).to.be.revertedWithCustomError(uniswapAdapter, "BadFeeTier");
     });
 
-    it("reverts PoolTooYoung when oldest observation younger than 1 day", async function () {
+    it("reverts PoolTooYoung when an unwrapped ring's first observation is younger than 1 day", async function () {
       const now = await time.latest();
       // Oldest observation timestamp = now - 12h (< MIN_POOL_AGE = 1 day).
-      await pool.setOldestObservation(now - 12 * 3600, true);
+      await pool.setOldestObservation(now - 12 * 3600, false);
       await expect(
         createUniswapStream(satori, "young", await pool.getAddress(), authority.address)
       ).to.be.revertedWithCustomError(uniswapAdapter, "PoolTooYoung");
@@ -430,7 +430,7 @@ describe("[adversarial-cov] stream-adapters", function () {
       const agg = await Mock.deploy();
       await agg.waitForDeployment();
       await expect(
-        satori["createAdapterDataStream(string,uint16,address,bytes)"](
+        satori["createAdapterDataStream(string,uint32,address,bytes)"](
           "bad", ADAPTER_ID_CHAINLINK, await agg.getAddress(), "0x"
         )
       ).to.be.reverted;
@@ -461,7 +461,7 @@ describe("[adversarial-cov] stream-adapters", function () {
       await satori.registerCommunityAdapter(await adapter2.getAddress(), "custom2");
       expect(await registry.adapter(newId)).to.equal(await adapter2.getAddress());
 
-      const badTx = await satori["createAdapterDataStream(string,uint16,address,bytes)"](
+      const badTx = await satori["createAdapterDataStream(string,uint32,address,bytes)"](
         "broken", newId, user1.address /* EOA */, encodeCustomConfig()
       );
       const badId = await getStreamId(badTx, satori);

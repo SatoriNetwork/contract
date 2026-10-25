@@ -1,9 +1,10 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
-const { loadFixture, impersonateAccount, setBalance } = require("@nomicfoundation/hardhat-network-helpers");
-const { deploySatoriFixtureNoFee, deploySatoriFixtureOpts, pack1, VOTE, freezeStandingAirdrop } = require("../fixtures");
+const { loadFixture, impersonateAccount, setBalance, time } = require("@nomicfoundation/hardhat-network-helpers");
+const { deploySatoriFixtureNoFee, deploySatoriFixtureOpts, pack1, VOTE } = require("../fixtures");
 const {
-  BASE, T0, grossUp, rewardsSigner, issuedOf, issueTo, advanceRound, eventsNamed,
+  ROUND, BASE, PHI_INV, FLAT_ROUNDS, T0, ladder, grossUp, generalReaching, generalBelow,
+  rewardsSigner, issuedOf, issueTo, advanceRound, eventsNamed,
 } = require("./emissionHelpers");
 
 // What moves `emission().issued` (docs/issues/emission-issuance-indexed-schedule.md §4):
@@ -103,29 +104,20 @@ describe("Issued counter — what counts toward the emission steps", function ()
     expect(delta).to.equal(grossUp(u, bps));
   });
 
-  it("counts the delegator pot only when W != 0; evaporated shares and delegator claims never count", async function () {
+  it("counts the whole delegator pot with the predictor's share; delegator claims never count", async function () {
     await satori.connect(alice).delegatePredictionPower(bob.address);
-    let sawEvaporated = false, sawCommitted = false;
     let base = 100;
-    for (let i = 0; i < 8 && !(sawEvaporated && sawCommitted); i++, base += 100) {
+    for (let i = 0; i < 3; i++, base += 100) {
       await predict(base);
       const { delta, split } = await resolve(base, true);
       expect(split, `round ${i} must pay`).to.not.equal(null);
-      const committed = (await rewards.delegatorRewardRatePerRound(bob.address, split.round)) > 0n;
       expect(split.delegatorAmount, `round ${i} has a delegator pot`).to.be.gt(0n);
-      if (committed) {
-        sawCommitted = true;
-        expect(delta, `round ${i} W != 0`).to.equal(grossUp(split.predictorAmount + split.delegatorAmount, bps));
-      } else {
-        sawEvaporated = true;
-        expect(delta, `round ${i} W == 0`).to.equal(grossUp(split.predictorAmount, bps));
-      }
+      expect(await rewards.delegatorRewardRatePerRound(bob.address, split.round), `round ${i} rate`).to.be.gt(0n);
+      expect(delta, `round ${i}`).to.equal(grossUp(split.predictorAmount + split.delegatorAmount, bps));
       await advanceRound();
       const claim = await issuedDelta(() => satori.connect(alice)["claim(address)"](sink.address));
       expect(claim.delta, "delegator claim").to.equal(0n);
     }
-    expect(sawEvaporated, "a W == 0 round occurred").to.equal(true);
-    expect(sawCommitted, "a W != 0 round occurred").to.equal(true);
   });
 
   it("a losing score does not bump", async function () {
@@ -152,7 +144,6 @@ describe("Issued counter — what counts toward the emission steps", function ()
     expect(await token.devFeeMinted()).to.be.gt(devBefore);
     expect(dev.delta, "mintDevFee").to.equal(0n);
 
-    await freezeStandingAirdrop(token, owner);
     const airdropAddr = await token.airdrop();
     await impersonateAccount(airdropAddr);
     await setBalance(airdropAddr, E(1));
@@ -177,10 +168,13 @@ describe("Issued counter — what counts toward the emission steps", function ()
     await advanceRound();
     await advanceRound();
 
+    // The dial took effect the round after it was set; three rounds on, a
+    // sync banks those three rounds — the current one included, as every bank
+    // site does.
     const cum0 = await hub.merkleReserveCumulative();
     const bank = await issuedDelta(() => hub.connect(sink).syncEmission());
     const cum1 = await hub.merkleReserveCumulative();
-    expect(cum1 - cum0).to.equal(dial * 2n);
+    expect(cum1 - cum0).to.equal(dial * 3n);
     expect(bank.delta).to.equal(grossUp(cum1 - cum0, bps));
 
     await merkle.connect(publisher).setMerkleRoot(leafOf(alice.address, E(50)));
@@ -195,29 +189,95 @@ describe("Issued counter — what counts toward the emission steps", function ()
     expect(idle.delta, "same-round resync").to.equal(0n);
   });
 
-  it("a winning score also banks the round's due reserve, once", async function () {
+  it("the reserve is banked at each round's first touch, and a winning score counts only its credit", async function () {
     const dial = E(100);
     await rewards.connect(owner).setOffchainBudget(dial);
     await advanceRound();
-    await predict(100);
+    // The round's first touch prices it: its on-chain gross and its reserve,
+    // sized at the same moment, both reported to the token right then.
+    const cumBefore = await hub.merkleReserveCumulative();
+    const touch = await issuedDelta(() => registry.setValue(gameA, 100));
+    expect((await hub.merkleReserveCumulative()) - cumBefore).to.equal(dial);
+    expect(touch.delta).to.equal(grossUp(dial, bps));
+    await satori.connect(bob).predictMultipleWithPayloads([{ gameId: gameA, payload: pack1(UP) }]);
     const cum0 = await hub.merkleReserveCumulative();
     const owed0 = await rewards.unclaimedRewards(bob.address)
                 + await rewards.unclaimedRewards(await rewards.marketingFeeRecipient());
     const { delta } = await resolve(100, true);
-    const cum1 = await hub.merkleReserveCumulative();
-    expect(cum1 - cum0).to.equal(dial * 2n);
-    const r = cum1 - cum0;
+    // The two rounds `resolve` touched banked their reserve at their own first
+    // touch, not at the score...
+    expect((await hub.merkleReserveCumulative()) - cum0).to.equal(dial * 2n);
+    // ...so the score itself counts exactly its credit.
     const u = await rewards.unclaimedRewards(bob.address)
             + await rewards.unclaimedRewards(await rewards.marketingFeeRecipient()) - owed0;
     expect(u).to.be.gt(0n);
-    expect(delta).to.be.closeTo(grossUp(u + r, bps), 1n);
+    expect(delta).to.equal(grossUp(u, bps));
+  });
+
+  it("a score that is its round's first touch banks that round's reserve and reports it with the credit, in one report", async function () {
+    const dial = E(100);
+    await rewards.connect(owner).setOffchainBudget(dial);
+    await advanceRound();
+    await predict(100);
+    await advanceRound();
+    await registry.setValue(gameA, 110);
+    await advanceRound();
+    await registry.setValue(gameA, 120);
+    // Scoring never prices a round, so after this the settle is the round's
+    // first touch and `noteIssued` banks its reserve.
+    await advanceRound();
+    expect(await hub.onChainPricedRound(), "nothing touched the round yet").to.be.lt(await token.getCurrentRound());
+
+    const mkt = await rewards.marketingFeeRecipient();
+    const owed0 = await rewards.unclaimedRewards(bob.address) + await rewards.unclaimedRewards(mkt);
+    const cum0 = await hub.merkleReserveCumulative();
+    const gen0 = await token.generalAccrued();
+    const { delta } = await issuedDelta(() => satori.connect(carol).settlePrediction(bob.address, gameA));
+    const u = await rewards.unclaimedRewards(bob.address) + await rewards.unclaimedRewards(mkt) - owed0;
+    expect(u, "the score must pay").to.be.gt(0n);
+    expect((await hub.merkleReserveCumulative()) - cum0).to.equal(dial);
+    expect((await token.generalAccrued()) - gen0, "reported to the token").to.equal(u + dial);
+    // One report rounds its fee once, on the sum.
+    expect(delta).to.equal(grossUp(u + dial, bps));
+  });
+
+  it("a real report that crosses T0 takes the step in the same call", async function () {
+    const rw = await rewardsSigner(rewards);
+    // Untouched rounds are priced together at the next touch, so after this
+    // warp both the allowance and the token's 1440 x rounds envelope cover T0.
+    await time.increase(Number(FLAT_ROUNDS) * ROUND);
+    const cur = await token.getCurrentRound();
+    await hub.connect(rw).freezeRoundGross(cur);
+    const e0 = await hub.emission();
+    expect(e0.stepsTaken).to.equal(0n);
+    expect(e0.nextStepAt).to.equal(T0);
+    expect(e0.ratioWad).to.equal(PHI_INV);
+
+    await hub.connect(rw).noteIssued(generalBelow(T0 - e0.issued, bps));
+    expect(await issuedOf(hub)).to.be.lt(T0);
+    expect((await hub.emission()).stepsTaken, "just under T0").to.equal(0n);
+
+    const g = generalReaching(T0 - (await issuedOf(hub)), bps);
+    const rc = await (await hub.connect(rw).noteIssued(g)).wait();
+    const e1 = await hub.emission();
+    const [first] = ladder();
+    expect(e1.stepsTaken).to.equal(1n);
+    expect(e1.issued).to.be.gte(T0);
+    expect(e1.issued, "the counter is what the token booked").to.equal(
+      (await token.generalAccrued()) + (await token.devFeeAccrued()));
+    expect(e1.nextStepAt).to.equal(first.next);
+    const steps = eventsNamed(rc, hub, "EmissionStepped");
+    expect(steps.length).to.equal(1);
+    expect([...steps[0].args]).to.deep.equal([1n, first.rate, first.next, e1.issued, cur + 1n, 0n]);
+    expect(await hub.emissionRateNow()).to.equal(BASE);
+    expect(await hub.emissionRateNext()).to.equal(first.rate);
   });
 
   it("a fee-bps raise under a standing dial never underflows and never lowers the counter", async function () {
     await wireMerkle();
     const residual = (await hub.emissionRateNow()) - (await hub.devRateNow());
     await rewards.connect(owner).setOffchainBudget(residual - 1n);
-    for (let i = 0; i < 20; i++) await advanceRound();
+    for (let i = 0; i < 31; i++) await advanceRound();   // past the fee's 30-round change gap (DEV_FEE_CHANGE_GAP_ROUNDS, counted from genesis)
     await hub.syncEmission();
 
     const cum = await hub.merkleReserveCumulative();
@@ -235,16 +295,19 @@ describe("Issued counter — what counts toward the emission steps", function ()
     const rw = await rewardsSigner(rewards);
     const issued0 = await issuedOf(hub);
     await expect(hub.connect(sink).syncEmission()).to.not.be.reverted;
-    await expect(hub.connect(rw).noteIssued(E(1))).to.not.be.reverted;
-    await expect(hub.connect(rw).rewardMint(sink.address, 1n)).to.not.be.revertedWithPanic();
-    expect(await issuedOf(hub)).to.be.gte(issued0 + grossUp(E(1), 2500n));
+    // The dial now exceeds the residual, so each round's on-chain gross is the
+    // 1-wei floor: price the rounds, report a wei, mint it.
+    await expect(hub.connect(rw).freezeRoundGross(await token.getCurrentRound())).to.not.be.reverted;
+    await expect(hub.connect(rw).noteIssued(1n)).to.not.be.reverted;
+    await expect(hub.connect(rw).rewardMint(sink.address, 1n)).to.not.be.reverted;
+    expect(await issuedOf(hub)).to.be.gte(issued0 + grossUp(1n, 2500n));
 
     const cumAfter = await hub.merkleReserveCumulative();
     expect(cumAfter).to.be.gte(mm);
-    const generalCap = await token.generalCeilingFor(await hub.emissionCeiling());
-    const onChain = await hub.onChainMinted();
-    const reserveCap = generalCap > onChain ? generalCap - onChain : 0n;
-    expect(cumAfter).to.be.lte(reserveCap > mm ? reserveCap : mm);
+    // Both lanes stay inside what was reported to the token, and the raise
+    // moved none of it.
+    expect((await hub.onChainMinted()) + cumAfter).to.be.lte(await token.generalAccrued());
+    expect(await hub.merkleMinted()).to.be.lte(cumAfter);
   });
 
   it("a round predicted before a step and scored after it pays the old rate", async function () {
@@ -267,7 +330,7 @@ describe("Issued counter — what counts toward the emission steps", function ()
 describe("Issued counter — predict pins the round's gross", function () {
   this.timeout(600000);
   const noDefault = () => deploySatoriFixtureOpts(0, { skipDefaultStream: true });
-  const ROUND_BUDGET_SLOT = 11n; // SatoriRewards._roundBudget (storage-layouts/SatoriRewards.json)
+  const ROUND_BUDGET_SLOT = 10n; // SatoriRewards._roundBudget (storage-layouts/SatoriRewards.json)
 
   async function roundBudgetOf(rewards, round) {
     const key = ethers.keccak256(ethers.AbiCoder.defaultAbiCoder().encode(["uint256", "uint256"], [round, ROUND_BUDGET_SLOT]));

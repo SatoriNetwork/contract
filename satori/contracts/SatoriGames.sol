@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import "./interfaces/IPredictionGame.sol";
 import "./interfaces/ISatoriRegistry.sol";
 import "./interfaces/ISatoriCore.sol";
+import "./interfaces/ISatoriGames.sol";
 import "./libraries/SatoriTypes.sol";
 
 /**
@@ -20,14 +21,14 @@ import "./libraries/SatoriTypes.sol";
  */
 import "./next/SatoriUUPS.sol";
 
-contract SatoriGames is SatoriUUPS {
+contract SatoriGames is ISatoriGames, SatoriUUPS {
     // ========== Constants ==========
 
     uint32 public constant DEFAULT_GAME_ID = 1;
 
     /// Type 0 runs inline on SatoriEngine; it is never resolved to an external
     /// adapter contract, which the dispatch/lookup paths special-case throughout.
-    uint16 public constant BUILTIN_BINARY = 0;
+    uint32 public constant BUILTIN_BINARY = 0;
 
     // ========== Core wiring ==========
 
@@ -39,18 +40,10 @@ contract SatoriGames is SatoriUUPS {
 
     // ========== Game registry ==========
 
-    /// Slot 0 packs the fixed-size fields (authority 20 + gameTypeId 2 +
-    /// dataStreamId 4 + targetMinutes 3 = 29 bytes); `name`/`gameConfig` dynamic.
-    struct GameMeta {
-        address authority;
-        uint16  gameTypeId;         // 0 = built-in binary, 1+ = adapter
-        uint32  dataStreamId;
-        uint24  targetMinutes;      // ADVERTISED duration; scoring adds the fixed
-                                    //   30-min allowance internally
-        string  name;
-        bytes   gameConfig;
-    }
-
+    /// `GameMeta` is declared in `ISatoriGames`. Slot 0 packs the fixed-size
+    /// fields (authority 20 + gameTypeId 2 + dataStreamId 4 + targetMinutes 3 =
+    /// 29 bytes); `name`/`gameConfig` are dynamic. `targetMinutes` is the
+    /// ADVERTISED duration; scoring adds the fixed 30-minute allowance.
     /// `gameId == index + 1` (the convention used throughout this contract).
     GameMeta[] public games;
 
@@ -58,14 +51,14 @@ contract SatoriGames is SatoriUUPS {
 
     /// Type 0 is reserved (built-in inline binary, no adapter); IDs are
     /// immutable once set.
-    mapping(uint16 => address) public gameAdapter;
+    mapping(uint32 => address) public gameAdapter;
 
-    uint16 public nextGameTypeId = 1;
+    uint32 public nextGameTypeId = 1;
 
     /// Not unique — the ID, not the name, is the canonical handle.
-    mapping(uint16 => string) public gameAdapterName;
+    mapping(uint32 => string) public gameAdapterName;
 
-    mapping(uint16 => bool) public isCommunityGameAdapter;
+    mapping(uint32 => bool) public isCommunityGameAdapter;
 
     /// Informational only — nothing on-chain consumes it. Do not gate on it.
     mapping(address => bool) public isRegisteredGameAdapter;
@@ -93,7 +86,7 @@ contract SatoriGames is SatoriUUPS {
         uint32 indexed gameId,
         uint32 indexed dataStreamId,
         address indexed authority,
-        uint16 gameTypeId,
+        uint32 gameTypeId,
         uint24 targetMinutes,
         string name,
         bytes gameConfig
@@ -105,7 +98,7 @@ contract SatoriGames is SatoriUUPS {
         address indexed newAuthority
     );
     event GameAdapterRegistered(
-        uint16 indexed gameTypeId,
+        uint32 indexed gameTypeId,
         address indexed impl,
         address indexed registrant,
         bool   isCommunity,
@@ -183,7 +176,7 @@ contract SatoriGames is SatoriUUPS {
         address registrant,
         string calldata name,
         bool isCommunity
-    ) external onlyCore returns (uint16 gameTypeId) {
+    ) external onlyCore returns (uint32 gameTypeId) {
         return _registerGameAdapter(impl, registrant, name, isCommunity);
     }
 
@@ -192,10 +185,10 @@ contract SatoriGames is SatoriUUPS {
         address registrant,
         string calldata name,
         bool isCommunity
-    ) internal returns (uint16 gameTypeId) {
+    ) internal returns (uint32 gameTypeId) {
         if (impl == address(0)) revert InvalidGameAdapter();
         gameTypeId = nextGameTypeId;
-        if (gameTypeId == 0) revert GameAdapterIdSpaceExhausted(); // wraparound past 65,535
+        if (gameTypeId == 0) revert GameAdapterIdSpaceExhausted(); // wraparound past 2^32 - 1
         gameAdapter[gameTypeId] = impl;
         isRegisteredGameAdapter[impl] = true;
         if (isCommunity) isCommunityGameAdapter[gameTypeId] = true;
@@ -211,7 +204,7 @@ contract SatoriGames is SatoriUUPS {
     function createGame(
         address authority,
         uint32 streamId,
-        uint16 gameTypeId,
+        uint32 gameTypeId,
         bytes memory config,
         string memory name
     ) external onlyCore returns (uint32 gameId) {
@@ -219,17 +212,22 @@ contract SatoriGames is SatoriUUPS {
     }
 
     /// @notice Create a game with an EXPLICIT target (the ladder path,
-    ///         question 6): daily/weekly/monthly binary games can share one
-    ///         stream, differing only in how far ahead they ask.
-    /// @dev `targetMinutes` is the ADVERTISED duration; the scoring lookup
-    ///      applies the 30-minute allowance internally. Must be at least one
+    ///         question 6): several binary games can share one stream at
+    ///         different targets.
+    /// @dev `targetMinutes` is the ADVERTISED duration, not always the real
+    ///      horizon. On a stream that posts at least once per round, a target
+    ///      under 24 cadences resolves on the NEXT TWO samples (the ABC band in
+    ///      `SatoriEngine._scorePreviousPrediction`), about 1-2 cadences, so a
+    ///      weekly rung on a daily stream asks a 1-2 day question. Longer
+    ///      targets are measured from the predictor's own hour plus the
+    ///      30-minute allowance. Must be at least one
     ///      round (sub-daily targets are not creatable — phase-6 deferral) and
     ///      at least the stream's cadence (question 2's settlement-liveness
     ///      rule).
     function createGame(
         address authority,
         uint32 streamId,
-        uint16 gameTypeId,
+        uint32 gameTypeId,
         bytes memory config,
         string memory name,
         uint24 targetMinutes_
@@ -242,7 +240,7 @@ contract SatoriGames is SatoriUUPS {
     function _createGame(
         address authority,
         uint32 streamId,
-        uint16 gameTypeId,
+        uint32 gameTypeId,
         bytes memory config,
         string memory name,
         uint24 explicitTarget
@@ -280,6 +278,9 @@ contract SatoriGames is SatoriUUPS {
             tgt = cad > 1440 ? cad : 1440;
         } else {
             if (explicitTarget < 1440 || explicitTarget < cad) revert InvalidTarget();
+            // A rung longer than the stream's history ring (HISTORY_SIZE entries, one per
+            // cadence period) could never find its post sample, so it could never score.
+            if (explicitTarget > uint256(SatoriTypes.HISTORY_SIZE) * uint256(cad)) revert InvalidTarget();
             // The hour grid: both clocks (predict spacing, floor tgt/60; the
             // scoring wait, ceil of the allowance-adjusted tgt) agree exactly
             // when the target is whole hours — and off-grid values would also
@@ -293,18 +294,8 @@ contract SatoriGames is SatoriUUPS {
             // question 6): the auto-created daily game and explicit weekly /
             // monthly rungs share a stream, differing only in target. A
             // second binary game at the SAME target is still a duplicate.
-            uint32 existing = binaryGameByStream[streamId];
-            if (existing != 0 && games[existing - 1].targetMinutes == tgt) {
-                revert DuplicateBinaryGame();
-            }
-            // Also refuse duplicating any other rung's target on this stream.
-            uint32[] storage sibs = _gamesByStream[streamId];
-            for (uint256 i = 0; i < sibs.length; i++) {
-                GameMeta storage g = games[sibs[i] - 1];
-                if (g.gameTypeId == BUILTIN_BINARY && g.targetMinutes == tgt) {
-                    revert DuplicateBinaryGame();
-                }
-            }
+            if (_binaryTargetUsed[streamId][tgt]) revert DuplicateBinaryGame();
+            _binaryTargetUsed[streamId][tgt] = true;
         }
 
         games.push(GameMeta({
@@ -362,7 +353,9 @@ contract SatoriGames is SatoriUUPS {
     }
 
     /// ADVERTISED minutes (1440 = daily); the scoring lookup applies the fixed
-    /// 30-minute allowance internally.
+    /// 30-minute allowance internally. Under 24 cadences on a stream posting at
+    /// least daily, the game resolves on the next two samples instead (see
+    /// `createGame`).
     function targetMinutes(uint32 gameId) external view returns (uint24) {
         if (gameId == 0 || gameId > games.length) revert InvalidGameId();
         return games[gameId - 1].targetMinutes;
@@ -378,7 +371,7 @@ contract SatoriGames is SatoriUUPS {
         return games[gameId - 1].gameConfig;
     }
 
-    function gameTypeIdOf(uint32 gameId) external view returns (uint16) {
+    function gameTypeIdOf(uint32 gameId) external view returns (uint32) {
         if (gameId == 0 || gameId > games.length) revert InvalidGameId();
         return games[gameId - 1].gameTypeId;
     }
@@ -396,17 +389,17 @@ contract SatoriGames is SatoriUUPS {
         if (gameId == 0 || gameId > games.length) return (address(0), 0);
         GameMeta storage g = games[gameId - 1];
         streamId = g.dataStreamId;
-        uint16 typeId = g.gameTypeId;
+        uint32 typeId = g.gameTypeId;
         if (typeId != 0) adapter = gameAdapter[typeId];
     }
 
-    function gameAdapterAddress(uint16 gameTypeId) external view returns (address) {
+    function gameAdapterAddress(uint32 gameTypeId) external view returns (address) {
         return gameAdapter[gameTypeId];
     }
 
     function gameAdapterFor(uint32 gameId) external view returns (address) {
         if (gameId == 0 || gameId > games.length) return address(0);
-        uint16 typeId = games[gameId - 1].gameTypeId;
+        uint32 typeId = games[gameId - 1].gameTypeId;
         if (typeId == 0) return address(0);
         return gameAdapter[typeId];
     }
@@ -431,6 +424,11 @@ contract SatoriGames is SatoriUUPS {
     ///      raw implementation instance) and the proxy `initialize` (making it
     ///      one-shot).
     bool private _initialized;
+
+    /// Binary games per (stream, target): one each, so a rung cannot be duplicated
+    /// and the duplicate check stays O(1) however many games a stream has.
+    /// Appended after the proxy plumbing: this layout is append-only.
+    mapping(uint32 => mapping(uint24 => bool)) private _binaryTargetUsed;
 
     /// Compile-time identity — pinned by SatoriUUPS.upgradeTo so only another
     /// SatoriGames implementation can ever be installed here.

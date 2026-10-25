@@ -45,7 +45,7 @@ describe("Adapter registration (bonded, permissionless)", function () {
       await satori.connect(alice).registerCommunityAdapter(implAddr, "my-impl");
 
       expect(await satori.balanceOf(alice.address)).to.equal(aliceBefore - fee);
-      expect(await satori.balanceOf(await satori.getAddress())).to.equal(coreBefore + fee);
+      expect(await satori.balanceOf(await satori.getAddress())).to.equal(coreBefore); // burned, not held
 
       expect(await registry.adapter(expectedId)).to.equal(implAddr);
       expect(await registry.adapterName(expectedId)).to.equal("my-impl");

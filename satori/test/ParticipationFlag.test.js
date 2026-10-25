@@ -6,9 +6,9 @@
 // pool). So the bit is set at exactly one site — delegating prediction power out
 // (rewards.delegatePredictionPower, on the delegator only) — and NOT on
 // predicting, voting, claim delegation, or bounty staking, none of which make a
-// wallet's balance affect another pool. It is cleared lazily: once a marked
-// wallet is no longer a delegator, its next transfer clears the bit via the
-// hook's return value, so the transfer after that early-outs.
+// wallet's balance affect another pool. It is cleared at once on undelegating
+// (unmarkParticipated, which emits ParticipationCleared); a transfer never
+// changes it.
 
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
@@ -112,8 +112,11 @@ describe("ParticipationFlag", function () {
     expect(await satori.hasParticipated(alice.address)).to.equal(true);
 
     // Undelegating unsets the bit in the same call that set it — no transfer,
-    // no deferral. You are a delegator or you are not.
-    await satori.connect(alice).delegatePredictionPower(ethers.ZeroAddress);
+    // no deferral. You are a delegator or you are not. The clear is an event
+    // too, so the read model sees a wallet leave the gate as well as join it.
+    const token = await ethers.getContractAt("SatoriToken", await satori.satoriToken());
+    await expect(satori.connect(alice).delegatePredictionPower(ethers.ZeroAddress))
+      .to.emit(token, "ParticipationCleared").withArgs(alice.address);
     expect(await satori.hasParticipated(alice.address)).to.equal(false);
   });
 
@@ -232,7 +235,7 @@ describe("Hook-reason lane (reserved future hook triggers)", function () {
     // Now a transfer touching alice DOES fire the hook.
     await satori.connect(alice).transfer(bob.address, ethers.parseEther("1"));
     expect(await probe.calls()).to.equal(1n);
-    // Lazy unmark only ever touches the delegator bit, so the reason persists.
+    // A transfer changes no gate bit, so the reason persists.
     expect(await token.hookReason(alice.address, 2)).to.equal(true);
 
     // Controller clears it → the hook stops firing for her.

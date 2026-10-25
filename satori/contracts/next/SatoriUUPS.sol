@@ -150,11 +150,24 @@ abstract contract SatoriUUPS {
         }
         _validateNewImplementation(newImplementation);
         assembly { sstore(_IMPL_SLOT, newImplementation) }
+        // Liveness: run the NEW code against this proxy's storage and require that
+        // it still finds the caller as the upgrade authority. A layout that moved
+        // the token pointer would read the wrong slot, and `upgradeTo` and
+        // `renounceUpgrade` would then revert for everyone for good. The revert
+        // undoes the write above. This protects an upgrade only once the live
+        // implementation carries it, so every implementation ships with it (G05).
+        if (SatoriUUPS(address(this)).upgradeGovernor() != msg.sender) revert UpgradeBadImplementation();
         emit Upgraded(newImplementation);
     }
 
-    /// One-way: freezes this proxy's logic forever (per-contract freeze,
-    /// independent of the global governor renounce).
+    /// The address allowed to upgrade, as this code computes it. Public so
+    /// `upgradeTo` can ask the candidate through the proxy.
+    function upgradeGovernor() external view returns (address) {
+        return _upgradeGovernor();
+    }
+
+    /// One-way: freezes this proxy's logic forever. Per contract: renouncing the
+    /// root governor does not freeze anything, and this does not touch the root.
     function renounceUpgrade() external onlyUpgradeGovernor {
         assembly { sstore(_RENOUNCED_SLOT, 1) }
         emit UpgradesRenounced();

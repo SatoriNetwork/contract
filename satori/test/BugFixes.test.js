@@ -9,7 +9,7 @@
  */
 
 const { expect } = require("chai");
-const { wrapSatoriForGames, pack1, VOTE, warmUpLoyalty, deploySatoriFixture: deploySharedFixture } = require("./fixtures");
+const { wrapSatoriForGames, pack1, VOTE, deploySatoriFixture: deploySharedFixture } = require("./fixtures");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
 
@@ -234,9 +234,7 @@ describe("Bug 3: Platform fee split arithmetic", function () {
   it("delegatorsShare + predictorBonus should equal delegatedReward (platform-fee term removed)", async function () {
     // Bob delegates prediction power to Alice
     await satori.connect(bob).delegatePredictionPower(alice.address);
-    // Delegator weight is capital x loyalty and a fresh delegation starts at
-    // L = 0, so the share measured below reads zero without a warm-up.
-    await warmUpLoyalty(satori, registry, null, alice, [bob], platform1, streamId, 40, 2);
+    await time.increase(86400);
     await time.increase(86400);   // clear the daily cadence before the caller's own setValue
 
     // Set a value

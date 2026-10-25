@@ -87,7 +87,7 @@ describe("Voting System", function () {
       const round = await satori.getCurrentRound();
       await expect(satori.connect(alice).vote(stream1, VOTE))
         .to.emit(voting, "Voted")
-        .withArgs(alice.address, stream1, round, VOTE, VOTE, VOTE);
+        .withArgs(alice.address, stream1, round, VOTE, VOTE, VOTE, VOTE);
     });
 
     it("Should prevent voting for non-existent stream", async function () {
@@ -447,7 +447,7 @@ describe("Voting System", function () {
       const totalBefore = await voting.totalBurnedWeight();
 
       await expect(voting.connect(owner).setGameApproved(stream2, false))
-        .to.emit(voting, "GameApprovedSet").withArgs(stream2, false);
+        .to.emit(voting, "GameApprovedSet").withArgs(stream2, false, totalBefore - VOTE * 2n);
 
       expect(await voting.isEligible(stream2)).to.equal(false);
       expect(await voting.weightOf(stream2)).to.equal(0);

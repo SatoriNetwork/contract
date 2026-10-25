@@ -21,7 +21,7 @@
  */
 
 const { expect } = require("chai");
-const { deploySatoriFixtureNoFee, pack1, VOTE, RAW_TOLERANCE, warmUpLoyalty } = require("./fixtures");
+const { deploySatoriFixtureNoFee, pack1, VOTE, RAW_TOLERANCE } = require("./fixtures");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
 
@@ -79,12 +79,7 @@ describe("Delegator delta-claim (no halt on pending rounds)", function () {
 
   it("collects share of a pending round immediately, then the delta when it closes", async function () {
     await satori.connect(alice).delegatePredictionPower(bob.address);
-    // Delegator weight is capital x loyalty and a fresh delegation starts at
-    // L = 0, so alice collects nothing at all without a warm-up and the
-    // delta-collection this test is about is invisible. Warm on Quick (Slow is
-    // deliberately left silent below); drain to `platform` so the pinned
-    // splits later in the file are unaffected.
-    await warmUpLoyalty(satori, registry, null, bob, [alice], platform, quickId);
+    await time.increase(86400);
 
     // R0 (delegation round): bob predicts Slow. Slow will be left silent so
     // its slot stays pending. count[bob][R0] = 1.
@@ -144,12 +139,7 @@ describe("Delegator delta-claim (no halt on pending rounds)", function () {
 
   it("cursor does not stall — a later round's rate-share is claimable even while an earlier round still has a pending prediction", async function () {
     await satori.connect(alice).delegatePredictionPower(bob.address);
-    // Delegator weight is capital x loyalty and a fresh delegation starts at
-    // L = 0, so alice collects nothing at all without a warm-up and the
-    // delta-collection this test is about is invisible. Warm on Quick (Slow is
-    // deliberately left silent below); drain to `platform` so the pinned
-    // splits later in the file are unaffected.
-    await warmUpLoyalty(satori, registry, null, bob, [alice], platform, quickId);
+    await time.increase(86400);
 
     // R0: bob predicts Slow (will stay pending forever). count[bob][R0] = 1.
     await registry.setValue(slowId, 100);

@@ -36,7 +36,7 @@
  */
 
 const { expect } = require("chai");
-const { deploySatoriFixtureNoFee, RAW_TOLERANCE, pack1, VOTE, warmUpLoyalty } = require("../fixtures");
+const { deploySatoriFixtureNoFee, RAW_TOLERANCE, pack1, VOTE } = require("../fixtures");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
 
@@ -122,13 +122,7 @@ describe("GAP: predictor fee read fresh at score time → retroactive skim", fun
     }
 
     await satori.connect(carol).delegatePredictionPower(bob.address);
-    // Delegator weight is capital x loyalty and a fresh delegation starts at
-    // L = 0, so every figure below reads zero without a warm-up. The fee
-    // arithmetic is untouched by loyalty -- the fee splits the DELEGATED HALF
-    // predictor-vs-delegators, loyalty only divides the delegator side, and
-    // with one delegator there is nothing to divide. Drains to `owner` so
-    // bob's ownPower and carol's capital stay where the comments assume.
-    await warmUpLoyalty(satori, registry, null, bob, [carol], owner, sid);
+    await time.increase(86400);
     await registry.setValue(sid, 100);
     // Marketing bucket DELTA from HERE: the warm-up is itself a scored round
     // that skims into the same bucket, and the PREDICTOR's skim is credited

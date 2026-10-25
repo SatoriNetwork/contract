@@ -1,9 +1,9 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
-const { loadFixture } = require("@nomicfoundation/hardhat-network-helpers");
+const { loadFixture, time } = require("@nomicfoundation/hardhat-network-helpers");
 const { deploySplitCompatFixture, TEST_PLATFORM_FEE_RECIPIENT, TEST_MARKETING_FEE_RECIPIENT } = require("./splitFixture");
 const { VOTE } = require("../fixtures");
-const { rewardsSigner, generalReaching } = require("./emissionHelpers");
+const { ROUND, FLAT_ROUNDS, rewardsSigner, generalReaching } = require("./emissionHelpers");
 
 // Phase 2 (PHASE2-PROXY-ALL.md): the hub and all five children live behind
 // SatoriProxy with governor-gated, individually-renounceable upgradeTo.
@@ -290,12 +290,22 @@ describe("Phase-2 proxies: upgrade-with-state for hub + children", function () {
     const { hub, rewards, token, owner } = f;
     const rw = await rewardsSigner(rewards);
     const e0 = await hub.emission();
-    await (await hub.connect(rw).noteIssued(generalReaching(e0.nextStepAt - e0.issued, await token.devFeeBps()))).wait();
+    const allowance0 = await hub.onChainAllowance();
+    // Untouched rounds are priced together at the next touch, so after this
+    // warp one real report reaches the first step inside both the allowance
+    // and the token's envelope.
+    await time.increase(Number(FLAT_ROUNDS) * ROUND);
+    await (await hub.connect(rw).freezeRoundGross(await token.getCurrentRound())).wait();
+    const toStep = e0.nextStepAt - (await hub.emission()).issued;
+    await (await hub.connect(rw).noteIssued(generalReaching(toStep, await token.devFeeBps()))).wait();
     await (await hub.connect(owner).setEmissionRatio(10n ** 18n)).wait();
     await (await hub.connect(owner).setEmissionAuthority(f.signers[1].address)).wait();
     const moved = await hub.emission();
+    const allowance = await hub.onChainAllowance();
+    const priced = await hub.onChainPricedRound();
     expect(moved.stepsTaken).to.equal(1n);
     expect(moved.issued).to.be.gt(e0.issued);
+    expect(allowance).to.be.gt(allowance0);
 
     await expect(hub.initialize(f.voting.target, f.rewards.target, f.registry.target, f.games.target, f.bounties.target))
       .to.be.revertedWithCustomError(hub, "AlreadyInitialized");
@@ -305,6 +315,8 @@ describe("Phase-2 proxies: upgrade-with-state for hub + children", function () {
       .to.be.revertedWithCustomError(hub, "AlreadyInitialized");
 
     expect(await hub.emission()).to.deep.equal(moved);
+    expect(await hub.onChainAllowance()).to.equal(allowance);
+    expect(await hub.onChainPricedRound()).to.equal(priced);
     expect(await hub.emissionHolder()).to.equal(f.signers[1].address);
   });
 
@@ -324,7 +336,9 @@ describe("Phase-2 proxies: upgrade-with-state for hub + children", function () {
     await expect(hub.syncEmission()).to.be.revertedWithCustomError(hub, "EmissionUnseeded");
     await expect(hub.emissionCeiling()).to.be.revertedWithCustomError(hub, "EmissionUnseeded");
     const rw = await rewardsSigner(rewards);
-    await expect(hub.connect(rw).noteIssued(1n)).to.be.revertedWithCustomError(hub, "EmissionUnseeded");
+    // Nothing is reported (0), so the allowance check does not fire first: the
+    // step logic itself must refuse an unseeded schedule.
+    await expect(hub.connect(rw).noteIssued(0n)).to.be.revertedWithCustomError(hub, "EmissionUnseeded");
     expect((await hub.emission()).nextStepAt).to.equal(0n);
   });
 

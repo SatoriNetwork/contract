@@ -5,13 +5,20 @@ import "./libraries/SatoriTypes.sol";
 import "./interfaces/ISatoriRewards.sol";
 import "./interfaces/ISatoriCore.sol";
 import "./interfaces/ISatoriVoting.sol";
-import "./interfaces/ISatoriRegistry.sol";
-import "./interfaces/ISatoriGames.sol";
 import "./interfaces/ISatoriBounties.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "./next/SatoriUUPS.sol";
 
 import "@openzeppelin/contracts/utils/math/Math.sol";
+
+interface IHubLaneView {
+    function onChainMinted() external view returns (uint256);
+    function merkleReserveCumulative() external view returns (uint256);
+}
+
+interface ITokenLaneView {
+    function generalAccrued() external view returns (uint256);
+}
 
 /**
  * @title SatoriRewards
@@ -35,11 +42,6 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
     address public satoriCore;
 
     address public satoriVoting;
-
-    /// @notice Stored pointer to the SatoriGames contract. Not invoked on-chain
-    ///         from here — a producing stream only refreshes the budget
-    ///         (SatoriEngine.onStreamProduced); kept for off-chain resolution.
-    address public satoriGames;
 
     address public satoriRegistry;
 
@@ -77,8 +79,12 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
     ///         (via the hub), set the off-chain emission dial
     ///         (`setOffchainBudget`), and transfer this admin
     ///         role. Upgrading a child (its proxy's `upgradeTo`) is NOT an admin
-    ///         power — it is gated on `token.upgradeAuthority()`, a different key. This is a
-    ///         minimal operational role, NOT contract ownership:
+    ///         power — it is gated on `token.upgradeAuthority()`, a different key.
+    ///         It is an operational role, NOT contract ownership, but not a small
+    ///         one: it can switch capabilities off for everyone (including
+    ///         delegators), move emission between the on-chain and off-chain
+    ///         lanes (and so, with the publisher, toward itself; sweep M30,
+    ///         left as is), and decide which games are approved:
     ///         `SatoriHub.owner()` deliberately returns `address(0)` (ownerless
     ///         signal); read this role via the `admin()` getter directly.
     address public admin;
@@ -106,11 +112,10 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
     // Immutable: committing to a non-default rate locks on first use (mirrors
     // the stream authority cut), so the score path reads the rate directly with
     // no snapshot. NOTE: the rate is read FRESH at settlement, so an UNCOMMITTED
-    // predictor's single first-commit (default -> a non-default rate, capped at
-    // MAX_PREDICTOR_FEE_BPS) DOES apply to that round's in-flight delegated split
-    // -- a deliberate, bounded, one-time change; delegating to a not-yet-committed
-    // predictor carries that risk. A COMMITTED rate (stored != 0) can never
-    // change again. "Already locked" is just
+    // predictor's single first-commit applies to that round's in-flight delegated
+    // split. The cap equals the default, so that change can only LOWER the
+    // predictor's cut (delegators never pay more than 10%). A COMMITTED rate
+    // (stored != 0) can never change again. "Already locked" is just
     // stored != 0. Passing exactly the default encodes to 0 (the untouched
     // state): a harmless no-op that neither changes the rate nor consumes the
     // lock — the default is the perpetually-uncommitted state, and only a real
@@ -143,8 +148,6 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
         return _effectivePredictorFee(predictorFeeStored[predictor]);
     }
 
-    uint32 internal constant DEFAULT_GAME_ID = 1;
-
     // ===== Per-round budget =====
     //
     // Each round's payable budget is the on-chain gross, snapshotted on the
@@ -170,13 +173,9 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
     ///         in; the change takes effect on the next round that gets touched
     ///         (an already-touched round has its gross frozen).
     event OffchainBudgetSet(uint256 newOffchainBudget, uint256 roundSet, address indexed setter);
-
-    /// @notice Frozen on-chain gross per round (the residual less the dial,
-    ///         captured at the round's first touch). BOTH the reserved bonus and
-    ///         the credited bonus derive from this one frozen number, so a
-    ///         mid-round dial move can never desync them; the payable snapshot
-    ///         (`_roundBudget`) stays the lazily-settled allocation base.
-    mapping(uint256 => uint256) internal _roundGross;
+    /// @notice A game's round pool after a prediction added weight: the two sides'
+    ///         running totals, which scoring later divides by.
+    event GameRoundWeight(uint32 indexed gameId, uint256 indexed round, uint256 up, uint256 down);
 
     /// @notice Scaling factor for SATORI delegator reward rates (per-round,
     /// per-unit-balance). Disambiguated from the bounty-side `RATE_SCALE`
@@ -286,10 +285,6 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
     struct OpenRound {
         uint24 round;
         uint224 banked;
-        /// @dev `L` as of `round`. A replayed delta must weight identically to
-        ///      the original crossing, and by then the walk's carried `L` has
-        ///      moved on — so the historical value rides on the entry.
-        uint256 loyalty;
     }
 
     struct DelegationPeriod {
@@ -299,20 +294,6 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
         uint24 nextClaimRound;        // next round the delegator should accrue from
         uint24 replayCursor;          // F6: resume index into openRounds for the capped replay walk. Packs into slot 0's free 3 bytes (address+3×uint24 = 29, +this = 32).
         uint256 startBalance;
-        // ---- Delegation loyalty (docs/design/delegation-loyalty-weighting.md) ----
-        /// @dev `L` for this relationship, LOY_ONE-scaled. Starts at 0 (a fresh
-        ///      delegation earns nothing until the predictor's first scored round);
-        ///      carried forward by the claim walk, which is the only writer.
-        uint256 loyalty;
-        /// @dev The period's PER-UNIT-OF-CAPITAL contribution to the delegate's
-        ///      `K` running sum — `B_s·2¹²⁸/A_s`, fixed at join. Capital is
-        ///      time-varying, so `K` tracks `Σ cᵢ(r)·B_{sᵢ}/A_{sᵢ}` and every
-        ///      capital delta moves it by `Δcᵢ × joinFactor`. Leave subtracts
-        ///      exactly `cᵢ × joinFactor`, so no stale `L` read is ever needed.
-        uint256 joinFactor;
-        /// @dev Renormalisation epoch `joinFactor` was measured in. Rescaled by
-        ///      `>> (LOY_RENORM_SHIFT × Δepoch)` at use.
-        uint32  joinEpoch;
         Checkpoint[] checkpoints;
         OpenRound[] openRounds;       // rounds crossed while still pending; revisited each claim until they close.
     }
@@ -380,8 +361,7 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
     ///      An adapter game cannot be voted for (`SatoriVoting.vote` reverts
     ///      `GameNotMintEligible` for any `gameTypeIdOf != 0`), and weight is
     ///      written nowhere else, so `getGameVotesAtRound` is always 0 for one.
-    ///      `_gameRoundAllocation` then returns 0, `_streamPoolPostCut` returns
-    ///      0, the reward computes to 0, and the `if (reward > 0)` guard above
+    ///      `_gameRoundAllocation` then returns 0, the reward computes to 0, and the `if (reward > 0)` guard above
     ///      the credit never opens. Adapter games still pay BOUNTIES — real
     ///      money, separately funded, credited earlier on that same path — but
     ///      bounties do not route through here and pay no referral cut.
@@ -407,9 +387,12 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
     ///         caller. If a delegate triggered the claim, the delegate is not
     ///         visible in this event — join with `ClaimDelegated` to infer.
     event RewardsClaimed(address indexed owner, address indexed recipient, uint256 totalAmount, uint256 round);
-    /// Every credited win. `newUnclaimed` is the predictor's bucket after the
-    /// referral skim; with `DelegatorRewardsAccrued`, `ReferralPaid` and
-    /// `RewardsClaimed` (which zeroes it) it is the whole `unclaimedRewards` ledger.
+    /// Every credited win. `delegatorAmount` is the delegators' pot for this win,
+    /// committed in full and paid pro rata to capital (`DelegatorRateAccrued`
+    /// carries the denominator and the rate it added). `newUnclaimed` is the
+    /// predictor's bucket after the referral skim; with `DelegatorRewardsAccrued`,
+    /// `ReferralPaid` and `RewardsClaimed` (which zeroes it) it is the whole
+    /// `unclaimedRewards` ledger.
     event RewardSplit(
         address indexed predictor,
         uint32 indexed gameId,
@@ -419,6 +402,17 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
         uint256 newUnclaimed
     );
     event DelegatorRewardsAccrued(address indexed delegator, uint256 amount, uint256 newUnclaimed);
+    /// A delegate's win added `rateAdded` (SATORI_RATE_SCALE-scaled) to its per-round
+    /// delegator rate, over `delegatedPower` snapshotted at predict time. A delegator's
+    /// payout for `round` is its capital at that round times the round's summed rates,
+    /// so with `RewardSplit.delegatorAmount` this rebuilds every delegator payout.
+    event DelegatorRateAccrued(
+        address indexed delegate,
+        uint32 indexed gameId,
+        uint256 indexed round,
+        uint256 delegatedPower,
+        uint256 rateAdded
+    );
     /// Once per round, except once emission is exhausted: a 0 budget is the "unset"
     /// sentinel, so every touch re-freezes and re-emits 0. Readers take the first.
     event RoundBudgetFrozen(uint256 indexed round, uint256 budget);
@@ -429,6 +423,8 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
     event ClaimDelegated(address indexed delegator, address indexed delegate);
     event ClaimUndelegated(address indexed delegator);
     event SatoriCoreSet(address indexed newCore);
+    event SatoriEngineSet(address indexed engine);
+    event SatoriBountiesSet(address indexed bounties);
     event AdminChanged(address indexed oldAdmin, address indexed newAdmin);
     event EmissionSplitAuthorityChanged(address indexed oldHolder, address indexed newHolder);
     /// Marketing-fee role handover: nominated, then accepted. `oldRecipient` is
@@ -436,6 +432,8 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
     event MarketingFeeRecipientTransferStarted(address indexed oldRecipient, address indexed newRecipient);
     event MarketingFeeRecipientChanged(address indexed oldRecipient, address indexed newRecipient);
     event ReferralSet(address indexed user, address indexed referral);
+    /// `round` is the round the credit was MADE in (the settle), not the round the
+    /// prediction was for — `RewardSplit.round` is the latter.
     event ReferralPaid(address indexed owner, address indexed referral, uint256 amount, uint256 round, uint256 newUnclaimed);
 
     // (Bounty events moved to SatoriBounties.)
@@ -479,6 +477,7 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
         if (satoriEngine != address(0)) revert AlreadySet();
         if (_engine == address(0)) revert BadInput();
         satoriEngine = _engine;
+        emit SatoriEngineSet(_engine);
     }
 
     // ========== Constructor ==========
@@ -539,8 +538,8 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
 
     /// @notice Begin handing the marketing-fee role to `newRecipient`. Callable
     ///         ONLY by the current recipient — deliberately not an admin power:
-    ///         `admin` is documented non-extractive, and a re-point would give it
-    ///         5% of all un-referred emission.
+    ///         the admin's reach is already wide (see `admin`), and a re-point
+    ///         would give it 5% of all un-referred emission.
     /// @dev Two-step (nominate + accept), same shape and same reasoning as the
     ///      LA-1 fix on SatoriMerkle's publisher: a one-step transfer to a typo'd
     ///      or unowned address would route the cut somewhere unclaimable forever.
@@ -580,7 +579,6 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
         if (_core == address(0)) revert BadInput();
         satoriCore = _core;
         satoriRegistry = ISatoriCore(_core).satoriRegistry();
-        satoriGames = ISatoriCore(_core).satoriGames();
         emit SatoriCoreSet(_core);
     }
 
@@ -592,6 +590,7 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
         if (satoriBounties != address(0)) revert AlreadySet();
         if (_bounties == address(0)) revert BadInput();
         satoriBounties = _bounties;
+        emit SatoriBountiesSet(_bounties);
     }
 
     // `admin` is its own public getter; `SatoriHub.owner()` returns `address(0)`
@@ -618,7 +617,7 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
     /// @notice Assign the on-chain/off-chain dial. Zero returns it to `admin`.
     function setEmissionSplitAuthority(address who) external {
         _requireCanAppoint(emissionSplitAuthority);
-        emit EmissionSplitAuthorityChanged(_holder(emissionSplitAuthority), who);
+        emit EmissionSplitAuthorityChanged(_holder(emissionSplitAuthority), _holder(who));
         emissionSplitAuthority = who;
     }
 
@@ -665,34 +664,17 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
         // passing the default (1000) stores 0 (the untouched state — a no-op
         // that doesn't lock); passing 0 stores 1000 (the explicit-zero flag);
         // everything else is stored as-is.
-        predictorFeeStored[user] = _effectivePredictorFee(bps);
+        uint16 stored = _effectivePredictorFee(bps);
+        if (stored == 0) return; // the default: nothing changed, so nothing to announce
+        predictorFeeStored[user] = stored;
         emit PredictorFeeSet(user, bps);
     }
 
-    /// @dev On-chain gross for a fresh round: the residual after the SENIOR dev
-    ///      fee — `emissionRateNow − devRateNow − the dial`. The prediction game
-    ///      and the off-chain dial split only this residual, so game + dial + dev
-    ///      never exceeds the round's emission (no BudgetExceeded at the token).
-    ///      The setter keeps `offchainBudget < emissionRateNow − devRateNow`, so
-    ///      the gross is >= 1 at set time; see the yield below for later rounds.
+    /// @dev On-chain gross for a round not yet frozen: the hub prices rounds
+    ///      (`SatoriHub.onChainGrossNow`), so the view fallback below and the
+    ///      freeze read the one formula.
     function _onChainGrossNow() internal view returns (uint256) {
-        // The round's emission, net of the senior fee, net of the dial.
-        //
-        // Read from the core (the hub), never a constant: the rate is set there.
-        //
-        // THE DIAL YIELDS rather than underflowing. Its bound is checked at SET
-        // time against a residual that can SHRINK later (an emission step or a
-        // fee raise), so a dial legal today can exceed the whole residual later. Left as a bare
-        // subtraction that panics — and `_ensureRoundBudget` is on the
-        // predict/settle path, so it would brick every round rollover. The fee
-        // is senior, the dial is junior, so the dial is what gives way. Floors
-        // at 1 wei while any emission remains, because `budget == 0` is the
-        // "unset" sentinel in `_ensureRoundBudget`.
-        uint256 residual = ISatoriCore(satoriCore).emissionRateNow()
-                         - ISatoriCore(satoriCore).devRateNow();
-        if (residual == 0) return 0;
-        uint256 dial = offchainBudget;
-        return dial >= residual ? 1 : residual - dial;
+        return ISatoriCore(satoriCore).onChainGrossNow();
     }
 
     /// @notice Set the off-chain split (admin only). Applies to FUTURE rounds: a
@@ -724,6 +706,10 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
     /// @notice Whether `caller` may use capability `capId` right now — the flag is
     ///         enabled for the public, or `caller` is the admin (bypasses toggles).
     ///         The hub and bounties read this to gate their user entry points.
+    function capabilityBitmap() external view returns (uint256 bits) {
+        assembly { bits := sload(_CAP_SLOT) }
+    }
+
     function capabilityAllowed(uint8 capId, address caller) external view returns (bool) {
         uint256 bits;
         assembly { bits := sload(_CAP_SLOT) }
@@ -734,7 +720,7 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
         if (msg.sender != _holder(emissionSplitAuthority)) revert Unauthorized();
         // Bounded by NEXT round's residual (the first round the dial applies to),
         // matching the hub's setMerkleReserveRate bound exactly. The rate can
-        // fall later (a step or a fee raise), which is why `_onChainGrossNow`
+        // fall later (a step or a fee raise), which is why the hub's gross
         // yields rather than trusting a once-legal dial forever.
         if (newOffchain >= ISatoriCore(satoriCore).residualNext()) revert BadInput();
         // Effective NEXT round: pin the current round's on-chain gross at the OLD
@@ -751,27 +737,18 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
         emit OffchainBudgetSet(newOffchain, _currentRound(), msg.sender);
     }
 
-    /// @dev The round's PAYABLE budget IS the on-chain gross. It used to be
-    ///      `gross` minus a reserved first-predictor bonus; with that bonus gone
-    ///      the reserve went with it, or the withheld amount would simply never
-    ///      have been minted.
-    function _computeRoundBudget(uint256 gross) internal pure returns (uint256) {
-        return gross;
-    }
-
     /// @dev Snapshot BOTH the on-chain gross and the payable budget for `round`
-    ///      on its first state-changing touch. The dial is read exactly once,
-    ///      here, and the fee accrual and predictor pools all derive from the
-    ///      frozen gross, so a mid-round dial move never desyncs them. Payable
-    ///      stays the lazily-settled base;
-    ///      with the >= 1-wei gross floor it is never a literal 0, so the `== 0`
+    ///      on its first state-changing touch. The hub prices the round in the
+    ///      same call and grows the on-chain lane's allowance by it, so what
+    ///      this contract pays out for the round is exactly what the hub lets
+    ///      it report; a mid-round dial or fee move never desyncs them. With
+    ///      the >= 1-wei gross floor it is never a literal 0, so the `== 0`
     ///      "unset" sentinel stays honest.
     function _ensureRoundBudget(uint256 round) internal returns (uint256 budget) {
         budget = _roundBudget[round];
         if (budget == 0) {
-            uint256 gross = _onChainGrossNow();
-            _roundGross[round] = gross;
-            budget = _computeRoundBudget(gross);
+            uint256 gross = ISatoriCore(satoriCore).freezeRoundGross(round);
+            budget = gross;
             _roundBudget[round] = budget;
             emit RoundBudgetFrozen(round, budget);
         }
@@ -786,14 +763,14 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
     function _gameRoundAllocation(uint32 gameId, uint256 currentRound)
         internal view returns (uint256 allocation, uint256 govRound, uint256 gameVotes)
     {
-        govRound = ISatoriCore(satoriCore).eligibilityRound(currentRound);
+        govRound = currentRound;
         // A game that is not live — unapproved, or approval revoked — scores
         // NOTHING, including for rounds it participated in before the
         // revocation. Without this, an operator could farm a manipulated game
         // and still collect on rounds already predicted by the time the admin
-        // caught it. Re-approving makes those rounds claimable again, so an
-        // erroneous revocation is reversible. The default game is live by
-        // construction (`gameLive`).
+        // caught it. A prediction settled while the game is off earns nothing and
+        // is not re-scored; re-approving only helps predictions still unsettled.
+        // The default game is live by construction (`gameLive`).
         if (!ISatoriVoting(satoriVoting).gameLive(gameId)) return (0, govRound, 0);
         uint256 totalVotes = _roundTotals(govRound);
         if (totalVotes == 0) return (0, govRound, 0);
@@ -802,7 +779,7 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
         // Snapshotted budget (saved by the round's first state-changing touch);
         // view fallback recomputes if a read somehow precedes any save.
         uint256 budget = _roundBudget[currentRound];
-        if (budget == 0) budget = _computeRoundBudget(_onChainGrossNow());
+        if (budget == 0) budget = _onChainGrossNow();
         allocation = (budget * gameVotes) / totalVotes;
     }
 
@@ -918,14 +895,27 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
      */
     function bumpUnsettled(address user, uint256 round, uint256 count) external override onlyCore {
         _unsettledPredictionCount[user][uint32(round)] += count;
-        // Loyalty: `q`'s denominator. The engine already calls this once per
-        // predict batch with the batch size, so the count is free here and no
-        // cross-contract read of `predictedStreamsCount` is needed. Also marks
-        // the round active so `_advanceAccum` can jump identity rounds.
-        _roundPredictions[user][round] += count;
-        if (round > _lastPredictedRound[user]) _lastPredictedRound[user] = round;
+        // Pin the predictor's own power ONCE per batch, before any of the batch's
+        // settles credit a reward: a win credited earlier in the batch would
+        // otherwise inflate the own power every later commit snapshots, and shrink
+        // the delegators' share of the later games (M13). Only a delegate needs it.
+        _flushPool(user);
+        if (_delegatePowerForRate[user] != 0) {
+            _batchOwnPower[user] = BatchOwnPower({
+                round: uint64(round),
+                power: uint128(_balanceOf(user) + unclaimedRewards[user])
+            });
+        }
         // Global pending counter is bumped on `SatoriEngine._roundState[round]` by
         // the caller in the same predict transaction.
+    }
+
+    /// @dev The own power to snapshot for `user`'s commit in `round`: the batch's
+    ///      pinned value, or the live one when no batch pinned it this round.
+    function _ownPowerForCommit(address user, uint256 round) private view returns (uint128) {
+        BatchOwnPower storage b = _batchOwnPower[user];
+        if (b.round == round) return b.power;
+        return uint128(_balanceOf(user) + unclaimedRewards[user]);
     }
 
     /// @dev Commit body for `scorePrediction`: pure delegation-split
@@ -959,9 +949,8 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
         uint256 delegatedPower = _delegatePowerForRate[user];
         if (delegatedPower != 0) {
             SatoriTypes.PredictionDelegationInfo storage delInfo = predictionDelegationInfo[user][gameId][round];
-            delInfo.ownPower = uint128(_balanceOf(user) + unclaimedRewards[user]);
+            delInfo.ownPower = _ownPowerForCommit(user, round);
             delInfo.delegatedPower = uint128(delegatedPower);
-            _snapshotRoundWeight(user, round);
         }
         // Commit the per-direction total at predict time. The
         // per-(user, stream, round, direction) weight is NOT stored —
@@ -991,6 +980,7 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
                 if (down > DIR_HALF_MASK) revert Overflow();
             }
             totalWeightPacked[gameId][round] = (up << 128) | down;
+            emit GameRoundWeight(gameId, round, up, down);
         }
     }
 
@@ -1064,13 +1054,6 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
             ISatoriBounties(satoriBounties).creditBountyForWin(user, gameId, uint32(round));
         }
 
-        // Loyalty: `q`'s numerator. Counted BEFORE the `weight == 0` return, so a
-        // correct call on an ineligible (non-paying) stream still counts — same
-        // reasoning as audit F16 keeping the streak ungated on power/eligibility:
-        // it is a reputation signal, and `_roundPredictions` counts those
-        // predictions in the denominator too.
-        _roundWins[user][round] += 1;
-
         // No-op the SATORI credit path if no weight was committed at predict
         // time. The caller (SatoriEngine._scorePreviousPrediction) re-derives the weight from
         // the Prediction struct; we trust the value rather than re-look it up.
@@ -1109,8 +1092,9 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
         _recordAdapterCommit(user, gameId, round, boosted);
     }
 
-    /// @dev Commit body for `recordAdapterPrediction`: delegation
-    /// snapshot + mark pending. No per-bet SATORI weight state (the score/total
+    /// @dev Commit body for `recordAdapterPrediction`: mark pending. No
+    /// delegation snapshot (an adapter game pays no SATORI, so nothing would
+    /// read it) and no per-bet SATORI weight state (the score/total
     /// model decides the share at score time); no pending-counter mutation
     /// (the caller pre-bumps via `bumpUnsettled`). The bounty
     /// stake is NOT snapshotted here — the core snapshots the round's single
@@ -1125,19 +1109,6 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
         bool boosted
     ) internal {
         _flushPool(user);
-        // GAS (review #19): same guarded snapshot as _scorePredictionCommit —
-        // written only when inbound delegated power exists; the settle-side
-        // split's `delegatedPower == 0` early-return reads the same zero from
-        // the never-written slot.
-        uint256 delegatedPower = _delegatePowerForRate[user];
-        if (delegatedPower != 0) {
-            SatoriTypes.PredictionDelegationInfo storage delInfo =
-                predictionDelegationInfo[user][gameId][round];
-            delInfo.ownPower = uint128(_balanceOf(user) + unclaimedRewards[user]);
-            delInfo.delegatedPower = uint128(delegatedPower);
-            _snapshotRoundWeight(user, round);
-        }
-
         // Mark the bet pending so score can pay it exactly once. The protocol —
         // not the adapter — owns double-pay prevention. 2 = pending-boosted,
         // 1 = pending-unboosted.
@@ -1205,8 +1176,8 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
     /// @notice Split a predictor's SATORI reward between the predictor and
     /// their delegators. No platform fee here — the platform/dev take now lives
     /// in the immutable SatoriToken; this split is purely predictor-vs-delegators.
-    /// @dev Returns the predictor's portion and the delegators' share actually
-    /// committed to the pull-rate accumulator (0 when it evaporates at W == 0). The predictor keeps
+    /// @dev Returns the predictor's portion and the delegators' share, which is
+    /// committed in full to the pull-rate accumulator. The predictor keeps
     /// their own-power portion in full plus a bonus on the delegated portion
     /// equal to their chosen `predictorFeeBps` (default 10%).
     function _splitReward(
@@ -1248,29 +1219,17 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
             }
         }
 
-        // Per-round delegator rate accumulator. The denominator is now the
-        // LOYALTY-WEIGHTED total `W = Σ cᵢLᵢ` rather than raw delegated power, so
-        // each delegator pulls `cᵢ × Lᵢ × rate` via `_accrueDelegatorRewards`.
-        // The predictor/delegator split above is untouched — loyalty only divides
-        // the delegator pot, it never resizes it (design §1 scope).
+        // Per-round delegator rate accumulator: the delegators' pot divided by the
+        // delegated power snapshotted at predict time (never the live pool, which
+        // a delegator leaving in between would shrink), so each delegator pulls
+        // `capital × rate` in `_accrueDelegatorRewards`, pro rata to capital.
+        // `delegatedPower != 0` here, so nothing evaporates.
         if (delegatorsShare > 0) {
-            // The PREDICT-TIME pin, never a fresh computation — see
-            // `_roundWeightSnapshot` for why recomputing here over-mints.
-            uint256 W = _roundWeightSnapshot[user][round];
-            if (W != 0) {
-                _delegatorRewardRatePerRound[user][round] +=
-                    Math.mulDiv(delegatorsShare, SATORI_RATE_SCALE, W);
-                committedDelegatorShare = delegatorsShare;
-            }
-            // W == 0 EVAPORATES (design §7): every delegator is still at L = 0,
-            // which happens on a predictor's first winning round with delegators
-            // and on any round where the whole delegator set turned over. The
-            // share is simply never minted — it does NOT fall through to the
-            // predictor, which would pay predictors to churn their delegators.
-            // The guard is load-bearing, not defensive: unguarded this is a
-            // division by zero, i.e. a Panic 0x12 that reverts the settle path.
+            uint256 rateAdded = Math.mulDiv(delegatorsShare, SATORI_RATE_SCALE, delegatedPower);
+            _delegatorRewardRatePerRound[user][round] += rateAdded;
+            committedDelegatorShare = delegatorsShare;
+            emit DelegatorRateAccrued(user, gameId, round, delegatedPower, rateAdded);
         }
-
     }
 
     // ========== Reward Claiming Functions ==========
@@ -1323,7 +1282,17 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
 
         uint256 totalRewards = unclaimedRewards[owner];
         if (fee > totalRewards) revert BadInput();
-        if (totalRewards > 0) {
+        // Pay what the lane can still mint and leave the rest in the bucket for a
+        // later claim, like the merkle lane does. With no headroom at all the mint
+        // below still reverts BudgetExceeded.
+        uint256 headroom = _onChainHeadroom();
+        if (headroom != 0 && totalRewards > headroom) {
+            if (fee > headroom) revert BadInput();
+            unclaimedRewards[owner] = totalRewards - headroom;
+            totalRewards = headroom;
+            if (fee > 0) _rewardMint(feeTo, fee);
+            _rewardMint(recipient, totalRewards - fee);
+        } else if (totalRewards > 0) {
             unclaimedRewards[owner] = 0;
             // No referral split here anymore: the 5% cut is taken eagerly at
             // credit time (`_creditReward`), so `unclaimedRewards[owner]` is
@@ -1335,6 +1304,15 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
 
         emit RewardsClaimed(owner, recipient, totalRewards, currentRound);
         return totalRewards;
+    }
+
+    /// @dev What `SatoriHub.rewardMint` still accepts from this contract: the
+    ///      mirror of its check `onChainMinted + amount + merkleReserveCumulative
+    ///      <= generalAccrued`.
+    function _onChainHeadroom() private view returns (uint256) {
+        uint256 used = IHubLaneView(satoriCore).onChainMinted() + IHubLaneView(satoriCore).merkleReserveCumulative();
+        uint256 accrued = ITokenLaneView(satoriToken).generalAccrued();
+        return accrued > used ? accrued - used : 0;
     }
 
     /// @dev Walk every delegation period and accrue per-round delegator shares.
@@ -1418,7 +1396,6 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
             if (p.endRound != 0) {
                 to = p.endRound - 1;
             } else {
-                if (nowRound == 0) { p.nextClaimRound = nowRound; continue; }
                 to = nowRound - 1;
             }
 
@@ -1434,10 +1411,13 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
 
             address delegate = p.delegate;
             uint24 r = from;
-            // Loyalty rides the walk. It is already round-by-round, so carrying
-            // `L` costs one extra SLOAD (the frozen `q`) and a mulDiv per round —
-            // no division, no sqrt, and no new writes inside the loop.
-            uint256 L = p.loyalty;
+            // Carry an index into the checkpoints instead of rescanning them from
+            // the newest every round (M14). Rounds only increase, so `k` (how many
+            // checkpoints are at or before `r`) only moves forward: one binary
+            // search per period, then O(1) per round.
+            Checkpoint[] storage cps = p.checkpoints;
+            uint256 nCp = cps.length;
+            uint256 k = type(uint256).max;
             while (r <= to) {
                 if (roundsWalked >= maxPerCall) {
                     capHit = true;
@@ -1445,16 +1425,13 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
                 }
                 uint256 rate = _delegatorRewardRatePerRound[delegate][r];
                 // Hoist the rate check so non-winning rounds skip the
-                // checkpoint walk entirely. _lookupBalanceAt is O(C) per
-                // call; most rounds have rate==0 and don't need it. L == 0 is
-                // the same short-circuit: a delegator still at zero loyalty
-                // carries zero weight and earns nothing this round.
-                if (rate > 0 && L > 0) {
-                    uint256 bal = _lookupBalanceAt(p, r);
+                // checkpoint lookup entirely.
+                if (rate > 0) {
+                    if (k == type(uint256).max) k = _checkpointsAtOrBefore(cps, r);
+                    while (k < nCp && cps[k].round <= r) k++;
+                    uint256 bal = k == 0 ? p.startBalance : uint256(cps[k - 1].value);
                     if (bal > 0) {
-                        // rate was scaled by W = Σ cᵢLᵢ, so the numerator is
-                        // capital × loyalty and the LOY_ONE cancels.
-                        uint256 credit = Math.mulDiv((bal * L) / LOY_ONE, rate, SATORI_RATE_SCALE);
+                        uint256 credit = Math.mulDiv(bal, rate, SATORI_RATE_SCALE);
                         if (credit > 0) {
                             sumAccrued += credit;
                         }
@@ -1463,26 +1440,13 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
                 // Pending check AFTER the credit — if the round still has
                 // unfinalized predictions by this delegate, record the
                 // banked rate so subsequent claims can collect any deltas.
-                // `L` rides along: the replay must weight its delta with the
-                // loyalty of THAT round, not whatever the walk has reached by
-                // the time the delta arrives.
                 if (_unsettledPredictionCount[delegate][r] > 0) {
-                    p.openRounds.push(OpenRound({ round: r, banked: uint224(rate), loyalty: L }));
-                }
-                // Advance loyalty by the frozen q of the round LOY_LAG behind —
-                // the SAME fold point `_snapshotRoundWeight` used to size this
-                // round's denominator. Folding round `r` here instead would read
-                // a `q` that cannot be settled yet (see LOY_LAG) and would also
-                // put the walk out of step with `W`, breaking conservation.
-                if (uint256(r) >= LOY_LAG) {
-                    (uint256 alpha, uint256 beta) = _loyCoeffs(delegate, uint256(r) - LOY_LAG);
-                    L = (L * alpha) / LOY_ONE + beta;
+                    p.openRounds.push(OpenRound({ round: r, banked: uint224(rate) }));
                 }
                 r++;
                 roundsWalked++;
             }
             p.nextClaimRound = r;
-            p.loyalty = L;
         }
 
         // Single sstore instead of one per round.
@@ -1541,12 +1505,9 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
             uint256 currentRate = _delegatorRewardRatePerRound[delegate][r];
             uint256 banked = uint256(o.banked);
             if (currentRate > banked) {
-                uint256 loy = o.loyalty;
-                uint256 bal = loy == 0 ? 0 : _lookupBalanceAt(p, r);
+                uint256 bal = _lookupBalanceAt(p, r);
                 if (bal > 0) {
-                    // Same weighting as the original crossing — capital × the
-                    // loyalty recorded for THAT round.
-                    uint256 add = Math.mulDiv((bal * loy) / LOY_ONE, currentRate - banked, SATORI_RATE_SCALE);
+                    uint256 add = Math.mulDiv(bal, currentRate - banked, SATORI_RATE_SCALE);
                     if (add > 0) {
                         delta += add;
                     }
@@ -1615,37 +1576,11 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
     }
 
     function delegationOpenRoundAt(address user, uint256 i, uint256 j)
-        external view returns (uint24 round, uint224 banked, uint256 loyalty)
+        external view returns (uint24 round, uint224 banked)
     {
         OpenRound storage o = _delegationPeriods[user][i].openRounds[j];
-        return (o.round, o.banked, o.loyalty);
+        return (o.round, o.banked);
     }
-
-    /// @notice View twin of `_loyCoeffs` — same decode, no freeze. The Lens
-    ///         mirrors the claim walk by hand and needs the loyalty recursion's
-    ///         coefficients; without them it reports `bal × rate` and, since the
-    ///         rate is now scaled by a loyalty-weighted denominator, over-reports
-    ///         pending rewards by orders of magnitude.
-    function loyaltyCoeffs(address delegate, uint256 round)
-        external view returns (uint256 alpha, uint256 beta)
-    {
-        uint256 enc = _frozenQ[delegate][round];
-        uint256 q;
-        if (enc == 0) {
-            uint256 preds = _roundPredictions[delegate][round];
-            if (preds == 0) return (LOY_ONE, 0);     // identity, never pinned
-            uint256 wins = _roundWins[delegate][round];
-            if (wins > preds) wins = preds;
-            q = (wins * LOY_ONE) / preds;
-        } else {
-            q = enc - 1;
-        }
-        alpha = LOY_D + (q * (LOY_A - LOY_D)) / LOY_ONE;
-        beta = q;
-    }
-
-    /// @notice The loyalty fold lag, so off-chain mirrors stay in lockstep.
-    function loyaltyLag() external pure returns (uint256) { return LOY_LAG; }
 
     function delegatorRewardRatePerRound(address delegate, uint256 round) external view returns (uint256) {
         return _delegatorRewardRatePerRound[delegate][round];
@@ -1658,14 +1593,22 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
     ///      to the period's startBalance if no such checkpoint exists.
     function _lookupBalanceAt(DelegationPeriod storage p, uint24 r) internal view returns (uint256) {
         Checkpoint[] storage cps = p.checkpoints;
-        uint256 n = cps.length;
-        for (uint256 i = n; i > 0; i--) {
-            Checkpoint storage cp = cps[i - 1];
-            if (cp.round <= r) {
-                return cp.value;
-            }
+        uint256 k = _checkpointsAtOrBefore(cps, r);
+        return k == 0 ? p.startBalance : uint256(cps[k - 1].value);
+    }
+
+    /// @dev How many checkpoints sit at or before round `r`. Checkpoint rounds only
+    ///      increase, so this is a binary search: a delegator with a long history
+    ///      costs O(log n) per lookup instead of a scan of everything newer.
+    function _checkpointsAtOrBefore(Checkpoint[] storage cps, uint24 r) internal view returns (uint256) {
+        uint256 lo = 0;
+        uint256 hi = cps.length;
+        while (lo < hi) {
+            uint256 mid = (lo + hi) / 2;
+            if (cps[mid].round <= r) lo = mid + 1;
+            else hi = mid;
         }
-        return p.startBalance;
+        return lo;
     }
 
     /// @dev Append or overwrite the checkpoint at the given round. Multiple
@@ -1712,34 +1655,9 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
         uint24 nowRound = uint24(_currentRound());
         if (nowRound >= pend.activationRound) {
             _delegatePowerForRate[delegate] += pend.amount;
-            // The matching K delta activates with it, so `W`'s capital basis
-            // never drifts from `C`'s.
-            uint256 pk = _delegatePoolPendingK[delegate];
-            if (pk != 0) {
-                _accumK[delegate] += pk;
-                _delegatePoolPendingK[delegate] = 0;
-            }
             pend.amount = 0;
             pend.activationRound = 0;
         }
-    }
-
-    /// @dev Score-time SATORI pool for `gameId` in `round`: the game's vote
-    ///      share of the round budget. Single source used by BOTH score paths
-    ///      (binary + adapter). The derived-stream family split that used to
-    ///      live here was deleted with derived streams (2026-09-06, question 6
-    ///      of docs/issues/rolling-24h-scoring.md) — its divisor was already 1
-    ///      for every standalone stream, so this is the same arithmetic.
-    function _streamPoolPostCut(uint32 gameId, uint256 round) internal view returns (uint256) {
-        (uint256 nominalAllocation, , ) = _gameRoundAllocation(gameId, round);
-        if (nominalAllocation == 0) return 0;
-
-        // Conservation holds because `recordGameVotesForRound` freezes a game's
-        // weight into the round at its FIRST predictor, so numerator and
-        // denominator (`_roundTotals`) are the same recorded set.
-        // NOTE: the old "predicting requires a fresh value that round"
-        // produce-coupling argument predates phase 6 — flagged for owner review.
-        return nominalAllocation;
     }
 
     /**
@@ -1769,26 +1687,22 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
         // userWeight/totalWeight, so its index is moot.)
         // Pool sizing (shared helper): the game's share of the round budget.
         // Nothing is skimmed on the way.
-        uint256 streamPool = _streamPoolPostCut(gameId, round);
+        (uint256 streamPool, , ) = _gameRoundAllocation(gameId, round);
         if (streamPool == 0) return 0;
         uint256 other = direction == 1 ? (_packedW & DIR_HALF_MASK) : (_packedW >> 128);
         if (named) {
             // Pari-mutuel: a side is paid only in proportion to what the OTHER
             // side committed, so a crowd that merely agrees with itself (the
-            // counter is self-referential) draws nothing. UP pool + DOWN pool
-            // still == streamPool.
-            streamPool = (streamPool * other) / (totalWeight + other);
-        } else if (gameId != DEFAULT_GAME_ID) {
+            // counter is self-referential) draws nothing. Each unit on the
+            // winning side is matched by at most one unit of the losing side, so
+            // a dust wallet alone on the thin side earns dust, not the slice.
+            // UP pool + DOWN pool is at most streamPool.
+            uint256 smaller = totalWeight < other ? totalWeight : other;
+            streamPool = (streamPool * smaller) / (totalWeight + other);
+        } else {
             // Each prediction is scored on the values after its own hour, so an
             // UP and a DOWN made at different hours of one round can both win:
             // divide by both sides, or the round pays up to twice its slice.
-            // The default game keeps its own side, and so its winners the whole
-            // slice, because all its predictors of a round read one pair of
-            // values: its stream is written once a round at hour round*24,
-            // before any prediction (SatoriEngine.flushDefaultStream), and its
-            // target puts it in the ABC band (SatoriEngine._scorePreviousPrediction),
-            // which scores on the first two values after the prediction. Change
-            // either and it becomes a game like this.
             totalWeight += other;
         }
         return (streamPool * userWeight) / totalWeight;
@@ -1797,6 +1711,9 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
     // ========== Prediction Delegation Functions ==========
 
     function syncPredictionDelegation(address from, address to, uint256 value) external override onlyCore {
+        // A zero-value move changes nothing, and `transfer(victim, 0)` is free for
+        // anyone, so it must not write a checkpoint or pending entry (M14).
+        if (value == 0) return;
         // Keeps the live delegatedPredictionPower in sync with delegator wallet
         // changes so getPredictionPower (the view) reflects post-transfer state.
         //
@@ -1860,11 +1777,6 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
                             ? uint256(p.checkpoints[cpLen - 1].value)
                             : _lookupBalanceAt(p, today);
                         _writeCheckpoint(p.checkpoints, activation, base + value);
-                        // K tracks Σ cᵢ(r)·B_{sᵢ}/A_{sᵢ}, so a capital delta moves
-                        // it by Δc × this period's join factor. Parked with the
-                        // capital delta so both activate at today+1 together.
-                        uint256 fac = _loyFactorNow(p, predDelegate);
-                        if (fac != 0) _delegatePoolPendingK[predDelegate] += value * fac;
                     }
                 }
                 emit DelegatePowerSynced(predDelegate, to, value, activation, newPower);
@@ -1936,17 +1848,6 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
                     uint256 effectiveAtToday = _lookupBalanceAt(active, today);
                     _delegatePowerForRate[previousDelegate] -= effectiveAtToday;
 
-                    // K mirrors C: this period contributed `c × joinFactor`, so
-                    // leaving subtracts exactly that. `joinFactor` is a CONSTANT
-                    // fixed at join, so this is exact and O(1) — no stale `L`
-                    // read, no bounded walk, and nothing to bias (design §9.1).
-                    uint256 fac = _loyFactorNow(active, previousDelegate);
-                    if (fac != 0) {
-                        uint256 kOut = effectiveAtToday * fac;
-                        uint256 kHave = _accumK[previousDelegate];
-                        _accumK[previousDelegate] = kHave > kOut ? kHave - kOut : 0;
-                    }
-
                     // If this delegator has a future cp (cp(today+1) by
                     // construction), its delta is sitting in pool pending —
                     // strip it out so the new period doesn't get double-counted
@@ -1959,11 +1860,6 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
                             Pending storage pend = _delegatePoolPending[previousDelegate];
                             pend.amount = uint224(uint256(pend.amount) - pendingPortion);
                             if (pend.amount == 0) pend.activationRound = 0;
-                            if (fac != 0) {
-                                uint256 pk = _delegatePoolPendingK[previousDelegate];
-                                uint256 pkOut = pendingPortion * fac;
-                                _delegatePoolPendingK[previousDelegate] = pk > pkOut ? pk - pkOut : 0;
-                            }
                         }
                     }
 
@@ -2003,26 +1899,6 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
             p.endRound = 0;
             p.nextClaimRound = today;
 
-            // Loyalty starts at 0 — a fresh delegation earns nothing until the
-            // predictor's first scored round, which is the switching cost. Pin
-            // the period's per-unit K factor `B_s·2¹²⁸/A_s` against the CURRENT
-            // accumulator, so `Lᵢ(r) = B_r − (A_r/A_s)·B_s` starts this period at
-            // exactly zero and grows from there.
-            // Pin against the SAME lagged fold point the walk and the weight
-            // snapshot use, so the closed form and the walk's carried `L` agree
-            // exactly. The period therefore folds from `startRound − LOY_LAG`:
-            // `L` is still 0 on the joining round (the fold range is empty
-            // there), but the first few folds are rounds just before the join.
-            // That bounded head start is the price of having ONE fold point;
-            // the alternative is a walk and a denominator that disagree.
-            if (today > LOY_LAG) _advanceAccum(delegate, today - 1 - LOY_LAG);
-            {
-                uint256 accA = _accumA[delegate];
-                if (accA == 0) accA = LOY_TWO128;
-                p.joinFactor = Math.mulDiv(_accumB[delegate], LOY_TWO128, accA);
-                p.joinEpoch = _accumEpoch[delegate];
-            }
-
             // OVER-MINT GUARD (audit H1). If the delegate has ALREADY predicted
             // this round, that prediction's split snapshot (`delegatedPower =
             // _delegatePowerForRate` at predict time) is frozen and EXCLUDES this
@@ -2052,12 +1928,10 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
                     pend.amount = uint224(power);
                     pend.activationRound = activation;
                 }
-                _delegatePoolPendingK[delegate] += power * p.joinFactor;
                 p.startBalance = 0;
                 _writeCheckpoint(p.checkpoints, activation, power);
             } else {
                 _delegatePowerForRate[delegate] += power;
-                _accumK[delegate] += power * p.joinFactor;
                 p.startBalance = power;
             }
 
@@ -2136,116 +2010,14 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
     ///         failure mode — an immutable recipient whose key is lost burns 5%
     ///         of every un-referred reward forever, with no recovery.
     ///
-    ///         Rotation is deliberately NOT an admin power. `admin` is documented
-    ///         as non-extractive ("can never direct funds or votes to itself"),
-    ///         and letting it re-point this would hand it 5% of un-referred
-    ///         emission. Only the CURRENT recipient may nominate a successor, and
+    ///         Rotation is deliberately NOT an admin power. The admin's reach is
+    ///         already wide (see `admin`), and letting it re-point this would
+    ///         hand it 5% of un-referred emission. Only the CURRENT recipient may nominate a successor, and
     ///         the successor must accept — see `transferMarketingFeeRecipient`.
     address public marketingFeeRecipient;
 
     /// @notice Nominee from `transferMarketingFeeRecipient`, pending acceptance.
     address public pendingMarketingFeeRecipient;
-
-    // ================= Delegation loyalty (appended storage) =================
-    //
-    // docs/design/delegation-loyalty-weighting.md. A predictor's delegator pot is
-    // divided by `weight = capital × L` instead of by capital alone, where `L` is
-    // a per-(delegator → predictor) loyalty score updated once per round from the
-    // predictor's fraction of that round's predictions that were correct (`q`):
-    //
-    //     L' = q(aL + 1) + (1−q)(dL)  =  αL + β,  α = d + q(a−d),  β = q
-    //
-    // Because weight is LINEAR in L and the update is AFFINE, the round
-    // denominator stays closed-form — it is never iterated over delegators:
-    //
-    //     W(r) = Σ cᵢLᵢ(r) = B_r·C − A_r·K,   K = Σ cᵢ·B_{sᵢ}/A_{sᵢ}
-    //
-    // with (A, B) the composed affine map from round 0 and `C` the existing
-    // `_delegatePowerForRate`. `K`'s per-period term is a constant fixed at join,
-    // so joins and leaves are exact O(1) adjustments.
-
-    /// @dev Fixed-point one for α, β, B and L. All are O(1)…O(1/(1−a)) magnitudes.
-    uint256 internal constant LOY_ONE = 1e18;
-    /// @dev Growth damping `a`. L saturates at `1/(1−a)` ≈ 33.33 for a
-    ///      fully-correct predictor; `a` is the sole concentration dial
-    ///      (design §12). A newcomer reaches ~90% of that in ~76 rounds.
-    uint256 internal constant LOY_A = 97e16;
-    /// @dev Loss decay `d` — the golden-ratio conjugate, matching the protocol's
-    ///      existing use of φ. Must stay < LOY_A so α ∈ [d, a] ⊂ (0, 1).
-    uint256 internal constant LOY_D = 618033988749894848;
-    /// @dev Base for `A`. `A` decays every scored round, so it carries its own
-    ///      (larger) scale than the LOY_ONE quantities.
-    uint256 internal constant LOY_TWO128 = 1 << 128;
-    /// @dev Renormalisation: when `A` drops below this it is shifted back up and
-    ///      `K` is shifted down by the same amount, preserving `A·K`. A fixed
-    ///      POWER OF TWO, deliberately — renormalising `A` to 1 on fixed round
-    ///      boundaries would hand full loyalty to anyone joining just before one.
-    uint256 internal constant LOY_RENORM_FLOOR = 1 << 96;
-    uint256 internal constant LOY_RENORM_SHIFT = 32;
-
-    /// @dev FOLD LAG, in rounds. Nothing settles before `r + 1`, and the default
-    ///      game's ABC band compares the first TWO values after the prediction,
-    ///      which its stream writes at each round's first touch, so the default
-    ///      game's round `r` settles at `r + 2` at the earliest.
-    ///      Freezing `q` on literal first crossing therefore froze it at ZERO for
-    ///      almost every round and loyalty never grew.
-    ///      NOTE: LOY_LAG = 4 is unreviewed since the scoring bands changed.
-    ///
-    ///      So the fold point is LAGGED and FIXED: the loyalty applied to round
-    ///      `r` is the map composed through `r − 1 − LOY_LAG`. Fixed, not
-    ///      "whenever it happens to be settled" — both the score-time denominator
-    ///      and the claim walk must fold to the SAME point or they disagree and
-    ///      conservation breaks. 4 rounds gives two rounds of slack over the
-    ///      default game's settle at `r + 2`; a round still unsettled by then
-    ///      simply freezes at its partial `q`, which is the intended graceful
-    ///      degradation for slow-cadence streams (design §5) and errs low.
-    uint256 internal constant LOY_LAG = 4;
-
-    /// @notice Frozen `q` per (delegate, round) — canonical once written, never
-    ///         revised by a late settlement (design §5). Encoded:
-    ///         0 = not frozen, else `q·LOY_ONE + 1`. Rounds the delegate never
-    ///         predicted in are NOT written: they are identity updates that
-    ///         nothing can later settle, so pinning them is pure cost.
-    mapping(address => mapping(uint256 => uint256)) internal _frozenQ;
-    /// @dev Per-(delegate, round) prediction and win counts feeding `q`. The
-    ///      denominator is accumulated in `bumpUnsettled` (which the engine
-    ///      already calls once per predict batch), so no cross-contract read is
-    ///      needed; the numerator in `scoreCorrectPrediction`.
-    mapping(address => mapping(uint256 => uint256)) internal _roundPredictions;
-    mapping(address => mapping(uint256 => uint256)) internal _roundWins;
-
-    /// @dev Composed affine map from round 0. `_accumA` is LOY_TWO128-based and
-    ///      0 means "uninitialised" (renormalisation keeps it ≥ LOY_RENORM_FLOOR
-    ///      thereafter, so 0 is an unambiguous sentinel); `_accumB` is LOY_ONE-based.
-    mapping(address => uint256) internal _accumA;
-    mapping(address => uint256) internal _accumB;
-    /// @dev `K = Σ cᵢ·B_{sᵢ}/A_{sᵢ}`, the second running sum that makes `W`
-    ///      derivable rather than stored.
-    mapping(address => uint256) internal _accumK;
-    /// @dev Cursor — rounds strictly below this have been folded into (A, B).
-    mapping(address => uint256) internal _accumRound;
-    /// @dev Fixed-shift renormalisation counter (see LOY_RENORM_SHIFT).
-    mapping(address => uint32) internal _accumEpoch;
-    /// @dev Last round the delegate predicted in. Rounds beyond it are identity
-    ///      updates, so the cursor jumps them instead of iterating no-ops.
-    mapping(address => uint256) internal _lastPredictedRound;
-    /// @dev `K` delta parked alongside `_delegatePoolPending`'s capital delta, so
-    ///      the two activate in lockstep and `W`'s basis always matches `C`'s
-    ///      (design §13). Flushed by `_flushPool`.
-    mapping(address => uint256) internal _delegatePoolPendingK;
-
-    /// @notice `W = Σ cᵢLᵢ` for (delegate, round), SNAPSHOTTED AT PREDICT TIME.
-    /// @dev    This must not be recomputed at score time. Scoring happens rounds
-    ///         after the predict, and `_loyaltyWeightTotal` reads the LIVE pool —
-    ///         so a delegator who left in between would shrink the denominator
-    ///         while the claim walk still pays the round's original cohort
-    ///         (periods are bounded by startRound/endRound). The rate would be
-    ///         scaled by a too-small `W` and the round would OVER-MINT. Pinning
-    ///         it at predict time matches the cohort the walk actually pays, and
-    ///         mirrors how `delegatedPower` is already snapshotted. 0 means
-    ///         "no loyalty-weighted power that round" and evaporates.
-    mapping(address => mapping(uint256 => uint256)) internal _roundWeightSnapshot;
-
 
     // ------------------------------------------------------------------
     // `admin` IS SPLIT, one level down from the token's governor split.
@@ -2278,142 +2050,35 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
     /// @notice Holds `setOffchainBudget`. Zero ⇒ `admin` holds it.
     address public emissionSplitAuthority;
 
-    /// @dev Pin the round's loyalty-weighted denominator on the delegate's first
-    ///      prediction of that round. Shared by both commit paths.
-    function _snapshotRoundWeight(address user, uint256 round) internal {
-        if (_roundWeightSnapshot[user][round] != 0) return;   // already pinned
-        if (round > LOY_LAG) _advanceAccum(user, round - 1 - LOY_LAG);
-        uint256 w = _loyaltyWeightTotal(user);
-        if (w != 0) _roundWeightSnapshot[user][round] = w;
+    /// @dev A delegate's own power as pinned by `bumpUnsettled` at the start of a predict
+    ///      batch, stamped with the round so a stale pin is never used.
+    struct BatchOwnPower {
+        uint64 round;
+        uint128 power;
+    }
+    mapping(address => BatchOwnPower) private _batchOwnPower;
+
+    /// @notice The SATORI the hub burns for registering a community stream or game
+    ///         adapter. Zero in storage reads as the 0.001 default, so behaviour is
+    ///         unchanged until the admin sets it. Stream and game creation keep the
+    ///         hub's flat burns. Lives here, with the admin and the other dials,
+    ///         because the hub has no bytes to spare; the hub reads it.
+    uint256 private _registrationFee;
+    uint256 public constant DEFAULT_REGISTRATION_FEE = 0.001 ether;
+    event RegistrationFeeSet(uint256 fee, address indexed setter);
+
+    function registrationFee() external view returns (uint256) {
+        uint256 f = _registrationFee;
+        return f == 0 ? DEFAULT_REGISTRATION_FEE : f;
     }
 
-    /// @notice `L` for delegation period `i` of `user`, LOY_ONE-scaled. Joins the
-    ///         existing dumb-getter family (`delegationPeriodAt`, …).
-    function delegationLoyaltyAt(address user, uint256 i) external view returns (uint256) {
-        return _delegationPeriods[user][i].loyalty;
-    }
-
-    /// @dev The (α, β) for `round`, freezing `q` on FIRST CROSSING if it is not
-    ///      already frozen. Freezing from whatever has settled at this moment is
-    ///      what stops a slow-cadence prediction blocking every later round's
-    ///      loyalty update (design §5); late settlements still pay their reward
-    ///      delta through the existing OpenRound machinery, they just never
-    ///      revise `q`.
-    function _loyCoeffs(address delegate, uint256 round) internal returns (uint256 alpha, uint256 beta) {
-        uint256 enc = _frozenQ[delegate][round];
-        if (enc == 0) {
-            uint256 preds = _roundPredictions[delegate][round];
-            // A round the delegate never predicted in is an IDENTITY update, and
-            // nothing can ever settle to change that — so it needs no pinning.
-            // Skipping the SSTORE here is what keeps a long backlog affordable:
-            // idle rounds dominate any real one, and pinning them cost ~22k gas
-            // EACH on a walk that otherwise does no writes at all.
-            if (preds == 0) return (LOY_ONE, 0);
-            uint256 wins = _roundWins[delegate][round];
-            if (wins > preds) wins = preds;                  // defensive
-            enc = (wins * LOY_ONE) / preds + 1;
-            _frozenQ[delegate][round] = enc;
-        }
-        uint256 q = enc - 1;
-        // α = d + q(a − d) ∈ [d, a] ⊂ (0, 1); β = q.
-        alpha = LOY_D + (q * (LOY_A - LOY_D)) / LOY_ONE;
-        beta = q;
-    }
-
-    /// @dev Advance (A, B) through `through` inclusive, freezing `q` as it goes.
-    ///      Strictly ordered, so every path that needs them at a round calls this
-    ///      first; the first caller pays and everyone else free-rides. Rounds
-    ///      after the delegate's last prediction are identity, so the cursor jumps
-    ///      them rather than iterating.
-    function _advanceAccum(address delegate, uint256 through) internal {
-        uint256 A = _accumA[delegate];
-        if (A == 0) {
-            // FIRST TOUCH. Rounds are absolute (timestamp-derived, ~4e4 and
-            // climbing), so a zero cursor would try to fold every round since
-            // the epoch — tens of thousands of iterations, out of gas. Base the
-            // accumulator HERE instead: no delegator existed before this point,
-            // and every period's join factor is measured against this same
-            // accumulator, so the base round is arbitrary and only differences
-            // matter. First touch is always a join — `_splitReward` returns
-            // early when there is no inbound delegated power.
-            _accumA[delegate] = LOY_TWO128;
-            _accumRound[delegate] = through + 1;
-            return;
-        }
-        uint256 r = _accumRound[delegate];
-        if (r > through) return;
-        uint256 lastPred = _lastPredictedRound[delegate];
-        uint256 B = _accumB[delegate];
-        while (r <= through && r <= lastPred) {
-            (uint256 alpha, uint256 beta) = _loyCoeffs(delegate, r);
-            if (alpha != LOY_ONE || beta != 0) {
-                A = (A * alpha) / LOY_ONE;
-                B = (B * alpha) / LOY_ONE + beta;
-                if (A < LOY_RENORM_FLOOR) {
-                    A <<= LOY_RENORM_SHIFT;
-                    _accumK[delegate] >>= LOY_RENORM_SHIFT;
-                    // The PARKED delta has to move with it. It was measured in
-                    // the outgoing epoch, so activating it unshifted would fold
-                    // in a value 2³² too large — inflating K, shrinking W, and
-                    // over-minting the round. Rare (a renorm every ~211 scored
-                    // rounds against a one-round activation window) and therefore
-                    // exactly the kind of straddle that would survive testing.
-                    uint256 pk = _delegatePoolPendingK[delegate];
-                    if (pk != 0) _delegatePoolPendingK[delegate] = pk >> LOY_RENORM_SHIFT;
-                    unchecked { _accumEpoch[delegate] += 1; }
-                }
-            }
-            unchecked { r++; }
-        }
-        _accumRound[delegate] = through + 1;   // remaining rounds are identity
-        _accumA[delegate] = A;
-        _accumB[delegate] = B;
-    }
-
-    /// @dev `W = B·C − A·K` — the round denominator, derived rather than stored.
-    ///      Clamped at 0: `Σ cᵢLᵢ` is non-negative by construction, so a negative
-    ///      difference is pure rounding at the all-loyalty-zero boundary.
-    function _loyaltyWeightTotal(address delegate) internal view returns (uint256) {
-        uint256 A = _accumA[delegate];
-        if (A == 0) A = LOY_TWO128;
-        uint256 C = _delegatePowerForRate[delegate];
-        uint256 pos = _accumB[delegate] * C;
-        uint256 neg = Math.mulDiv(A, _accumK[delegate], LOY_TWO128);
-        if (pos <= neg) return 0;
-        // NORMALISED BACK TO CAPITAL UNITS. `Σ cᵢLᵢ` carries LOY_ONE, so leaving
-        // it in would make the denominator 1e18 larger than the raw delegated
-        // power it replaced — and `rate = share × SATORI_RATE_SCALE / W` would
-        // lose 18 digits of headroom with it, dropping from ~24 significant
-        // digits to ~6 (measured: a 4.4e-7 error against pinned splits). Divide
-        // it back out here so the rate keeps exactly the precision it had, and
-        // credit sites multiply by `L / LOY_ONE` to match.
-        // Σ⌊cᵢLᵢ/LOY_ONE⌋ ≤ ⌊Σ cᵢLᵢ/LOY_ONE⌋, so flooring here stays conservative.
-        // CONSERVATION BIAS (design §10). The claim walk derives each `Lᵢ` from
-        // its own floor-truncated recursion (`L ← ⌊Lα⌋ + β`), while `W` derives
-        // from the accumulator's separately-truncated `B` and `A`. Both are
-        // correct to ~1e-18 but they are DIFFERENT computations, so nothing makes
-        // `Σ cᵢLᵢ ≤ W` hold automatically — and the invariant-only rail (no
-        // runtime payout cap) needs it to. Each recursion's compounded truncation
-        // loss is bounded by Σαᵏ = 1/(1−a), so the headroom is DERIVED FROM `a`
-        // and must be revisited whenever `a` moves: at a = 0.97 that bound is
-        // 33.3 units of `L` per recursion, and the walk and `W` are two separate
-        // recursions, so the gap can reach ~67. 128 units per unit of capital
-        // clears that with ~2x margin. (At the previous a = 0.9 the bound was 10
-        // and 32 sufficed — raising `a` without raising this would have let the
-        // invariant fail.) Relative cost ~1e-17 of the pot, i.e. dust; the
-        // alternative direction is a hard `BudgetExceeded` revert at the token's
-        // cumulative cap.
-        return (pos - neg) / LOY_ONE + (C / LOY_ONE) * 128 + 1;
-    }
-
-    /// @dev The period's per-unit `K` factor rescaled into the delegate's current
-    ///      renormalisation epoch. A pure shift, so it cannot overflow and
-    ///      underflows to 0 once the period has aged out — which is the correct
-    ///      answer: such a delegator has fully converged to `B_r`.
-    function _loyFactorNow(DelegationPeriod storage p, address delegate) internal view returns (uint256) {
-        uint256 drift = uint256(_accumEpoch[delegate] - p.joinEpoch) * LOY_RENORM_SHIFT;
-        if (drift >= 256) return 0;
-        return p.joinFactor >> drift;
+    /// @notice Admin-only. Raise it before opening community adapter registration
+    ///         (capability bits 2 and 3): each registration takes one of 65,535 ids.
+    function setRegistrationFee(uint256 fee) external {
+        if (msg.sender != admin) revert Unauthorized();
+        if (fee == 0) revert BadInput();
+        _registrationFee = fee;
+        emit RegistrationFeeSet(fee, msg.sender);
     }
 
     /// Upgrade authority = the token's upgrade authority (same key as the engine).

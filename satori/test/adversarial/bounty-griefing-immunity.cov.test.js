@@ -51,17 +51,22 @@ async function deployMockToken(symbol) {
 // sub-round) beat by having the ADMIN (`owner`) create the stream. `authority`
 // stays the stream's PROVIDER, so it is still the account that writes values.
 
-// The 24h-round budget (1440/round) doubled the sqrt-of-budget bounty burn, so
-// the owner's fixed genesis stake no longer covers 26 escalating burns. Mint the
-// exact burn budget to the owner through the REAL on-chain rewards lane
-// (impersonating the wired rewards child), well inside the lane ceiling. No time
-// passes during a funding loop, so n * the current quote is exact.
+// Mint the exact burn budget to the owner through the REAL on-chain rewards
+// lane (impersonating the wired rewards child). The lane mints only what
+// Rewards reported, so report it first. No freezeRoundGross here: pricing a
+// round from outside SatoriRewards would leave its own round budget unset
+// (the hub returns 0 for an already-priced round). A pull of the default
+// stream (a Sentiment stream, so its first value is written by the pull) prices
+// the round through SatoriRewards itself, which makes allowance for this small amount.
 async function mintBurnBudget(satori, rewards, owner, n) {
+  const registry = await ethers.getContractAt("SatoriRegistry", await satori.satoriRegistry());
+  try { await registry.updateValue(1); } catch { /* already pulled this hour */ }
   const need = (await satori.bountyBurn()) * BigInt(n);
   const rewardsAddr = await rewards.getAddress();
   await impersonateAccount(rewardsAddr);
   await setBalance(rewardsAddr, ethers.parseEther("10"));
   const rw = await ethers.getSigner(rewardsAddr);
+  await satori.connect(rw).noteIssued(need);
   await satori.connect(rw).rewardMint(owner.address, need);
 }
 async function createStream(satori, signer, name, authority) {
@@ -207,10 +212,7 @@ describe("adv — bounty griefing-immunity: funder spam must not inflate the vic
       const game = await createStream(satori, owner, "GG" + nJunk, authority.address);
       await voteFor(satori, voter, game);
 
-      // Fund USDC. Genesis saturates the deploy round's general lane
-      // (INITIAL_MINT == one full round budget), so open a fresh round first —
-      // the burn-budget mint needs real on-chain-lane headroom. Both
-      // measurements pay this same one-day shift, so the comparison is fair.
+      // Both measurements pay this same one-day shift, so the comparison is fair.
       await advanceOneDay();
       await mintBurnBudget(satori, rewards, owner, nJunk + 1);
       await satori.transfer(funder.address, await satori.bountyBurn()); // upfront non-SATORI bounty burn

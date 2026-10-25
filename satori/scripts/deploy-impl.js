@@ -30,7 +30,8 @@ async function main() {
   const net = process.env.NETWORK || hre.network.name;
   require("child_process").execFileSync(
     process.execPath, [require("path").join(__dirname, "check-upgrade-safety.js")],
-    { stdio: "inherit", env: { ...process.env, CONTRACT: name, NETWORK: net } },
+    // HARDHAT_NETWORK so the checker can read the proxy's live implementation.
+    { stdio: "inherit", env: { ...process.env, CONTRACT: name, NETWORK: net, PROXY: proxy, HARDHAT_NETWORK: net } },
   );
 
   const [signer] = await ethers.getSigners();
@@ -49,6 +50,20 @@ async function main() {
   await impl.waitForDeployment();
   const addr = await impl.getAddress();
   console.log("impl NEW            ", addr);
+
+  // Record the new implementation's layout under its address. The next upgrade
+  // is checked against the layout of whatever the proxy runs then, and without
+  // this entry that check would have nothing to compare with (M08).
+  const fs = require("fs");
+  const bookPath = require("path").join(__dirname, "..", "deployments", `${net}.json`);
+  const { layoutOf, TRACKED } = require("./storage-layout-lib");
+  const fq = TRACKED.find((t) => t.endsWith(`:${name}`));
+  if (fq && fs.existsSync(bookPath)) {
+    const book = JSON.parse(fs.readFileSync(bookPath, "utf8"));
+    book.implLayouts = { ...(book.implLayouts || {}), [addr.toLowerCase()]: await layoutOf(fq) };
+    fs.writeFileSync(bookPath, JSON.stringify(book, null, 2));
+    console.log("layout recorded     ", `${net}.json implLayouts[${addr.toLowerCase()}]`);
+  }
 
   console.log("\nSAFE TX  to   ", proxy);
   console.log("SAFE TX  data ", F.interface.encodeFunctionData("upgradeTo", [addr]));

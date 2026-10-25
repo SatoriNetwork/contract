@@ -27,6 +27,7 @@ const RETRY_MS = 30000;
 const SPLITTER_PROBE_ABI = [
   'function authority() view returns (address)',
   'function isRecipient(address) view returns (bool)',
+  'function pendingAuthority() view returns (address)',
 ];
 const MERKLE_PROBE_ABI = ['function rootPublisher() view returns (address)'];
 const ZERO = ethers.ZeroAddress;
@@ -90,6 +91,7 @@ export function useSplitterMembership(): SplitterMembership {
       return [
         { contract: c, fn: 'authority', args: [], allowFailure: true },
         { contract: c, fn: 'isRecipient', args: [address], allowFailure: true },
+        { contract: c, fn: 'pendingAuthority', args: [], allowFailure: true },
       ];
     });
     const res = await multicallRead(contracts.multicall, reqs);
@@ -97,8 +99,10 @@ export function useSplitterMembership(): SplitterMembership {
     const me = address.toLowerCase();
     let isPayee = false, isAuthority = false;
     splitters.forEach((_, i) => {
-      const auth = res[i * 2], member = res[i * 2 + 1];
+      const auth = res[i * 3], member = res[i * 3 + 1], pending = res[i * 3 + 2];
+      // An authority offered to this address opens the tab too, so it can accept.
       if (typeof auth === 'string' && auth.toLowerCase() === me) isAuthority = true;
+      if (typeof pending === 'string' && pending.toLowerCase() === me) isAuthority = true;
       if (member === true) isPayee = true;
     });
     writeCache('splitter', chainId, address, `${isPayee ? 'p' : ''}${isAuthority ? 'a' : ''}`);

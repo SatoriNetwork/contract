@@ -56,8 +56,9 @@ export interface OwnerData {
   currentRound: number;
   // Off-chain reward channel — the budget dial + the Merkle claim channel.
   offchainBudget: bigint;             // wei routed off-chain each round (0..<residual)
-  onChainRewardCeiling: bigint;       // wei the on-chain lane may mint (globalCap - reserve)
-  merkleReserveCeiling: bigint;       // wei the Merkle lane may mint (accrued dial)
+  onChainRewardCeiling: bigint;       // cumulative wei the on-chain lane may mint (reported - reserve)
+  merkleReserveCeiling: bigint;       // cumulative wei the Merkle lane may mint (accrued dial)
+  registrationFee: bigint;            // wei burned to register a community stream or game adapter
   merkleWired: boolean;               // satoriMerkle set on the core
   merkleRoot: string;                 // current published root (bytes32)
   rootPublisher: string;              // who may set the root (SatoriMerkle.rootPublisher)
@@ -70,18 +71,13 @@ export interface OwnerData {
   emissionSplitHolder: string;   // holds setOffchainBudget (the dial)
   airdropHolder: string;         // SatoriAirdrop.airdropAuthority — loadAirdropBatch / finalizeAirdropLoading
   airdropLoadedTotal: bigint;    // SatoriAirdrop.airdropLoadedTotal — sum of every loaded allocation
-  // The token's mint ceiling for the airdrop. token.freezeAirdrop refuses a
-  // loaded total over it; loading does not.
+  // The token's mint ceiling for the airdrop; loading refuses past it.
   airdropCap: bigint;            // SatoriAirdrop.AIRDROP_TOTAL_SUPPLY (read through to the token)
-  airdropLoadingFinalized: boolean; // SatoriAirdrop.airdropLoadingFinalized — claims open
-  // The token's airdrop door. finalizeAirdropLoading refuses (AirdropNotFrozen)
-  // unless the door points at this airdrop AND is frozen. An emptied wiring
-  // slot does not count: root can refill it, so only the freeze is for good.
+  airdropLoadingFinalized: boolean; // SatoriAirdrop.airdropLoadingFinalized — loading closed
+  // The token mints airdrop only through this pointer, so rows loaded into any
+  // other airdrop contract never pay.
   airdropPointsHere: boolean;    // token.airdrop() == this SatoriAirdrop
-  // token.airdropFrozen(): freezeAirdrop has run. It also closes loading on
-  // this airdrop, even when the door was frozen to a different contract.
-  airdropFrozen: boolean;
-  freezeAuthority: string;       // token.freezeAuthority — freezeAirdrop
+  freezeAuthority: string;       // token.freezeAuthority
   // THE GOVERNOR IS SPLIT (dao-governance.md v2). It used to be one address
   // gating the fee, every upgrade and all three token pointers; it is now one
   // slot per job, so each can be a different Safe. `root` assigns the others.
@@ -160,14 +156,17 @@ export function useOwner() {
       // Off-chain reward channel. The dial + lane ceilings are always present on
       // a wired core; the Merkle-contract reads are guarded (it may be unwired).
       let offchainBudget = BigInt(0), onChainRewardCeiling = BigInt(0), merkleReserveCeiling = BigInt(0);
+      let registrationFee = BigInt(0);
       let merkleWired = false, merkleRoot = ethers.ZeroHash, rootPublisher = ZERO;
       try {
         [offchainBudget, onChainRewardCeiling, merkleReserveCeiling] = await Promise.all([
           contracts.cached.round.rewards.offchainBudget(),
-          contracts.cached.round.satori.onChainRewardCeiling(),
+          contracts.cached.live.satori.onChainRewardCeiling(),   // moves with every scored win
           contracts.cached.round.satori.merkleReserveCeiling(),
         ]);
       } catch (e) { console.warn('dial reads failed:', e); }
+      try { registrationFee = BigInt(await contracts.cached.round.rewards.registrationFee()); }
+      catch (e) { console.warn('registration fee read failed:', e); }
       try {
         const wired = await contracts.cached.round.satori.satoriMerkle();
         merkleWired = !!wired && wired !== ZERO;
@@ -195,7 +194,7 @@ export function useOwner() {
       // fallback. ZERO means the dapp has no airdrop contract for this chain
       // (a stack that predates it); the Admin row hides on zero.
       let airdropHolder = ZERO, airdropLoadedTotal = BigInt(0), airdropCap = BigInt(0), airdropLoadingFinalized = false;
-      let airdropPointsHere = false, airdropFrozen = false, freezeAuthority = ZERO;
+      let airdropPointsHere = false, freezeAuthority = ZERO;
       try {
         const [holder, loaded, cap, finalized] = await Promise.all([
           contracts.cached.round.airdrop.airdropAuthority(),
@@ -209,13 +208,11 @@ export function useOwner() {
         airdropLoadingFinalized = Boolean(finalized);
       } catch (e) { console.warn('airdrop reads failed:', e); }
       try {
-        const [pointer, frozen, freezer] = await Promise.all([
+        const [pointer, freezer] = await Promise.all([
           contracts.cached.live.token.airdrop(),
-          contracts.cached.live.token.airdropFrozen(),
           contracts.cached.round.token.freezeAuthority(),
         ]);
         airdropPointsHere = String(pointer).toLowerCase() === String(contracts.reads.airdrop.target).toLowerCase();
-        airdropFrozen = Boolean(frozen);
         freezeAuthority = freezer;
       } catch (e) { console.warn('token airdrop-door reads failed:', e); }
 
@@ -264,12 +261,12 @@ export function useOwner() {
         pendingDevFeeBps: Number(pendingDevFeeBpsRaw),
         feeScheduleStartRound: Number(deploymentRound),
         currentRound: Number(currentRound),
-        offchainBudget, onChainRewardCeiling, merkleReserveCeiling,
+        offchainBudget, onChainRewardCeiling, merkleReserveCeiling, registrationFee,
         merkleWired, merkleRoot, rootPublisher,
         offchainReporter,
         emissionSplitHolder,
         airdropHolder, airdropLoadedTotal, airdropCap, airdropLoadingFinalized,
-        airdropPointsHere, airdropFrozen, freezeAuthority,
+        airdropPointsHere, freezeAuthority,
         governor, pendingGovernor,
         curveFloor, curveTopGrad, curveBotGrad, curveTopShift,
         dustTarget,
@@ -338,19 +335,6 @@ export function useOwner() {
     return run(() => contracts.satori.initializeDefaultStream());
   }, [contracts, run]);
 
-  /// Permissionless: write yesterday's PARTICIPATION RATIO (the balance of
-  /// everyone who predicted, over total supply, scaled 1e18 — not a prediction
-  /// count, which is what this used to publish) into the default stream's
-  /// value history. The first predictor of
-  /// every round triggers this automatically; the button only matters in
-  /// rare cases where a round passed with zero predicts (so the auto-flush
-  /// never fired) and someone wants the default stream's history
-  /// stamped without waiting for a predictor to show up.
-  const flushDefaultStream = useCallback(async () => {
-    if (!contracts) return { ok: false as const, error: 'Not connected' };
-    return run(() => contracts.satori.flushDefaultStream());
-  }, [contracts, run]);
-
   /// Permissionless pull: realize the dev fee accrued on the wall clock. Anyone
   /// may call it; funds only ever go to the immutable PLATFORM_FEE_RECIPIENT, so
   /// there is no griefing surface.
@@ -383,6 +367,18 @@ export function useOwner() {
       };
     }
     return run(() => contracts.rewards.setOffchainBudget(wei));
+  }, [contracts, run]);
+
+  /// Rewards-admin-gated. What registering a community stream or game adapter
+  /// burns, in SATORI. Raise it before opening capability bits 2 and 3: each
+  /// registration takes one of 65,535 ids. Zero is refused by the contract.
+  const setRegistrationFee = useCallback(async (amountSatori: string) => {
+    if (!contracts) return { ok: false as const, error: 'Not connected' };
+    let wei: bigint;
+    try { wei = ethers.parseEther(amountSatori.trim()); }
+    catch { return { ok: false as const, error: 'Enter a SATORI amount, e.g. 1' }; }
+    if (wei <= BigInt(0)) return { ok: false as const, error: 'Must be more than 0' };
+    return run(() => contracts.rewards.setRegistrationFee(wei));
   }, [contracts, run]);
 
   /// Gated on `SatoriHub.emissionHolder()`. Sets the multiplier the NEXT
@@ -463,20 +459,20 @@ export function useOwner() {
       catch { return { ok: false as const, error: `Invalid amount for ${e.address}` }; }
       addrs.push(e.address);
     }
-    let loaded: bigint, cap: bigint, frozen: boolean, door: string;
+    let loaded: bigint, cap: bigint, finalized: boolean, door: string;
     try {
       const [l, c, f, d] = await Promise.all([
         contracts.reads.airdrop.airdropLoadedTotal(),
         contracts.reads.airdrop.AIRDROP_TOTAL_SUPPLY(),
-        contracts.reads.token.airdropFrozen(),
+        contracts.reads.airdrop.airdropLoadingFinalized(),
         contracts.reads.token.airdrop(),
       ]);
-      loaded = BigInt(l); cap = BigInt(c); frozen = Boolean(f); door = String(d);
+      loaded = BigInt(l); cap = BigInt(c); finalized = Boolean(f); door = String(d);
     } catch (e) {
       return { ok: false as const, error: explainError(e) };
     }
-    if (frozen) {
-      return { ok: false as const, error: 'The airdrop table is closed: the airdrop door is frozen, so nothing more can be loaded.' };
+    if (finalized) {
+      return { ok: false as const, error: 'The airdrop table is closed: loading was finalized, so nothing more can be loaded.' };
     }
     if (door.toLowerCase() !== String(contracts.reads.airdrop.target).toLowerCase()) {
       return { ok: false as const, error: 'The token\'s airdrop door does not point at this airdrop, so rows loaded here would not pay. If it points at a corrected airdrop, update this page\'s address book.' };
@@ -485,47 +481,13 @@ export function useOwner() {
     if (loaded + batch > cap) {
       return {
         ok: false as const,
-        error: `Over the cap: ${ethers.formatEther(loaded)} SATORI already loaded plus ${ethers.formatEther(batch)} in this batch is more than ${ethers.formatEther(cap)}. The freeze would refuse this table.`,
+        error: `Over the cap: ${ethers.formatEther(loaded)} SATORI already loaded plus ${ethers.formatEther(batch)} in this batch is more than ${ethers.formatEther(cap)}.`,
       };
     }
     return run(() => contracts.airdrop.loadAirdropBatch(addrs, amounts));
   }, [contracts, run]);
 
-  /// Freeze-authority-gated, permanent: pins the token's airdrop door to this
-  /// airdrop and closes its table. `checkedTotal` is the loaded total the
-  /// operator checked and typed in; the token refuses the freeze if the table
-  /// holds anything else when it lands. Load every batch and check it first.
-  const freezeAirdrop = useCallback(async (checkedTotal: bigint) => {
-    if (!contracts) return { ok: false as const, error: 'Not connected' };
-    let door: string, loaded: bigint, cap: bigint;
-    try {
-      const [d, l, c] = await Promise.all([
-        contracts.reads.token.airdrop(),
-        contracts.reads.airdrop.airdropLoadedTotal(),
-        contracts.reads.airdrop.AIRDROP_TOTAL_SUPPLY(),
-      ]);
-      door = String(d); loaded = BigInt(l); cap = BigInt(c);
-    } catch (e) {
-      return { ok: false as const, error: explainError(e) };
-    }
-    const here = String(contracts.reads.airdrop.target);
-    if (door.toLowerCase() !== here.toLowerCase()) {
-      return { ok: false as const, error: 'The airdrop door no longer points at this airdrop; reload.' };
-    }
-    if (loaded !== checkedTotal) {
-      return { ok: false as const, error: `The table holds ${ethers.formatEther(loaded)} SATORI, not the ${ethers.formatEther(checkedTotal)} you checked. Check it again before freezing.` };
-    }
-    if (loaded === BigInt(0)) {
-      return { ok: false as const, error: 'Nothing is loaded. Freezing an empty table would leave this airdrop empty for good.' };
-    }
-    if (loaded > cap) {
-      return { ok: false as const, error: 'Over the ceiling: the token refuses to freeze a table it cannot pay in full. Fix it with a corrected airdrop and setAirdrop.' };
-    }
-    return run(() => contracts.token.freezeAirdrop(here, loaded));
-  }, [contracts, run]);
-
-  /// Loader-gated, one-shot: opens claims at once.
-  /// Refuses until the door is frozen to this airdrop (freezeAirdrop above).
+  /// Loader-gated, one-shot: closes loading for good. Claims do not wait for it.
   const finalizeAirdropLoading = useCallback(async () => {
     if (!contracts) return { ok: false as const, error: 'Not connected' };
     return run(() => contracts.airdrop.finalizeAirdropLoading());
@@ -617,9 +579,9 @@ export function useOwner() {
     setTopShift,
     setDustTarget,
     initializeDefaultStream,
-    flushDefaultStream,
     accrueProtocolFee,
     setOffchainBudget,
+    setRegistrationFee,
     setEmissionRatio,
     setGameApproved,
     setMerkleRoot,
@@ -628,7 +590,6 @@ export function useOwner() {
     setOffchainReporter,
     reportOffchainPredictions,
     loadAirdropBatch,
-    freezeAirdrop,
     finalizeAirdropLoading,
   };
 }

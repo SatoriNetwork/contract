@@ -178,17 +178,17 @@ describe("Gasless relay", function () {
       expect(await hub.relayNonces(alice.address)).to.equal(0n);
     });
 
-    it("a failed fee transfer takes no fee and consumes no nonce (locked user)", async function () {
+    it("a fee nothing can pay takes no fee and consumes no nonce (locked user, empty bucket)", async function () {
       await registry.setValue(stream1, 100);
-      // Predicting locks alice for the round, so the relay's fee transfer is
-      // what refuses — same atomic unwind from the other side of the dispatch.
+      // Predicting locks alice for the round, so the wallet cannot pay the fee, and
+      // she has no unclaimed rewards to fall back on — same atomic unwind.
       await satori.connect(alice).predictMultipleWithPayloads([{ gameId: stream1, payload: pack1(1) }]);
 
       const data = encPredict(ethers.ZeroAddress, [{ gameId: stream1, payload: pack1(1) }]);
       const { req, sig } = await relayReq(alice, A.Predict, data);
       const relayerBefore = await token.balanceOf(relayer.address);
       await expect(hub.connect(relayer).relay(req, sig, NO_PERMIT))
-        .to.be.revertedWithCustomError(token, "Locked");
+        .to.be.revertedWithCustomError(rewards, "BadInput");
       expect(await token.balanceOf(relayer.address)).to.equal(relayerBefore);
       expect(await hub.relayNonces(alice.address)).to.equal(0n);
     });
@@ -326,6 +326,50 @@ describe("Gasless relay", function () {
       await hub.connect(relayer).relay(req, sig, NO_PERMIT);
 
       expect(await token.balanceOf(alice.address)).to.equal(aliceBefore + bucket);
+    });
+  });
+
+  describe("Fee for a non-claim action (M10)", function () {
+    const aliceData = () => abi.encode(["address"], [ethers.ZeroAddress]);
+
+    it("an unlocked wallet pays the fee from its balance and leaves its bucket alone", async function () {
+      const bucketBefore = await rewards.unclaimedRewards(alice.address);
+      const aliceBefore = await token.balanceOf(alice.address);
+      const relayerBefore = await token.balanceOf(relayer.address);
+      const { req, sig } = await relayReq(alice, A.SetAllowedDelegator, aliceData());
+      await hub.connect(relayer).relay(req, sig, NO_PERMIT);
+
+      expect(await token.balanceOf(alice.address)).to.equal(aliceBefore - ONE);
+      expect(await token.balanceOf(relayer.address)).to.equal(relayerBefore + ONE);
+      expect(await rewards.unclaimedRewards(alice.address)).to.equal(bucketBefore);
+    });
+
+    it("a wallet locked by a prediction pays from its unclaimed rewards, and its lock is not lowered", async function () {
+      // Alice wins, settles, and predicts again: she holds a bucket and a fresh lock.
+      await registry.setValue(stream1, 100);
+      await satori.connect(alice).predictMultipleWithPayloads([{ gameId: stream1, payload: pack1(1) }]);
+      await advanceToNextRound();
+      await registry.setValue(stream1, 150);
+      await advanceToNextRound();
+      await registry.setValue(stream1, 200);
+      await engine.settlePrediction(alice.address, stream1);
+      await satori.connect(alice).predictMultipleWithPayloads([{ gameId: stream1, payload: pack1(1) }]);
+
+      const bucket = await rewards.unclaimedRewards(alice.address);
+      expect(bucket).to.be.gt(ONE);
+      const lockBefore = await token.transferLockedUntil(alice.address);
+      expect(lockBefore).to.be.gt(await hub.getCurrentRound());
+      const aliceBefore = await token.balanceOf(alice.address);
+      const relayerBefore = await token.balanceOf(relayer.address);
+
+      const { req, sig } = await relayReq(alice, A.SetAllowedDelegator, aliceData());
+      await hub.connect(relayer).relay(req, sig, NO_PERMIT);
+
+      expect(await token.balanceOf(relayer.address)).to.equal(relayerBefore + ONE);
+      // The bucket was claimed to alice minus the fee; her balance moved only by that.
+      expect(await token.balanceOf(alice.address)).to.equal(aliceBefore + bucket - ONE);
+      expect(await rewards.unclaimedRewards(alice.address)).to.equal(0n);
+      expect(await token.transferLockedUntil(alice.address)).to.equal(lockBefore);
     });
   });
 

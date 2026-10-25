@@ -3,7 +3,6 @@ import { ethers } from 'ethers';
 import { useContracts } from './useContracts';
 import { multicallRead } from '../utils/multicall';
 import { explainError } from '../utils/errors';
-import { getStreamBurn } from '../lib/chainValues';
 import { afterTx } from '../lib/afterTx';
 
 // A registered GAME-type adapter as enumerated from contracts.games. Game type
@@ -48,7 +47,7 @@ export function useGameAdapters(): {
     try {
       const [next, fee] = await Promise.all([
         contracts.cached.live.games.nextGameTypeId(),
-        getStreamBurn(),
+        contracts.reads.lens.registrationFee(),   // admin-set, so read live
       ]);
       setSpamFee(BigInt(fee));
 
@@ -144,8 +143,8 @@ export function useGameAdapters(): {
     [contracts, load],
   );
 
-  // Permissionless registration. Charges streamBurn() SATORI via token.transferFrom
-  // to the hub (the caller must first approve the hub for streamBurn) and returns the freshly minted
+  // Permissionless registration. Charges registrationFee() SATORI via token.transferFrom
+  // to the hub (the caller must first approve the hub for registrationFee) and returns the freshly minted
   // game type id parsed from the GameAdapterRegistered event in the receipt.
   const registerCommunityGameAdapter = useCallback(
     (impl: string, name: string): Promise<number> =>

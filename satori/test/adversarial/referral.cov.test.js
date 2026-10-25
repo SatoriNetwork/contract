@@ -24,7 +24,7 @@
  */
 
 const { expect } = require("chai");
-const { deploySatoriFixtureNoFee, pack1, voteFor, warmUpLoyalty, onChainGrossNow } = require("../fixtures");
+const { deploySatoriFixtureNoFee, pack1, voteFor, onChainGrossNow } = require("../fixtures");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
 
@@ -114,10 +114,7 @@ describe("Referral — adversarial coverage", function () {
 
       // alice delegates ALL her prediction power to bob and sets a referral.
       await satori.connect(alice).delegatePredictionPower(bob.address);
-      // Delegator weight is capital x loyalty and a fresh delegation starts at
-      // L = 0, so the delegator's share -- and therefore the referral skim
-      // taken off it -- is zero without a warm-up. Drains to `owner`.
-      await warmUpLoyalty(satori, registry, null, bob, [alice], owner, gid);
+      await time.increase(86400);
       await rewards.connect(alice).setReferral(carol.address);
 
       // bob (with alice's delegated power) predicts and wins. alice never
@@ -311,7 +308,7 @@ describe("Referral — adversarial coverage", function () {
       await satori.transfer(bob.address, ethers.parseEther("300"));
       await satori.transfer(carol.address, ethers.parseEther("50"));
       // eve gets a tiny balance — a handful of wei, small enough that her
-      // loyalty-weighted pull of the 1152-ether pool stays under 20 wei.
+      // pro-rata pull of the 1152-ether pool stays under 20 wei.
       await satori.transfer(eve.address, 5n);
 
       await voteFor(satori, carol, gid);
@@ -320,10 +317,7 @@ describe("Referral — adversarial coverage", function () {
       // bob and eve both delegate prediction power to dave (large + tiny pool).
       await satori.connect(bob).delegatePredictionPower(dave.address);
       await satori.connect(eve).delegatePredictionPower(dave.address);
-      // Delegator weight is capital x loyalty and a fresh delegation starts at
-      // L = 0, so the delegator's share -- and therefore the referral skim
-      // taken off it -- is zero without a warm-up. Drains to `owner`.
-      await warmUpLoyalty(satori, registry, null, dave, [bob, eve], owner, gid);
+      await time.increase(86400);
       await rewards.connect(eve).setReferral(alice.address);
 
       // dave predicts with the combined delegated power and wins.

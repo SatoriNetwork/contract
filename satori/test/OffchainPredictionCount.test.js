@@ -13,9 +13,9 @@
 // WHY IT NEEDS NO BOOKKEEPING: `predictionCount` is structurally isolated.
 // SatoriEngine's own note (the RoundState declaration) records that the round
 // DENOMINATOR moved out to SatoriVoting/`roundDenominator`, and that
-// `predictionCount` "survives because flushDefaultStream publishes the previous
-// round's count". Three internal uses — the view, the flush, the bump — and
-// SatoriHub never calls the view. Nothing economic reads it, so adding to it
+// `predictionCount` survives because the `roundPredictionCount` view reads it.
+// Two internal uses — the view and the bump — and SatoriHub never calls the
+// view. Nothing economic reads it, so adding to it
 // cannot touch rewards, scoring, streaks or denominators. There is nothing to
 // reconcile, which is why no second slot and no per-round guard exist here.
 const { expect } = require("chai");
@@ -170,12 +170,12 @@ describe("Off-chain prediction count", function () {
     });
   });
 
-  describe("the number reaches the stream", function () {
+  describe("the number stays out of the scored stream", function () {
     beforeEach(async function () {
       await engine.connect(owner).setOffchainReporter(reporter.address);
     });
 
-    it("reaches the COUNT stat, but not the scored value (off-chain has no committed capital)", async function () {
+    it("reaches the COUNT stat, but not the default stream's value (off-chain has no committed capital)", async function () {
       await time.increase(ROUND);
       const r = await satori.getCurrentRound();
       await engine.connect(reporter).reportOffchainPredictions(500);
@@ -183,36 +183,29 @@ describe("Off-chain prediction count", function () {
       expect(await satori.roundPredictionCount(r)).to.equal(500);
 
       await time.increase(ROUND);
-      await satori.flushDefaultStream();
 
-      // ...but the default game is scored on CAPITAL deployed (deployedPower /
-      // supply), and off-chain reports carry no on-chain power — so with no
-      // on-chain prediction that round the scored value is 0. Feeding the
-      // off-chain COUNT into the value would reopen the manipulation the
-      // capital metric closes (adversary finding 2026-09-07).
-      expect(await registry.getValue(1)).to.equal(0);
+      // ...but the default stream's value is the crowd's flow, which only
+      // on-chain predictions add to, and an off-chain report adds none. Feeding
+      // the count into the value would hand the reporter key the default game.
+      expect(await engine.namedStreamValue(1)).to.equal(0);
     });
 
-    it("combines on/off-chain in the COUNT stat; the scored value tracks on-chain capital only", async function () {
+    it("combines on/off-chain in the COUNT stat; the default stream's value tracks on-chain flow only", async function () {
       await time.increase(ROUND);
       const r = await satori.getCurrentRound();
-      await registry.setValue(g2, 100);
 
-      await voteFor(satori, alice, g2);
-      await satori.connect(alice).predictMultipleWithPayloads([{ gameId: g2, payload: pack1(UP) }]);
+      await satori.connect(alice).predictMultipleWithPayloads([{ gameId: 1, payload: pack1(UP) }]);
+      const valueAfterOne = await engine.namedStreamValue(1);
       await engine.connect(reporter).reportOffchainPredictions(9);
 
       // The COUNT is one number regardless of where predicting happened: 1
       // on-chain + 9 off-chain = 10.
       expect(await satori.roundPredictionCount(r)).to.equal(10);
 
-      await time.increase(ROUND);
-      await satori.flushDefaultStream();
-
-      // The scored VALUE is deployedPower/supply x 1e18 — alice's one on-chain
-      // prediction committed real power, so it is non-zero; the 9 off-chain
-      // (capital-less) reports add nothing to it.
-      expect(await registry.getValue(1)).to.be.gt(0);
+      // The value is alice's one on-chain prediction's flow, non-zero; the 9
+      // off-chain (capital-less) reports add nothing to it.
+      expect(valueAfterOne).to.be.gt(0);
+      expect(await engine.namedStreamValue(1)).to.equal(valueAfterOne);
     });
   });
 
@@ -232,13 +225,24 @@ describe("Off-chain prediction count", function () {
       ).to.be.rejected;
     });
 
-    it("reverts rather than wrapping when the counter would overflow", async function () {
+    it("saturates instead of wrapping or reverting when the counter would overflow", async function () {
       const MAX64 = 2n ** 64n - 1n;
+      const round = await satori.getCurrentRound();
       await engine.connect(reporter).reportOffchainPredictions(MAX64);
-      // Checked arithmetic (pragma ^0.8.20): the second add panics instead of
-      // silently rolling the count back to a small number.
-      await expect(engine.connect(reporter).reportOffchainPredictions(1))
-        .to.be.revertedWithPanic(0x11);
+      await engine.connect(reporter).reportOffchainPredictions(1);
+      expect(await satori.roundPredictionCount(round)).to.equal(MAX64);
+    });
+
+    it("a saturated count cannot stop a prediction (M18)", async function () {
+      await time.increase(ROUND);
+      await registry.setValue(g2, 100);
+      const round = await satori.getCurrentRound();
+      await engine.connect(reporter).reportOffchainPredictions(2n ** 64n - 1n);
+
+      await voteFor(satori, alice, g2);
+      await expect(satori.connect(alice).predictMultipleWithPayloads([{ gameId: g2, payload: pack1(UP) }]))
+        .to.not.be.reverted;
+      expect(await satori.roundPredictionCount(round)).to.equal(2n ** 64n - 1n);
     });
   });
 });

@@ -31,29 +31,6 @@ const DEFAULT_GAME = 1;
 // 86400s increment always clears the every-round cadence wait.
 async function advanceRound() { await time.increase(86400); }
 
-/// Lift the delegate's CURRENT delegators off zero loyalty.
-///
-/// Delegator payouts are loyalty-weighted (docs/design/delegation-loyalty-weighting.md)
-/// and a fresh delegation starts at L = 0, so a delegate's FIRST scored round
-/// pays its delegators nothing — the share evaporates. These probes are about
-/// over-MINTING, which needs a live delegator share to conserve, so they run one
-/// winning round first and measure the next one. Uses its own low value range so
-/// it never collides with the caller's cadence-gated setValue sequence.
-async function warmLoyalty(satori, registry, owner, predictor, sid) {
-  await advanceRound();
-  await registry.connect(owner).setValue(sid, 10);
-  await satori.connect(predictor).predictMultipleWithPayloads([{ gameId: sid, payload: pack1(UP) }]);
-  await advanceRound();
-  await registry.connect(owner).setValue(sid, 20);
-  await advanceRound();
-  await registry.connect(owner).setValue(sid, 30);
-  await satori.settlePrediction(predictor.address, sid);
-  // Clear the fold lag: a round's q only folds in once the walk reaches
-  // round + LOY_LAG, so the warm-up round has to sit far enough back for the
-  // caller's measured round to see any loyalty at all.
-  for (let i = 0; i < 6; i++) await advanceRound();
-}
-
 // Every stream below is created with an EXPLICIT every-round cadence (1440
 // minutes = one write per 24h round). The streams are scaffolding: the subject
 // is the H1 delegated-power over-mint path, so the every-round rhythm the
@@ -142,11 +119,6 @@ describe("verify H1 over-mint fix (delegatePredictionPower)", function () {
 
     // Dave delegates BEFORE bob predicts -> in the snapshot.
     await satori.connect(dave).delegatePredictionPower(bob.address);
-    // ...and earns loyalty on a throwaway round, so the round measured below
-    // actually pays him. Carol still joins at L = 0 and so is zero for two
-    // independent reasons now (H1 deferral AND zero loyalty) — the over-mint
-    // assertion at the end is what keeps probing H1 itself.
-    await warmLoyalty(satori, registry, owner, bob, sid);
 
     await advanceRound();
     await registry.connect(owner).setValue(sid, 110);
@@ -227,10 +199,6 @@ describe("verify H1 over-mint fix (delegatePredictionPower)", function () {
     await satori.connect(carol).delegatePredictionPower(idle.address);
     // Dave delegates to bob (early, in snapshot).
     await satori.connect(dave).delegatePredictionPower(bob.address);
-    // Dave earns loyalty first, so the measured round has a live delegator
-    // share. Carol's loyalty stays 0: hers is against `idle`, and the switch
-    // below opens a brand-new period at L = 0 either way.
-    await warmLoyalty(satori, registry, owner, bob, sid);
 
     await advanceRound();
     await registry.connect(owner).setValue(sid, 110);
@@ -313,12 +281,9 @@ describe("verify H1 over-mint fix (delegatePredictionPower)", function () {
     await advanceRound();
     await registry.connect(owner).setValue(sid, 130);
 
-    // IMMEDIATE ACTIVATION is now read off the period directly. It used to be
-    // inferred from carol earning on `predRound`, but that payout is masked:
-    // delegator weight is capital x loyalty and a fresh delegation starts at
-    // L = 0, so her joining round pays nothing either way. `startBalance` is the
-    // sharp observable — the H1 DEFERRED path sets it to 0 and stamps a
-    // checkpoint at today+1, the immediate path banks the full power here.
+    // IMMEDIATE ACTIVATION is read off the period directly: the H1 DEFERRED path
+    // sets `startBalance` to 0 and stamps a checkpoint at today+1, the immediate
+    // path banks the full power here.
     const [, startRound, , , startBalance] = await rewards.delegationPeriodAt(carol.address, 0);
     expect(startBalance).to.equal(ethers.parseEther("100"));
     expect(Number(startRound)).to.equal(predRound);
@@ -330,34 +295,10 @@ describe("verify H1 over-mint fix (delegatePredictionPower)", function () {
     console.log("PROBE3 reserved delegatorsShare:", ethers.formatEther(reserved));
     expect(reserved).to.be.gt(0n);
 
-    // The joining round's share evaporates (carol is the only delegator and is
-    // still at L = 0), so nothing is minted for it.
-    const carolBefore0 = await satori.balanceOf(carol.address);
-    await satori.connect(carol).claim();
-    expect((await satori.balanceOf(carol.address)) - carolBefore0).to.equal(0n);
-
-    // Once past the fold lag, carol must take the WHOLE delegator share — she
-    // is still the only delegator, and her capital went live immediately rather
-    // than being deferred. Warm up, then drain so the measurement below sees
-    // only the round it is measuring.
-    await warmLoyalty(satori, registry, owner, bob, sid);
-    await satori.connect(carol).claim();
-
-    await advanceRound();
-    await registry.connect(owner).setValue(sid, 140);
-    const payRound = Number(await satori.getCurrentRound());
-    await satori.connect(bob).predictMultipleWithPayloads([{ gameId: sid, payload: pack1(UP) }]);
-    await advanceRound();
-    await registry.connect(owner).setValue(sid, 150);
-    await advanceRound();
-    await registry.connect(owner).setValue(sid, 160);
-    const splits2 = await splitsFromTx(
-      satori.settlePrediction(bob.address, sid), rewards);
-    const reserved2 = splits2.find(s => s.gameId === Number(sid) && s.round === payRound).delegatorAmount;
-    expect(reserved2).to.be.gt(0n);
-
-    // Fold back the 1% referral skim (to MARKETING_FEE_RECIPIENT) taken at
-    // credit time so the full-share conservation stays EXACT.
+    // Carol is the only delegator and was in the snapshot, so she takes the WHOLE
+    // delegator share of her joining round, less the 1% referral skim taken at
+    // credit time (to MARKETING_FEE_RECIPIENT) which is folded back in so the
+    // conservation stays EXACT.
     const mkt = await rewards.marketingFeeRecipient();
     const carolBefore = await satori.balanceOf(carol.address);
     const mktBeforeCarol = await rewards.unclaimedRewards(mkt);
@@ -366,7 +307,7 @@ describe("verify H1 over-mint fix (delegatePredictionPower)", function () {
     const carolSkim = (await rewards.unclaimedRewards(mkt)) - mktBeforeCarol;
     console.log("PROBE3 carol(early) got:", ethers.formatEther(carolGot));
 
-    expect(carolGot + carolSkim).to.be.closeTo(reserved2, RAW_TOLERANCE);
+    expect(carolGot + carolSkim).to.be.closeTo(reserved, RAW_TOLERANCE);
     expect(carolGot).to.be.gt(0n);
   });
 
@@ -395,12 +336,8 @@ describe("verify H1 over-mint fix (delegatePredictionPower)", function () {
     await voteFor(satori, voter, sX);
     await voteFor(satori, voter, sY);
 
-    // Dave delegates to bob before any predict (in snapshot), then earns
-    // loyalty so the multi-game round below has a live delegator share to
-    // conserve. Warm on sX only; sY stays untouched until the measured round.
+    // Dave delegates to bob before any predict (in the snapshot for both games).
     await satori.connect(dave).delegatePredictionPower(bob.address);
-    await warmLoyalty(satori, registry, owner, bob, sX);
-    await satori.connect(dave).claim();
 
     await advanceRound();
     await registry.connect(owner).setValue(sX, 110);
@@ -493,12 +430,6 @@ describe("verify H1 over-mint fix (delegatePredictionPower)", function () {
     await registry.connect(owner).setValue(sid, 100);
     await voteFor(satori, voter, sid);
     await satori.connect(dave).delegatePredictionPower(bob.address);
-    // Warm dave's loyalty before the run. Without it the first LOY_LAG+1
-    // rounds have every delegator at L = 0, so their delegator share
-    // EVAPORATES -- reservedTotal would then include amounts nobody can
-    // receive and the conservation sum below could never balance.
-    await warmLoyalty(satori, registry, owner, bob, sid);
-    await satori.connect(dave).claim();
 
     const reservedByRound = {};
     let injectionRound = null;
@@ -590,12 +521,6 @@ describe("verify H1 over-mint fix (delegatePredictionPower)", function () {
     await registry.connect(owner).setValue(sid, 100);
     await voteFor(satori, voter, sid);
     await satori.connect(dave).delegatePredictionPower(bob.address);
-    // Warm dave's loyalty before the run. Without it the first LOY_LAG+1
-    // rounds have every delegator at L = 0, so their delegator share
-    // EVAPORATES -- reservedTotal would then include amounts nobody can
-    // receive and the conservation sum below could never balance.
-    await warmLoyalty(satori, registry, owner, bob, sid);
-    await satori.connect(dave).claim();
 
     const reservedByRound = {};
     let joinRound = null;
@@ -621,18 +546,22 @@ describe("verify H1 over-mint fix (delegatePredictionPower)", function () {
       foldSplits(rcpt, rewards, reservedByRound);
     }
 
-    // The old model reconstructed exact per-delegator totals by splitting every
-    // post-join round 100/200 : 100/200. That no longer holds and should NOT be
-    // restored: shares are weighted by capital x LOYALTY, and carol restarts at
-    // L = 0 while dave sits near his steady state, so their split is unequal
-    // and moves every round as carol converges. Reproducing that here would
-    // just re-implement the contract's loyalty recursion inside the test.
-    //
-    // Assert the invariants the probe actually exists for instead — they are
-    // the ones an H1 over-mint would violate, and they are independent of the
-    // weighting rule.
+    // Reconstruct the exact split. Dave holds 100 of the delegated power in every
+    // round; carol's 100 is live from joinRound + 1 (the H1 deferral), so after the
+    // join each reserved share divides 100/200 : 100/200 and before it dave takes
+    // all of it.
     let reservedTotal = 0n;
-    for (const share of Object.values(reservedByRound)) reservedTotal += share;
+    let expectedDave = 0n;
+    let expectedCarol = 0n;
+    for (const [round, share] of Object.entries(reservedByRound)) {
+      reservedTotal += share;
+      if (Number(round) <= joinRound) {
+        expectedDave += share;
+      } else {
+        expectedDave += share / 2n;
+        expectedCarol += share / 2n;
+      }
+    }
     console.log("PROBE6 joinRound:", joinRound,
                 " reservedTotal:", ethers.formatEther(reservedTotal));
 
@@ -657,24 +586,17 @@ describe("verify H1 over-mint fix (delegatePredictionPower)", function () {
     console.log("PROBE6 dave got:", ethers.formatEther(daveGot),
                 " carol got:", ethers.formatEther(carolGot));
 
-    // 1. The DEFERRAL held: carol's capital was not live on joinRound, so she
-    //    cannot have collected against a snapshot that excluded her. Combined
-    //    with the fold lag her first paying round is joinRound + LOY_LAG + 1,
-    //    and the run is short enough after that she stays well under a
-    //    half-share — an H1 over-mint would put her at or above one.
+    // 1. The DEFERRAL held: carol earns nothing for joinRound, only her half of
+    //    every later round, and dave takes the rest.
     const roundsAfterJoin = Object.keys(reservedByRound)
       .map(Number).filter(r => r > joinRound).length;
     expect(roundsAfterJoin, "run must extend past the join to be meaningful").to.be.gt(0);
-    expect(carolGot + carolSkim).to.be.lt(reservedTotal / 2n);
+    expect(carolGot + carolSkim).to.be.closeTo(expectedCarol, RAW_TOLERANCE * 8n);
+    expect(daveGot + daveSkim).to.be.closeTo(expectedDave, RAW_TOLERANCE * 8n);
 
-    // 2. Dave, present throughout and carrying far more loyalty, takes the
-    //    overwhelming majority.
-    expect(daveGot + daveSkim).to.be.gt(carolGot + carolSkim);
-
-    // 3. EXACT CONSERVATION across the whole run, which is the invariant the
+    // 2. EXACT CONSERVATION across the whole run, which is the invariant the
     //    over-mint would actually break: nothing minted (net + skim) beyond
-    //    what was reserved, and effectively nothing orphaned. Unchanged by the
-    //    weighting rule, because loyalty only divides the reserved share.
+    //    what was reserved, and nothing orphaned.
     expect(daveGot + carolGot + daveSkim + carolSkim).to.be.lte(reservedTotal + RAW_TOLERANCE);
     expect(daveGot + carolGot + daveSkim + carolSkim).to.be.closeTo(reservedTotal, RAW_TOLERANCE * 8n);
   });

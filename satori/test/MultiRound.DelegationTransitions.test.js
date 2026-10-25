@@ -1,5 +1,5 @@
 const { expect } = require("chai");
-const { deploySatoriFixture, pack1, VOTE, warmUpLoyalty, RAW_TOLERANCE } = require("./fixtures");
+const { deploySatoriFixture, pack1, VOTE, RAW_TOLERANCE } = require("./fixtures");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
 
@@ -41,14 +41,8 @@ describe("MultiRound: Delegation Transitions", function () {
 
     // Round A: alice delegates to bob, bob predicts.
     //
-    // Each relationship needs its OWN loyalty warm-up. Delegator weight is
-    // capital x loyalty and every delegation — including the switch below —
-    // opens a fresh period at L = 0, so without warming both sides alice
-    // carries no weight in either round and both rates come out zero. The
-    // round numbers are captured AFTER each warm-up, since the warm-up itself
-    // spans several rounds.
     await satori.connect(alice).delegatePredictionPower(bob.address);
-    await warmUpLoyalty(satori, registry, null, bob, [alice], voter, gid);
+    await time.increase(86400);
     await registry.setValue(gid, 1000);
     const roundA = await satori.getCurrentRound();
     expect((await rewards.predictionDelegateInfo(alice.address)).delegate).to.equal(bob.address);
@@ -58,7 +52,7 @@ describe("MultiRound: Delegation Transitions", function () {
     await advanceToNextRound();
     await registry.setValue(gid, 1100);
     await satori.connect(alice).delegatePredictionPower(carol.address);
-    await warmUpLoyalty(satori, registry, null, carol, [alice], voter, gid, 2000);
+    await time.increase(86400);
     await registry.setValue(gid, 3000);
     const roundB = await satori.getCurrentRound();
     expect((await rewards.predictionDelegateInfo(alice.address)).delegate).to.equal(carol.address);
@@ -117,14 +111,9 @@ describe("MultiRound: Delegation Transitions", function () {
     const feeBps = BigInt(await rewards.effectivePredictorFee(bob.address));
     const delegatedReward = roundPool / 2n; // alice's 100 of the delegate's 200 power
     const expectedShare = delegatedReward - (delegatedReward * feeBps) / 10000n;
-    // The rate's DENOMINATOR is no longer alice's raw balance: it is the
-    // loyalty-weighted W = Σ cᵢLᵢ / LOY_ONE
-    // (docs/design/delegation-loyalty-weighting.md §7.2). Pinning the rate
-    // itself would mean recomputing L here, i.e. re-implementing the
-    // contract's recursion in the test. The PAYOUT is what this test is
-    // about, and it is unchanged — with one delegator per delegate,
-    // credit = c·L·share/(L·C) collapses back to the full share — so anchor
-    // there instead, and keep the cross-delegate symmetry check.
+    // With one delegator per delegate the rate is share / alice's balance, so the
+    // payout is the full share; anchor there and keep the cross-delegate
+    // symmetry check.
     expect(expectedShare).to.be.gt(0n); // the anchor itself must be non-trivial
     expect(rateBobA).to.be.gt(0n);
     expect(rateCarolB).to.equal(rateBobA); // both rounds paid the same way

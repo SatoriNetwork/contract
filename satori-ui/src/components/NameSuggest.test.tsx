@@ -158,13 +158,13 @@ describe('suggestions', () => {
     expect(nameBlocker(streams, 'Bitcoin', false)).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'keep "Bitcoin" as typed' }));
-    expect(screen.getByTestId('name-blocker')).toHaveTextContent('"Bitcoin" is already a named stream (#2).');
-    expect(nameBlocker(streams, 'Bitcoin', true)).toBe('"Bitcoin" is already a named stream (#2).');
+    expect(screen.getByTestId('name-blocker')).toHaveTextContent('"Bitcoin" is already a Sentiment stream (#2).');
+    expect(nameBlocker(streams, 'Bitcoin', true)).toBe('"Bitcoin" is already a Sentiment stream (#2).');
   });
 
   it('blocks when the lowercase form that would be sent is the taken one', () => {
     const streams = [stream(5, ' bitcoin ')];
-    expect(nameBlocker(streams, 'Bitcoin', false)).toBe('"bitcoin" is already a named stream (#5).');
+    expect(nameBlocker(streams, 'Bitcoin', false)).toBe('"bitcoin" is already a Sentiment stream (#5).');
     expect(nameBlocker(streams, 'Bitcoin', true)).toBeNull();
   });
 
@@ -172,10 +172,10 @@ describe('suggestions', () => {
     const registry: NamedNameRegistry = { namedNameTaken: async (id) => id === localIdOf('bitcoin') };
     await mount(<Harness registry={registry} />);
     type('Bitcoin');
-    expect(await screen.findByText('"bitcoin" is already a named stream.')).toBeInTheDocument();
+    expect(await screen.findByText('"bitcoin" is already a Sentiment stream.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'keep "Bitcoin" as typed' }));
     await waitFor(() => expect(screen.queryByTestId('name-blocker')).toBeNull());
-    expect(nameBlocker([], 'bitcoin', false, true)).toBe('"bitcoin" is already a named stream.');
+    expect(nameBlocker([], 'bitcoin', false, true)).toBe('"bitcoin" is already a Sentiment stream.');
   });
 
   it('blocks a name the chain would refuse, with the reason as a sentence', async () => {

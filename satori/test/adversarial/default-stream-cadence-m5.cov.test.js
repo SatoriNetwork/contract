@@ -1,17 +1,9 @@
 // Regression guard for audit finding M5 (MED): default-game cadence.
 //
-// The default stream's streamLastUpdate always lags one round (flushDefaultStream
-// writes "yesterday"), which is why the predict-window check uses
-// `_expectedRound = round - 1` for the default game. But the freshness/anti-replay
-// check (`streamLastUpdate <= lastPredRound → StaleValue`) did NOT apply that lag:
-// after predicting at round R, at R+1 `streamLastUpdate == R <= lastPredRound == R`
-// → StaleValue, so the flagship default game was predictable only every OTHER
-// round (half its intended cadence; A_default_stream.md says cadence 1 = "every
-// round").
-//
-// FIX (M5): the default game's staleness threshold lags too —
-// `staleThreshold = lastPredRound - 1` — symmetric with `_expectedRound`. The
-// adjustment is default-only; regular streams keep `streamLastUpdate <= lastPredRound`.
+// The flagship default game must be predictable once a round, every round. It is
+// the Sentiment stream "satori" now: its own predict pull writes the hourly snapshot,
+// so nothing can go stale between rounds. The control is a regular stream, which
+// keeps the StaleValue guard.
 
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
@@ -48,7 +40,7 @@ describe("M5 cov — default game is predictable every round (cadence 1)", funct
     const alice = signers[1];
     await satori.transfer(alice.address, ethers.parseEther("100"));
     // The default game (id 1) needs no vote — and cannot take one
-    // (`CannotVoteDefault`). Its weight is DERIVED (20% of all other burn,
+    // (`CannotVoteDefault`). Its weight is DERIVED (1% of the round from all other burn,
     // floored at DEFAULT_WEIGHT_FLOOR = 1e18), so it is always eligible.
 
     // The CONTROL is the "regular stream" the default game is measured against,
@@ -68,7 +60,6 @@ describe("M5 cov — default game is predictable every round (cadence 1)", funct
     const defResults = [], ctrlResults = [];
     for (let k = 0; k < 5; k++) {
       await nextRoundFull();
-      await satori.flushDefaultStream();
       await registry.setValue(sid, 100 + k); // fresh control value each round
       try { await satori.connect(alice).predictMultipleWithPayloads([{ gameId: 1, payload: pack1(UP) }]); defResults.push(true); }
       catch (e) { defResults.push(errName(e)); }

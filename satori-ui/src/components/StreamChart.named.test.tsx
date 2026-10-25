@@ -65,9 +65,9 @@ describe('StreamChart on a named stream', () => {
     expect(screen.queryByTestId('stream-change')).toBeNull();
   });
 
-  it('labels the stream as named beside the other badges', () => {
+  it('labels the stream as sentiment beside the other badges', () => {
     render(<StreamChart stream={named([0, 600])} valueDisplay={NAMED_DISPLAY} />);
-    expect(screen.getByTestId('stream-named-badge').textContent).toBe('named');
+    expect(screen.getByTestId('stream-named-badge').textContent).toBe('sentiment');
   });
 });
 

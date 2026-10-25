@@ -9,9 +9,11 @@ import "../interfaces/ISatoriRegistry.sol";
 import "../interfaces/ISatoriGames.sol";
 import "../interfaces/ISatoriBounties.sol";
 import "./interfaces/IEngineDeps.sol";
+import "./interfaces/IHubDeps.sol";
 import "./SatoriUUPS.sol";
+import "../interfaces/ISatoriEngineNamed.sol";
 
-contract SatoriEngine is SatoriUUPS {
+contract SatoriEngine is ISatoriEngineView, ISatoriEngineNamed, SatoriUUPS {
 
     bool private _initialized;
 
@@ -40,9 +42,6 @@ contract SatoriEngine is SatoriUUPS {
     ISatoriBounties public satoriBounties;
 
     uint256 public deploymentRound;
-    // Retired: the renounce flag now lives in SatoriUUPS's keccak slot. The
-    // placeholder keeps every following slot exactly where it was.
-    bool    private __retiredRenounceFlag;
 
     uint8   public constant LANE_PREDICT = 0;
     uint32  public constant DEFAULT_STREAM_ID = 1;
@@ -55,33 +54,21 @@ contract SatoriEngine is SatoriUUPS {
     ///      a value the engine freezes at the top of a round — it is accumulated
     ///      across the round by SatoriVoting and read back via
     ///      `roundDenominator`. `predictionCount` survives because
-    ///      `flushDefaultStream` publishes the previous round's count as the
-    ///      default stream's value.
+    ///      the `roundPredictionCount` view reads it; nothing on chain does.
     struct RoundState {
         uint64  predictionCount;   //  8 bytes — count of predictions (backs the
                                    //  public roundPredictionCount view).
-        uint128 deployedBalance;   // 16 bytes — SUM of predictors' circulating
-                                   //  BALANCE this round (token.balanceOf). Shares
-                                   //  the slot with predictionCount (24/32 bytes
-                                   //  used) — no extra storage slot, same SSTORE.
-                                   //  It is the default game's scored quantity
-                                   //  (flushDefaultStream): balance/supply, the
-                                   //  fraction of circulating supply actively
-                                   //  predicting. Balance, NOT prediction power:
-                                   //  power includes UNCLAIMED rewards, which are
-                                   //  not in totalSupply, so a hoard-and-predict
-                                   //  loop inflated the ratio for free (adversary
-                                   //  finding 2026-09-07). Circulating balance
-                                   //  matches the supply denominator, so only
-                                   //  claimed, at-risk capital counts.
     }
     mapping(uint256 => RoundState) internal _roundState;
 
     mapping(address => mapping(uint32 => uint256)) public userPredictions;
     mapping(address => mapping(uint256 => uint256)) public predictedStreamsCount;
 
-    bool    public defaultStreamInitialized;
-    uint256 public defaultStreamLastFlushedRound;
+    /// Flow that others added to a named game's counter in the prediction's hour
+    /// before the prediction, per (user, game, slot). The hour's snapshot is the
+    /// anchor, so settle adds this back with the predictor's own flow: the question
+    /// is whether the network leaned my way AFTER I predicted.
+    mapping(address => mapping(uint32 => mapping(uint256 => int232))) internal _flowBefore;
 
     // ===== Payout-curve redesign: rational S-curve + adaptive dust threshold =====
     // Design: docs/design/payout-curve-redesign.md.
@@ -323,8 +310,19 @@ contract SatoriEngine is SatoriUUPS {
 
     /// @dev `hour` is the clock hour (timestamp / 3600) the prediction's 24h
     ///      window opens on, and what a named game's 24h wait counts from.
-    event PredictionMade(address indexed predictor, uint32 indexed gameId, uint256 indexed round, uint8 direction, uint256 streak, uint256 predictionPower, uint64 hour);
+    ///      `multiplier` is the streak multiplier and `weight` is power x multiplier,
+    ///      the amount added to the game's round pool on `direction`'s side.
+    event PredictionMade(address indexed predictor, uint32 indexed gameId, uint256 indexed round, uint8 direction, uint256 streak, uint256 predictionPower, uint64 hour, uint256 multiplier, uint256 weight);
+    /// @notice A Sentiment game's net flow counter after a prediction moved it.
+    ///         It is the stream's live value, so the chart can follow it.
+    event NamedCounterMoved(uint32 indexed gameId, int232 value);
     event MultiplePredictionsMade(address indexed user, uint256 indexed round, uint256 count);
+    /// @notice A bet on an adapter game was recorded. `bountyStake` is the stake
+    ///         snapshotted for the game's active bounty token (0 if none).
+    event AdapterPredictionMade(address indexed user, uint32 indexed gameId, uint256 indexed round, uint256 predictionPower, uint256 bountyStake);
+    /// @notice An adapter game reported a result for a recorded bet. `finalized`
+    ///         is false when no protocol-recorded pending bet was consumed.
+    event AdapterPredictionSettled(address indexed user, uint32 indexed gameId, uint256 indexed round, uint256 userScore, uint256 bountyTotal, bool finalized);
     event PredictionScored(address indexed user, uint32 indexed gameId, uint256 indexed round, bool correct, uint256 streak, uint256 scaledWeight);
     event PredictionUnrecoverable(address indexed user, uint32 indexed gameId, uint256 indexed round, bool anchorEvicted);
     event PredictionVoided(address indexed user, uint32 indexed gameId, uint256 indexed round, uint8 direction, int232 stagnantValue);
@@ -332,7 +330,6 @@ contract SatoriEngine is SatoriUUPS {
     /// (audit C-10). Believed unreachable — alarm on it: if it fires, the
     /// settle-before-write invariant has been broken upstream.
     event PredictionDisplaced(address indexed user, uint32 indexed gameId, uint256 indexed round);
-    event DefaultStreamFlushed(uint256 round, int232 value);
     /// The live effective S-curve dials (0 storage resolved to defaults) after any change.
     event CurveConfigSet(uint16 dustFloor, uint16 topGradient, uint16 bottomGradient, uint16 topShift);
     /// The controller setpoint just set — the effective value from here, since a
@@ -354,6 +351,8 @@ contract SatoriEngine is SatoriUUPS {
     error EmptyStream();
     error DuplicatePrediction();
     error StaleValue();
+    /// @dev A stream's pull was due and its read failed, so a prediction would anchor on an old value.
+    error StreamPullFailed(uint32 streamId);
     error Delegated();
     error AlreadyPredicted();
     error Locked();
@@ -388,7 +387,10 @@ contract SatoriEngine is SatoriUUPS {
     ) external {
         if (_initialized) revert AlreadySet();
         _initialized = true;
-        if (_token == address(0)) revert BadInput();
+        // A wrong upgrade anchor would freeze upgradeTo and renounceUpgrade for good,
+        // and a zero child would brick every predict; fail the deploy instead.
+        _requireGovernorSource(_token);
+        if (_voting == address(0) || _rewards == address(0) || _registry == address(0) || _games == address(0)) revert BadInput();
         token = IEngineToken(_token);
         satoriVoting = ISatoriVoting(_voting);
         satoriRewards = ISatoriRewards(_rewards);
@@ -438,14 +440,6 @@ contract SatoriEngine is SatoriUUPS {
 
     function _contractId() internal pure override returns (bytes32) {
         return keccak256("satori.impl.SatoriEngine");
-    }
-
-    /// Bootstrap: the hub creates the default stream/game and casts the standing
-    /// vote, then flips this flag so flushDefaultStream begins operating.
-    function markDefaultStreamInitialized() external onlyHub {
-        if (defaultStreamInitialized) revert AlreadySet();
-        defaultStreamInitialized = true;
-        defaultStreamLastFlushedRound = _currentRound();
     }
 
     // ------------------------------------------------------------------
@@ -551,11 +545,10 @@ contract SatoriEngine is SatoriUUPS {
     // Views the hub facade / lens / UI consume
     // ------------------------------------------------------------------
 
+    /// Game adapters call this on the engine (their `core`): keep it.
     function getCurrentRound() public view returns (uint256) {
         return token.getCurrentRound();
     }
-
-    
     
     function roundPredictionCount(uint256 round) external view returns (uint256) {
         return uint256(_roundState[round].predictionCount);
@@ -612,34 +605,6 @@ contract SatoriEngine is SatoriUUPS {
         return _viewPred(pick);
     }
 
-    // ------------------------------------------------------------------
-    // Default stream flush (verbatim semantics)
-    // ------------------------------------------------------------------
-
-    function flushDefaultStream() public {
-        if (!defaultStreamInitialized) return;
-        uint256 today = _currentRound();
-        if (today <= defaultStreamLastFlushedRound) return;
-        // The default game asks "is the protocol's committed participation
-        // trending up or down?" — scored on the CAPITAL deployed in prediction
-        // as a fraction of total supply, ×1e18 for resolution. Capital-bounded
-        // and costly to move (a whale can only push it up, at real at-risk
-        // cost, bounded by its holdings), so it is not the free lever the raw
-        // prediction count was (adversary finding 2026-09-07).
-        uint256 supply = token.totalSupply();
-        uint256 deployed = uint256(_roundState[today - 1].deployedBalance);
-        int232 ratio = supply == 0 ? int232(0) : int232(int256((deployed * 1e18) / supply));
-        // One value a round, at hour round*24, before any prediction of the
-        // round: with the default game in the ABC band, all its predictors of a
-        // round read the same two values, which is why SatoriRewards._computeReward
-        // may pay its winners the whole slice.
-        satoriRegistry.setValueForRound(DEFAULT_STREAM_ID, ratio, uint24(today));
-        defaultStreamLastFlushedRound = today;
-        // Platform fee is no longer accrued here: it is the immutable token's
-        // senior carve-out, pulled permissionlessly via token.mintDevFee(),
-        // fully decoupled from the round flush.
-        emit DefaultStreamFlushed(today, ratio);
-    }
 
     // ------------------------------------------------------------------
     // Off-chain prediction reporting
@@ -657,9 +622,8 @@ contract SatoriEngine is SatoriUUPS {
     }
 
     /// @dev `count` is `uint64`, NOT `uint256`, and that is load-bearing:
-    ///      `_bumpPredictionCount` casts `uint64(count)` internally, so a wider
-    ///      parameter would let `2**64` add ZERO with no revert. The narrow type
-    ///      makes that unreachable at the ABI boundary.
+    ///      `_bumpPredictionCount` saturates at the uint64 maximum, so no report can
+    ///      make a later prediction in the round revert on overflow.
     function reportOffchainPredictions(uint64 count) external {
         if (msg.sender != offchainReporter || offchainReporter == address(0)) {
             revert NotOffchainReporter();
@@ -708,7 +672,6 @@ contract SatoriEngine is SatoriUUPS {
         // pool, so the transfer hook (prediction-delegation sync only) has nothing
         // to do for a plain predictor. Only delegating out marks you, in
         // rewards.delegatePredictionPower.
-        flushDefaultStream();
         if (requests.length == 0) revert EmptyBatch();
 
         address delegate = _predictionDelegate(user);
@@ -745,11 +708,6 @@ contract SatoriEngine is SatoriUUPS {
 
         hub.engineLock(user, uint24(round + 1));
         predictedStreamsCount[user][round] = requests.length;
-        // Circulating participation for the default game: add this predictor's
-        // BALANCE once (not per game, and not their unclaimed-inclusive power),
-        // so neither batch padding nor an unclaimed hoard moves it — only
-        // claimed, circulating capital does. Same slot as predictionCount.
-        _roundState[round].deployedBalance += uint128(token.balanceOf(user));
 
         uint32[] memory streamIds = new uint32[](requests.length);
         bool[]   memory eligibleFlags = new bool[](requests.length);
@@ -779,38 +737,36 @@ contract SatoriEngine is SatoriUUPS {
         // it. The rolling-24h scoring model assumes the anchor is pulled at predict
         // time (rolling-24h-scoring.md §2 — the displacement/settle guarantees rest
         // on it), so this is not a nicety: without it a prediction anchors on a
-        // stale stored value. `updateValues` is best-effort — it ticks every
-        // predicted PULL stream whose cadence has elapsed and silently skips the
-        // rest (not due, a Simple/default stream, or a failing adapter), so it can
-        // never revert the prediction. The predictor who triggers a due pull pays
-        // its gas; that is the intended incentive (LAUNCH_AUDIT C-12).
-        satoriRegistry.updateValues(streamIds);
+        // stale stored value. The pull ticks every predicted PULL stream whose
+        // cadence has elapsed and skips the rest (not due, or not a pull stream).
+        // A stream whose pull was due but whose read failed reverts the batch
+        // (`StreamPullFailed`) instead of letting the prediction anchor on an old
+        // value, whatever made the read fail, out of gas included (M20). The
+        // predictor who triggers a due pull pays its gas; that is the intended
+        // incentive (LAUNCH_AUDIT C-12).
+        uint32 failedStream = satoriRegistry.updateValuesStrict(streamIds);
+        if (failedStream != 0) revert StreamPullFailed(failedStream);
 
         // Pass 2 — anchor freshness / moment-clock / stale checks, now reading the
         // values Pass 1's pull just refreshed.
         bool[] memory named = new bool[](requests.length);
+        int232[] memory snapshot = new int232[](requests.length);
         for (uint256 i = 0; i < requests.length; i++) {
             uint32 gameId = requests[i].gameId;
-            (uint16 vCount, uint64 streamLastHour, , , bool streamNamed)
+            (uint16 vCount, uint64 streamLastHour, , , bool streamNamed, int232 latestValue)
                 = satoriRegistry.getLatestUpdateInfo(streamIds[i]);
             if (vCount == 0) revert EmptyStream();
             named[i] = impls[i] == address(0) && streamNamed;
+            snapshot[i] = latestValue;
 
-            // Moment-anchored game clock (phase 6). Once per round for every
-            // game — at a daily target that IS "once a day", today's rule —
-            // plus, for targets beyond one round, once per target period, so
-            // a weekly game takes one prediction a week and the two-slot
-            // layout keeps holding (design 7.4).
+            // Once per round for every game; targets beyond one round also wait
+            // the full target, so a weekly game takes one prediction a week and
+            // the two-slot layout keeps holding (design 7.4).
             uint64 lastPredHour = _latestPredHour(userPredictions[user][gameId]);
             if (lastPredHour > 0) {
                 if (lastPredHour / 24 == round) revert DuplicatePrediction();
                 uint24 tgt = satoriGames.targetMinutes(gameId);
-                // Named games also wait the full target even at 1440: a 23:00 /
-                // 00:30 pair would put the second prediction's flow inside the
-                // first one's window and count toward it.
-                if ((tgt > 1440 || named[i]) && hourNow < uint256(lastPredHour) + uint256(tgt) / 60) {
-                    revert DuplicatePrediction();
-                }
+                if (tgt > 1440 && hourNow < uint256(lastPredHour) + uint256(tgt) / 60) revert DuplicatePrediction();
                 if (streamLastHour <= lastPredHour) revert StaleValue();
             }
             // PredictExpired is DELETED (design 9.6): predictions anchor to
@@ -846,17 +802,22 @@ contract SatoriEngine is SatoriUUPS {
             _recordVotes(gameId, round);
             if (impl == address(0)) {
                 _scorePreviousPrediction(user, gameId, round);
-                _makePrediction(user, gameId, dir, round, hourNow, thisPower, eligibleFlags[i], aboveFloor);
+                uint256 slotIdx = _makePrediction(user, gameId, dir, round, hourNow, thisPower, eligibleFlags[i], aboveFloor);
                 // After _makePrediction (it validates `dir`), and after the
                 // batch's updateValues above, so this hour's snapshot never
                 // holds this flow. _effectiveRaw keeps it bit-identical to the
                 // `_predRaw(pred)` that settle adds back to the anchor.
                 if (named[i]) {
+                    // What others added since the hour's snapshot is also not in
+                    // the anchor; settle adds it back so only flow AFTER this
+                    // prediction counts for or against it.
+                    _flowBefore[user][gameId][slotIdx] = namedCounter[gameId] - snapshot[i];
                     int232 flow = int232(int256(_effectiveRaw(thisPower)));
                     namedCounter[gameId] += (dir == 1) ? flow : -flow;
+                    emit NamedCounterMoved(gameId, namedCounter[gameId]);
                 }
             } else {
-                _scoreAdapterPrediction(user, gameId, impl, streamIds[i]);
+                _scoreAdapterPrediction(user, gameId, impl);
                 uint256 bStake = (address(satoriBounties) != address(0))
                     ? satoriBounties.snapshotAdapterStake(user, gameId, round) : 0;
                 // Adapter games earn no SATORI, so `thisPower` — the
@@ -872,6 +833,7 @@ contract SatoriEngine is SatoriUUPS {
                 // making every adapter staticcall back for it would not be.
                 IPredictionGame(impl).record(user, gameId, predictionPower, bStake, payload);
                 satoriRewards.recordAdapterPrediction(user, gameId, round, bStake > 0);
+                emit AdapterPredictionMade(user, gameId, round, predictionPower, bStake);
             }
         }
 
@@ -889,7 +851,7 @@ contract SatoriEngine is SatoriUUPS {
         uint256 perStreamPower,
         bool eligible,
         bool aboveFloor
-    ) internal {
+    ) internal returns (uint256 idx) {
         if (direction != 1 && direction != 2) revert BadDirection();
 
         uint256 slot = userPredictions[user][gameId];
@@ -934,7 +896,6 @@ contract SatoriEngine is SatoriUUPS {
         _dustSignal[gameId][round] += int256(perStreamPower) *
             (belowThreshold ? (BPS_SCALE - target) : -target);
 
-        uint256 idx;
         {
             uint256 predA = _predAt(slot, 0);
             uint256 predB = _predAt(slot, 1);
@@ -955,15 +916,13 @@ contract SatoriEngine is SatoriUUPS {
                 // future claim by every inbound delegator — a slow, invisible
                 // degradation with no trail back to here.
                 //
-                // Believed UNREACHABLE: `StaleValue` requires a stream WRITE
-                // between consecutive predictions, so by a third prediction two
-                // writes postdate the first prediction's hour — enough for ABC's
-                // B and C, and more than the single post value the other bands
-                // need — meaning `_scorePreviousPrediction` (which runs first,
-                // same game) will already have settled the older slot.
-                // `PredictionDisplaced` firing means that guard changed.
+                // Reachable on a daily game over an hourly non-named stream that
+                // goes quiet (predict late in R, early in R+1, again in R+2): the
+                // older bet is dropped unscored and the streak kept (M22, reverted
+                // by the owner).
                 idx = (_predRoundDelta(predA) <= _predRoundDelta(predB)) ? 0 : 1;
                 uint256 displaced = (idx == 0) ? predA : predB;
+                _forfeitBounty(user, gameId, uint256(_predPoolRound(displaced)), _boostedAt(slot, idx));
                 _notifyFinalized(user, uint256(_predPoolRound(displaced)), _boostedAt(slot, idx));
                 emit PredictionDisplaced(user, gameId, uint256(_predPoolRound(displaced)));
             }
@@ -990,7 +949,7 @@ contract SatoriEngine is SatoriUUPS {
 
         satoriRewards.scorePrediction(user, gameId, round, direction, scaledWeight);
 
-        emit PredictionMade(user, gameId, round, direction, streak, perStreamPower, uint64(hourNow));
+        emit PredictionMade(user, gameId, round, direction, streak, perStreamPower, uint64(hourNow), multiplier, scaledWeight);
     }
 
     /// @dev No first-predictor bonus: the denominator accumulates per game,
@@ -998,7 +957,8 @@ contract SatoriEngine is SatoriUUPS {
     ///      predictor and there is nothing to compensate.
     function _bumpPredictionCount(uint256 round, uint256 count) internal {
         if (count == 0) return;
-        _roundState[round].predictionCount += uint64(count);
+        uint256 sum = uint256(_roundState[round].predictionCount) + count;
+        _roundState[round].predictionCount = sum > type(uint64).max ? type(uint64).max : uint64(sum);
     }
 
     /// @dev A prediction's weight is simply `power x multiplier`. There is no
@@ -1062,14 +1022,13 @@ contract SatoriEngine is SatoriUUPS {
             for (uint256 i = 0; i < 2; i++) _scorePreviousPrediction(user, gameId, nowRound);
             return;
         }
-        _scoreAdapterPrediction(user, gameId, impl, streamId);
+        _scoreAdapterPrediction(user, gameId, impl);
     }
 
     function _scoreAdapterPrediction(
         address user,
         uint32 gameId,
-        address impl,
-        uint32
+        address impl
     ) private {
         // AUDIT B-1. The adapter is UNTRUSTED and permissionlessly registered
         // (SatoriHub.registerCommunityGameAdapter). docs/narratives/A_game_adapters.md
@@ -1081,11 +1040,10 @@ contract SatoriEngine is SatoriUUPS {
         // delegate that left an openRounds entry that could never be popped,
         // taxing every delegator's future claim.
         //
-        // So decode by hand and treat EVERY failure as the pending signal the
-        // narrative already defines. A raw call (not try/catch) because a short
-        // or malformed return buffer must be caught too, and try/catch's decode
-        // step is not reliably part of the caught frame. The six returns are all
-        // static, so a >= 192-byte buffer decodes without reverting.
+        // So make the call raw and treat a failed call or a short buffer as the
+        // pending signal the narrative already defines. The decode below is
+        // strict, though: a bool word other than 0/1, or a roundIndex above
+        // uint64, makes `abi.decode` revert and that revert is not caught here.
         (bool ok, bytes memory ret) =
             impl.call(abi.encodeCall(IPredictionGame.score, (user, gameId)));
         if (!ok || ret.length < 192) return;
@@ -1106,6 +1064,7 @@ contract SatoriEngine is SatoriUUPS {
         // report "resolved" for a round the user never bet on this game;
         // finalizing that phantom would strand the victim's shared per-(user,
         // round) counter and permanently brick their other predictions (F1).
+        emit AdapterPredictionSettled(user, gameId, uint256(roundIdx), userScore, bountyTotal, finalized);
         if (finalized) _notifyFinalized(user, uint256(roundIdx), wasBoosted);
     }
 
@@ -1159,8 +1118,6 @@ contract SatoriEngine is SatoriUUPS {
         uint256 tgtMinutes = uint256(satoriGames.targetMinutes(gameId));
 
         int232 anchor; int232 post; bool found; bool anchorEvicted;
-        // The default game must stay in this band: SatoriRewards._computeReward
-        // pays its winners the whole slice because of it (see flushDefaultStream).
         if (cadSeconds <= SatoriTypes.TIME_UNIT_SECONDS && tgtMinutes < 24 * (cadSeconds / 60)) {
             // ABC.
             (anchor, post, found, anchorEvicted) =
@@ -1200,6 +1157,7 @@ contract SatoriEngine is SatoriUUPS {
             // dapp nudge, NOT weakening this branch.
             slot = _withStreak(slot, 0);
             userPredictions[user][gameId] = slot;
+            _forfeitBounty(user, gameId, uint256(predRound), wasBoosted);
             _notifyFinalized(user, uint256(predRound), wasBoosted);
             emit PredictionUnrecoverable(user, gameId, predRound, anchorEvicted);
             return;
@@ -1215,10 +1173,14 @@ contract SatoriEngine is SatoriUUPS {
             // of the void.
             int232 own = int232(int256(_predRaw(pred)));
             anchor = (dir == 1) ? anchor + own : anchor - own;
+            // And the flow others added in the prediction's hour before it.
+            anchor += _flowBefore[user][gameId][idx];
+            delete _flowBefore[user][gameId][idx];
         }
 
         if (anchor == post) {
             userPredictions[user][gameId] = slot;
+            _forfeitBounty(user, gameId, uint256(predRound), wasBoosted);
             _notifyFinalized(user, uint256(predRound), wasBoosted);
             emit PredictionVoided(user, gameId, predRound, dir, anchor);
             return;
@@ -1272,6 +1234,7 @@ contract SatoriEngine is SatoriUUPS {
         } else {
             slot = _withStreak(slot, 0);
             userPredictions[user][gameId] = slot;
+            _forfeitBounty(user, gameId, uint256(predRound), wasBoosted);
         }
 
         _notifyFinalized(user, uint256(predRound), wasBoosted);
@@ -1299,6 +1262,14 @@ contract SatoriEngine is SatoriUUPS {
         satoriVoting.recordGameVotesForRound(gameId, round);
     }
 
+
+    /// A boosted prediction that finalizes without a win gives its share of the
+    /// round's bounty pot back to the pool at once (M26). Wins are paid by
+    /// `scoreCorrectPrediction`. Must run before `_notifyFinalized`, which can
+    /// clear the user's boosted set.
+    function _forfeitBounty(address user, uint32 gameId, uint256 round, bool wasBoosted) internal {
+        if (wasBoosted) satoriBounties.releaseForfeit(user, gameId, uint32(round));
+    }
 
     function _notifyFinalized(address user, uint256 roundMade, bool wasBoosted) internal {
         satoriRewards.notifyPredictionFinalized(user, roundMade, wasBoosted);

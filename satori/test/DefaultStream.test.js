@@ -7,9 +7,7 @@ const ROUND = 86400;                            // 24h — one round
 const CADENCE_ROUNDS = 2;                       // daily — a public stream's finest cadence
 const CADENCE_SECONDS = ROUND * CADENCE_ROUNDS; // 24h — one cadence period of g2
 
-// One ROUND (24h). The DEFAULT stream (id 1) is cadence 1 and keeps its
-// every-round flush rhythm, so this is still the right step for anything about
-// stream 1 itself, and for moving past a prediction round.
+// One ROUND (24h): the step for moving past a prediction round.
 async function advanceOneDay() {
   await time.increase(ROUND);
 }
@@ -33,7 +31,7 @@ async function streamIdFrom(tx, satori) {
 }
 
 describe("Default Stream", function () {
-  let satori, voting, rewards, bounties, registry;
+  let satori, voting, rewards, bounties, registry, engine;
   let owner, alice, bob;
   let g2; // the test stream/game created in beforeEach (id 2 — the default owns id 1)
   const UP = 1;
@@ -42,6 +40,7 @@ describe("Default Stream", function () {
     const fix = await deploySatoriFixture();
     ;({ satori, voting, rewards, registry, bounties, owner } = fix);
     [, alice, bob] = fix.signers;
+    engine = await ethers.getContractAt("SatoriEngine", await satori.engine());
 
     // The fixture already calls initializeDefaultStream() (exactly as production
     // does), so the default stream/game occupies id 1 before this file runs.
@@ -59,9 +58,19 @@ describe("Default Stream", function () {
       expect(await registry.streamExists(1)).to.be.true;
     });
 
-    it("Should set the core contract as the stream authority", async function () {
-      const [, authority] = await registry.getDataStreamInfo(1);
-      expect(authority).to.equal(await satori.getAddress());
+    it("Should make stream 1 the Sentiment stream \"satori\", provided by the engine", async function () {
+      const info = await registry.getDataStreamInfo(1);
+      expect(info[0]).to.equal("satori");
+      expect(info[1]).to.equal(await engine.getAddress());
+      expect(await registry.isNamedStream(1)).to.equal(true);
+    });
+
+    it("Should hold the name \"satori\" among Sentiment streams: a second one reverts NameTaken", async function () {
+      const namedId = await registry.namedAdapterId();
+      await expect(
+        satori.connect(alice)["createAdapterDataStream(string,uint32,address,bytes,uint24)"](
+          "satori", namedId, await engine.getAddress(), "0x", 60)
+      ).to.be.revertedWithCustomError(registry, "NameTaken");
     });
 
     it("Should carry a permanent DERIVED weight on the default game", async function () {
@@ -85,14 +94,12 @@ describe("Default Stream", function () {
       expect(await voting.weightOf(1)).to.equal(ethers.parseEther("2"));
     });
 
-    it("Should hold only fee income — initializeDefaultStream pulls nothing", async function () {
+    it("Should hold nothing — initializeDefaultStream pulls nothing and the fees burn", async function () {
       // initializeDefaultStream no longer pulls 1 SATORI: there is no bootstrap
-      // vote to fund, the default game's weight is derived. So the hub's balance
-      // is EXACTLY the spam-burn fees charged so far — the fixture's three
-      // community-adapter registrations plus this file's one stream creation —
-      // with no 1-SATORI seed on top.
-      const fee = await satori.streamBurn();
-      expect(await satori.balanceOf(await satori.getAddress())).to.equal(fee * 4n);
+      // vote to fund, the default game's weight is derived. The fixture's three
+      // community-adapter registrations and this file's stream creation paid
+      // their fees by burning them, so the hub holds none.
+      expect(await satori.balanceOf(await satori.getAddress())).to.equal(0n);
     });
 
     it("Should make the default stream eligible", async function () {
@@ -129,7 +136,7 @@ describe("Default Stream", function () {
       const heldBefore = await satori.balanceOf(hub);
       await satori.connect(alice).createSimpleDataStream("FeeCompound", alice.address);
 
-      expect(await satori.balanceOf(hub)).to.equal(heldBefore + fee);
+      expect(await satori.balanceOf(hub)).to.equal(heldBefore);
       expect(await voting.weightOf(1)).to.equal(weightBefore);
     });
 
@@ -175,112 +182,45 @@ describe("Default Stream", function () {
     });
   });
 
-  describe("Flush", function () {
-    it("Should write yesterday's count to the stream value", async function () {
+  describe("The default stream is an ordinary Sentiment stream", function () {
+    it("Should have no value until something predicts (nothing writes it)", async function () {
+      expect((await registry.getLatestUpdateInfo(1))[0]).to.equal(0);
       await advanceOneDay();
-      await registry.setValue(g2, 100);
-
-      await voteFor(satori, alice, g2);
-      await satori.connect(alice).predictMultipleWithPayloads([{ gameId: g2, payload: pack1(UP) }]);
-      await voteFor(satori, bob, g2);
-      await satori.connect(bob).predictMultipleWithPayloads([{ gameId: g2, payload: pack1(UP) }]);
-
-      const predictionRound = await satori.getCurrentRound();
-      expect(await satori.roundPredictionCount(predictionRound)).to.equal(2);
-
-      // Advance past the prediction round
       await advanceOneDay();
-      await satori.flushDefaultStream();
-
-      // The default stream's VALUE is now the participation ratio
-      // (deployed power / total supply x 1e18), not the raw count. The count
-      // itself is still exposed via roundPredictionCount (asserted above); the
-      // flushed value is a non-zero ratio because real power was deployed.
-      expect(await registry.getValue(1)).to.be.gt(0);
+      expect((await registry.getLatestUpdateInfo(1))[0]).to.equal(0);
     });
 
-    it("Should only write yesterday, skipping gap days", async function () {
-      // Round 1: 1 prediction
-      await advanceOneDay();
-      await registry.setValue(g2, 100);
-      await voteFor(satori, alice, g2);
-      await satori.connect(alice).predictMultipleWithPayloads([{ gameId: g2, payload: pack1(UP) }]);
-
-      // One cadence period on (2 rounds): 2 predictions
-      await advanceCadence();
-      await registry.setValue(g2, 150);
-      await satori.connect(alice).predictMultipleWithPayloads([{ gameId: g2, payload: pack1(UP) }]);
-      await satori.connect(bob).predictMultipleWithPayloads([{ gameId: g2, payload: pack1(UP) }]);
-
-      // Next round: flush writes only yesterday's value (the participation
-      // ratio of the 2-prediction round) and skips every earlier round. The
-      // flushed VALUE is the ratio (non-zero — both predictors committed real
-      // power); the raw count is exposed separately via roundPredictionCount.
-      await advanceOneDay();
-      await satori.flushDefaultStream();
-
-      expect(await registry.getValue(1)).to.be.gt(0);
+    it("Should have no flush, no seed write and no setValueForRound any more", async function () {
+      expect(engine.flushDefaultStream).to.equal(undefined);
+      expect(satori.flushDefaultStream).to.equal(undefined);
+      expect(registry.setValueForRound).to.equal(undefined);
+      expect(engine.defaultStreamLastFlushedRound).to.equal(undefined);
     });
 
-    it("Should be a no-op on second call same day", async function () {
+    it("Should be predictable with no vote, and its value is the crowd's flow", async function () {
       await advanceOneDay();
-      await registry.setValue(g2, 100);
-      await voteFor(satori, alice, g2);
-      await satori.connect(alice).predictMultipleWithPayloads([{ gameId: g2, payload: pack1(UP) }]);
-
-      await advanceOneDay();
-      await satori.flushDefaultStream();
-      const after1 = await satori.defaultStreamLastFlushedRound();
-
-      // Second call same day — no-op
-      await satori.flushDefaultStream();
-      const after2 = await satori.defaultStreamLastFlushedRound();
-
-      expect(after2).to.equal(after1);
-    });
-
-    it("Should jump cursor to the current round after long gap", async function () {
-      await advanceOneDay();
-      await registry.setValue(g2, 100);
-      await voteFor(satori, alice, g2);
-      await satori.connect(alice).predictMultipleWithPayloads([{ gameId: g2, payload: pack1(UP) }]);
-
-      // Skip 10 days
-      for (let i = 0; i < 10; i++) await advanceOneDay();
-
-      // Single flush — records last round's count AT the current round index
-      // (current-round indexing keeps the default game's value cadence in
-      // lockstep with its predict cadence), and the cursor lands on today.
-      await satori.flushDefaultStream();
-      const today = await satori.getCurrentRound();
-      expect(await satori.defaultStreamLastFlushedRound()).to.equal(today);
-    });
-
-    it("Should auto-flush when predicting on the default stream", async function () {
-      // Generate some prediction count data
-      await advanceOneDay();
-      await registry.setValue(g2, 100);
-      await voteFor(satori, bob, g2);
-      await satori.connect(bob).predictMultipleWithPayloads([{ gameId: g2, payload: pack1(UP) }]);
-
-      // Advance one cadence period (so g2 may be rewritten) and flush, so the
-      // default stream has a value
-      await advanceCadence();
-      await satori.flushDefaultStream();
-
-      // Make more predictions
-      await registry.setValue(g2, 150);
-      await satori.connect(bob).predictMultipleWithPayloads([{ gameId: g2, payload: pack1(UP) }]);
-
-      // Advance — now yesterday has data but hasn't been flushed yet
-      await advanceOneDay();
-      await satori.flushDefaultStream();
-
-      // Predict on the default stream — auto-flush should fire.
-      // No vote is cast first: the default game cannot be voted for, it carries
-      // its derived weight, and that is what makes it predictable.
       expect(await voting.isEligible(1)).to.be.true;
       await satori.connect(alice).predictMultipleWithPayloads([{ gameId: 1, payload: pack1(UP) }]);
+      expect(await engine.namedStreamValue(1)).to.be.gt(0n);
+      // The first prediction's own pull wrote the first ring entry.
+      expect((await registry.getLatestUpdateInfo(1))[0]).to.equal(1);
+    });
+
+    it("Should accept a prediction after a long quiet gap with no keeper: nothing is missing or skipped", async function () {
+      await advanceOneDay();
+      await satori.connect(alice).predictMultipleWithPayloads([{ gameId: 1, payload: pack1(UP) }]);
+      for (let i = 0; i < 10; i++) await advanceOneDay();
+      await expect(
+        satori.connect(bob).predictMultipleWithPayloads([{ gameId: 1, payload: pack1(UP) }])
+      ).to.not.be.reverted;
+    });
+
+    it("Should let a predictor call it once per 24 hours, as any Sentiment game", async function () {
+      await advanceOneDay();
+      await satori.connect(alice).predictMultipleWithPayloads([{ gameId: 1, payload: pack1(UP) }]);
+      await expect(
+        satori.connect(alice).predictMultipleWithPayloads([{ gameId: 1, payload: pack1(UP) }])
+      ).to.be.revertedWithCustomError(engine, "AlreadyPredicted");
     });
   });
 

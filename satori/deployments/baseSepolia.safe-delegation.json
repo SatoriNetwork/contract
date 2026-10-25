@@ -1,0 +1,35 @@
+{
+  "version": "1.0",
+  "chainId": "84532",
+  "createdAt": 1792731476521,
+  "meta": {
+    "name": "Satori deploy: lend setup rights to the deployer",
+    "description": "setWiringAuthority(0x9d3109b8A045D63056Aa5C1d2c883F3F9fA18817); setAppointAuthority(0x9d3109b8A045D63056Aa5C1d2c883F3F9fA18817); transfer(0x9d3109b8A045D63056Aa5C1d2c883F3F9fA18817, 1000000000000000)",
+    "txBuilderVersion": "1.16.5",
+    "createdFromSafeAddress": "0x61a9E0Fe02068C4BCCea665D21e93ebE81d62f18",
+    "checksum": "0x853b415f8f588206d5add9384bf56589ecd3fda631a68788fac6de6d72d621fb"
+  },
+  "transactions": [
+    {
+      "to": "0x7Dd4F6EF7FE534e4962f975cffe93D19d9B891E1",
+      "value": "0",
+      "data": "0x1d8f3d7e0000000000000000000000009d3109b8a045d63056aa5c1d2c883f3f9fa18817",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0x7Dd4F6EF7FE534e4962f975cffe93D19d9B891E1",
+      "value": "0",
+      "data": "0xdbbe26120000000000000000000000009d3109b8a045d63056aa5c1d2c883f3f9fa18817",
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0x7Dd4F6EF7FE534e4962f975cffe93D19d9B891E1",
+      "value": "0",
+      "data": "0xa9059cbb0000000000000000000000009d3109b8a045d63056aa5c1d2c883f3f9fa1881700000000000000000000000000000000000000000000000000038d7ea4c68000",
+      "contractMethod": null,
+      "contractInputsValues": null
+    }
+  ]
+}

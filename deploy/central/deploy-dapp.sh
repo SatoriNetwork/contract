@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Redeploy the dapp (satori-ui) to app.satorinet.io. See DEPLOY-central.md.
+# Redeploy the dapp (satori-ui) to games.satorinet.io. See DEPLOY-central.md.
 #
 #   deploy/central/deploy-dapp.sh                  build, ship, verify
 #   deploy/central/deploy-dapp.sh --check          everything up to shipping; Central untouched
@@ -22,7 +22,7 @@ done
 
 ROOT=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 cd "$ROOT"
-SITE=https://app.satorinet.io
+SITE=https://games.satorinet.io
 REMOTE=/root/satori-dapp
 SSH=(ssh -i "$HOME/.ssh/id_ed25519" -p 2222 -o BatchMode=yes -o ConnectTimeout=15
      -o UserKnownHostsFile="$ROOT/deploy/central/central.known_hosts" -o StrictHostKeyChecking=yes

@@ -1,4 +1,4 @@
-const { ethers } = require("hardhat");
+const { ethers, artifacts } = require("hardhat");
 const { time, impersonateAccount, setBalance } = require("@nomicfoundation/hardhat-network-helpers");
 
 const ROUND = 86400;
@@ -30,7 +30,8 @@ function ladder(ratio = PHI_INV, rate = BASE, next = T0, max = 200) {
   return rows;
 }
 
-const grossUp = (g, bps) => (g * 10000n) / (10000n - bps);
+// The token rounds each report's fee UP, so `g` costs `ceil(g * 10000 / (10000 - bps))`.
+const grossUp = (g, bps) => (g * 10000n + (10000n - bps) - 1n) / (10000n - bps);
 
 /** Smallest general amount whose gross-up reaches `delta`. */
 function generalReaching(delta, bps) {
@@ -58,14 +59,44 @@ async function rewardsSigner(rewards) {
 const issuedOf = async (hub) => (await hub.emission()).issued;
 
 /**
- * Bumps the counter from SatoriRewards' address so it lands at or just past
- * `target`. Returns { tx, issued } where `issued` is the expected new value.
+ * Swaps the hub proxy's implementation for HubIssuanceHarness (same storage,
+ * one test-only function) and returns the harness ABI at the proxy address.
+ * Idempotent. It moves the counter without reporting to the token, so after
+ * it `issued` no longer equals the token's generalAccrued + devFeeAccrued.
+ * A step taken by a real report (warp, price the rounds, noteIssued) is
+ * pinned in IssuedCounter.test.js; real reports' counting there and in
+ * EarnTimeFee.test.js.
+ */
+async function issuanceHarness(hub) {
+  const addr = await hub.getAddress();
+  const H = await ethers.getContractFactory("HubIssuanceHarness");
+  const asH = H.attach(addr);
+  const impl = await hub.implementation();
+  // Immutables are patched in at deploy, so compare length, not bytes.
+  const { deployedBytecode } = await artifacts.readArtifact("HubIssuanceHarness");
+  if ((await ethers.provider.getCode(impl)).length === deployedBytecode.length) return asH;
+  const token = await ethers.getContractAt("SatoriToken", await hub.token());
+  const up = await token.upgradeAuthority();
+  const signer = await ethers.getImpersonatedSigner(up);
+  await setBalance(up, ethers.parseEther("100"));
+  const harness = await H.deploy(
+    await hub.token(), await hub.engine(), await hub.voting(), await hub.rewards(),
+    await hub.registry(), await hub.games(), await hub.bounties());
+  await harness.waitForDeployment();
+  await (await hub.connect(signer).upgradeTo(await harness.getAddress())).wait();
+  return asH;
+}
+
+/**
+ * Bumps the counter so it lands at or just past `target`. Returns { tx, issued }
+ * where `issued` is the expected new value. `rw` is unused (kept so callers
+ * written against the old noteIssued-from-rewards helper still read the same).
  */
 async function issueTo(hub, token, rw, target) {
   const bps = await token.devFeeBps();
   const before = await issuedOf(hub);
   const g = generalReaching(target - before, bps);
-  const tx = await hub.connect(rw).noteIssued(g);
+  const tx = await (await issuanceHarness(hub)).testNoteIssued(g);
   return { tx, issued: before + grossUp(g, bps) };
 }
 
@@ -74,7 +105,7 @@ async function issueBelow(hub, token, rw, target) {
   const bps = await token.devFeeBps();
   const before = await issuedOf(hub);
   const g = generalBelow(target - before, bps);
-  const tx = await hub.connect(rw).noteIssued(g);
+  const tx = await (await issuanceHarness(hub)).testNoteIssued(g);
   return { tx, issued: before + grossUp(g, bps) };
 }
 
@@ -102,6 +133,6 @@ function eventsNamed(receipt, contract, name) {
 module.exports = {
   ROUND, ONE, BASE, PHI_INV, STEP_ROUNDS, FLAT_ROUNDS, RATE_CAP, NO_STEP, T0,
   stepRate, ladder, grossUp, generalReaching, generalBelow,
-  rewardsSigner, issuedOf, issueTo, issueBelow,
+  rewardsSigner, issuedOf, issueTo, issueBelow, issuanceHarness,
   currentRound, atRound, advanceRound, eventsNamed,
 };

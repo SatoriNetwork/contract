@@ -24,7 +24,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
-const { deploySatoriFixtureNoFee, pack1, VOTE, voteFor, warmUpLoyalty } = require("../fixtures");
+const { deploySatoriFixtureNoFee, pack1, VOTE, voteFor } = require("../fixtures");
 
 const UP = 1;
 // The value-provider cut is gone, so stream creation no longer takes a cut-bps
@@ -86,11 +86,7 @@ describe("prediction-delegation exact split (non-default fee + multi-delegator)"
     // cleanly (avoids the documented same-round-receipt edge).
     await satori.connect(A).delegatePredictionPower(D.address);
     await satori.connect(B).delegatePredictionPower(D.address);
-    // Delegator weight is capital x loyalty and a fresh delegation starts at
-    // L = 0, so every share measured below reads zero without a warm-up.
-    // Both delegators share ONE warm-up so their L is equal and cancels out
-    // of the by-balance split this test pins. Drains to `owner`.
-    await warmUpLoyalty(satori, registry, null, D, [A, B], owner, sid);
+    await time.increase(86400);
     await advanceRound();
     await registry.setValue(sid, 100);
 
@@ -207,11 +203,9 @@ describe("prediction-delegation exact split (non-default fee + multi-delegator)"
     const expMarketing =
       (predictorAmount * 500n) / 10000n + (grossA * 500n) / 10000n + (grossB * 500n) / 10000n;
     expect(marketingBucket).to.be.gt(0n);
-    // closeTo, not equal: `grossA`/`grossB` are reconstructed from the raw
-    // capital split, while the contract divides by the loyalty-weighted W —
-    // which carries a small deliberate upward bias so Σ cᵢLᵢ ≤ W holds by
-    // construction (design §10). The gap is sub-1000 wei and always in the
-    // strand-dust direction, never over-mint, which the lte above pins.
+    // closeTo, not equal: the contract floors the per-round rate and each
+    // payout, so the gap is sub-1000 wei and always in the strand-dust
+    // direction, never over-mint, which the lte above pins.
     expect(marketingBucket).to.be.closeTo(expMarketing, 10_000n);
   });
 });

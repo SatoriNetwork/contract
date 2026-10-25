@@ -87,6 +87,17 @@
       "type": "error"
     },
     {
+      "inputs": [
+        {
+          "internalType": "uint32",
+          "name": "streamId",
+          "type": "uint32"
+        }
+      ],
+      "name": "StreamPullFailed",
+      "type": "error"
+    },
+    {
       "inputs": [],
       "name": "Unauthorized",
       "type": "error"
@@ -110,6 +121,86 @@
       "inputs": [],
       "name": "ZeroTokenAddress",
       "type": "error"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "user",
+          "type": "address"
+        },
+        {
+          "indexed": true,
+          "internalType": "uint32",
+          "name": "gameId",
+          "type": "uint32"
+        },
+        {
+          "indexed": true,
+          "internalType": "uint256",
+          "name": "round",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "predictionPower",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "bountyStake",
+          "type": "uint256"
+        }
+      ],
+      "name": "AdapterPredictionMade",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "user",
+          "type": "address"
+        },
+        {
+          "indexed": true,
+          "internalType": "uint32",
+          "name": "gameId",
+          "type": "uint32"
+        },
+        {
+          "indexed": true,
+          "internalType": "uint256",
+          "name": "round",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "userScore",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "bountyTotal",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "bool",
+          "name": "finalized",
+          "type": "bool"
+        }
+      ],
+      "name": "AdapterPredictionSettled",
+      "type": "event"
     },
     {
       "anonymous": false,
@@ -166,25 +257,6 @@
       "inputs": [
         {
           "indexed": false,
-          "internalType": "uint256",
-          "name": "round",
-          "type": "uint256"
-        },
-        {
-          "indexed": false,
-          "internalType": "int232",
-          "name": "value",
-          "type": "int232"
-        }
-      ],
-      "name": "DefaultStreamFlushed",
-      "type": "event"
-    },
-    {
-      "anonymous": false,
-      "inputs": [
-        {
-          "indexed": false,
           "internalType": "uint16",
           "name": "dustTargetBps",
           "type": "uint16"
@@ -229,6 +301,25 @@
         }
       ],
       "name": "MultiplePredictionsMade",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "uint32",
+          "name": "gameId",
+          "type": "uint32"
+        },
+        {
+          "indexed": false,
+          "internalType": "int232",
+          "name": "value",
+          "type": "int232"
+        }
+      ],
+      "name": "NamedCounterMoved",
       "type": "event"
     },
     {
@@ -350,6 +441,18 @@
           "internalType": "uint64",
           "name": "hour",
           "type": "uint64"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "multiplier",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "weight",
+          "type": "uint256"
         }
       ],
       "name": "PredictionMade",
@@ -605,32 +708,6 @@
     },
     {
       "inputs": [],
-      "name": "defaultStreamInitialized",
-      "outputs": [
-        {
-          "internalType": "bool",
-          "name": "",
-          "type": "bool"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [],
-      "name": "defaultStreamLastFlushedRound",
-      "outputs": [
-        {
-          "internalType": "uint256",
-          "name": "",
-          "type": "uint256"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [],
       "name": "deploymentRound",
       "outputs": [
         {
@@ -711,13 +788,6 @@
         }
       ],
       "stateMutability": "pure",
-      "type": "function"
-    },
-    {
-      "inputs": [],
-      "name": "flushDefaultStream",
-      "outputs": [],
-      "stateMutability": "nonpayable",
       "type": "function"
     },
     {
@@ -873,13 +943,6 @@
         }
       ],
       "name": "initialize",
-      "outputs": [],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [],
-      "name": "markDefaultStreamInitialized",
       "outputs": [],
       "stateMutability": "nonpayable",
       "type": "function"
@@ -1407,6 +1470,19 @@
           "internalType": "uint16",
           "name": "",
           "type": "uint16"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "upgradeGovernor",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
         }
       ],
       "stateMutability": "view",

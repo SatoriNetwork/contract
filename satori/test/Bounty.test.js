@@ -141,13 +141,14 @@ describe("Bounty — core surface (merged-pool design)", function () {
       expect(await bounties.pool(stream, await token.getAddress())).to.equal(ethers.parseEther("20"));
     });
 
-    it("supports the default stream", async function () {
+    it("refuses the default game: it is a Sentiment game, and a Sentiment game takes no bounties", async function () {
       const defaultStreamId = await satori.DEFAULT_STREAM_ID();
-      await bounties.connect(funder).fundBounty(
-        defaultStreamId, await usd.getAddress(), ethers.parseEther("100"), ethers.parseEther("5")
-      );
-      expect(await bounties.pool(defaultStreamId, await usd.getAddress())).to.equal(ethers.parseEther("100"));
-      expect(await bounties.gameBountyTokenCount(defaultStreamId)).to.equal(1);
+      await expect(
+        bounties.connect(funder).fundBounty(
+          defaultStreamId, await usd.getAddress(), ethers.parseEther("100"), ethers.parseEther("5")
+        )
+      ).to.be.revertedWithCustomError(bounties, "NamedGame");
+      expect(await bounties.gameBountyTokenCount(defaultStreamId)).to.equal(0);
     });
   });
 

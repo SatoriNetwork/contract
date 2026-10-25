@@ -736,7 +736,9 @@ describe("SatoriSplitterImmutable — adversarial", function () {
     it("no function exists to reinstate an authority or change shares", async function () {
       const { b } = await deploy();
       const names = b.interface.fragments.map((f) => f.name);
-      for (const forbidden of ["setAuthority", "acceptAuthority", "setShares", "addRecipient",
+      // `acceptAuthority` exists, but only completes an offer a sitting authority made;
+      // once the authority is renounced nothing can offer, so it cannot reinstate one.
+      for (const forbidden of ["setAuthority", "setShares", "addRecipient",
                                "removeRecipient", "setRotationThreshold", "upgradeTo", "initialize"]) {
         expect(names, `${forbidden} must not exist`).to.not.include(forbidden);
       }

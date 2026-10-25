@@ -16,7 +16,7 @@ const { Interface } = require('ethers');
 const CONSUMED = {
   SatoriEngine: [
     'PredictionMade', 'PredictionScored', 'PredictionVoided', 'PredictionUnrecoverable',
-    'PredictionDisplaced', 'StreakThresholdSet', 'CurveConfigSet',
+    'PredictionDisplaced', 'StreakThresholdSet', 'CurveConfigSet', 'NamedCounterMoved',
   ],
   SatoriBounties: [
     'BountyFunded', 'BountyDripped', 'StrandedPotReclaimed', 'BountyTokenCleaned',
@@ -25,7 +25,7 @@ const CONSUMED = {
   SatoriRewards: [
     'ReferralPaid', 'ReferralSet', 'RewardSplit', 'DelegatorRewardsAccrued', 'RewardsClaimed',
     'RoundBudgetFrozen', 'PredictionDelegated', 'PredictionUndelegated', 'DelegatePowerSynced',
-    'ClaimDelegated', 'ClaimUndelegated', 'OffchainBudgetSet',
+    'ClaimDelegated', 'ClaimUndelegated', 'OffchainBudgetSet', 'GameRoundWeight',
   ],
   SatoriVoting: ['Voted', 'GameApprovedSet', 'VotesMoved'],
   SatoriRegistry: [

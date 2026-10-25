@@ -1,8 +1,8 @@
 // A daily game on an hourly stream scores each prediction against its own 24h
 // window, so an UP and a DOWN placed the same round can BOTH win. The round's
 // pot must still pay out at most once: each winner's share is their boost over
-// the boost on BOTH sides, and a loser's share stays in the pot for
-// reclaimStrandedPot to return to the pool.
+// the boost on BOTH sides, and a loser's share goes back to the pool when its
+// prediction settles.
 
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
@@ -87,7 +87,7 @@ describe("bounty pot when both directions win one round", function () {
     expect(await usd.balanceOf(await bounties.getAddress())).to.equal(POT + 2n * STAKE);
   });
 
-  it("only UP wins: the winner keeps its stake share and the loser's share stays reclaimable", async function () {
+  it("only UP wins: the winner keeps its stake share and the loser's share goes back to the pool when it settles", async function () {
     const round = await playRound(250);
     expect(await satori.streaks(bob.address, stream)).to.equal(0n);
 
@@ -95,7 +95,7 @@ describe("bounty pot when both directions win one round", function () {
     const claimed = await bounties.roundBountyPotClaimed(stream, round, usdAddr);
     expect(await earned(alice)).to.equal(RATE / 2n);
     expect(await earned(bob)).to.equal(0n);
-    expect(claimed).to.equal(RATE / 2n);
-    expect(pot - claimed).to.equal(RATE / 2n);
+    expect(claimed).to.equal(pot);
+    expect(await bounties.pool(stream, usdAddr)).to.equal(POT - RATE / 2n);
   });
 });

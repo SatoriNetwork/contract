@@ -39,9 +39,11 @@ describe("F27 — predictions view reports the full 48-bit multiplier (no uint32
     const mult = (1n << 32n) + 12345n; // 4,294,979,641 — just past uint32 (2^32-1)
     const predA = DIR_UP | (mult << MULT_OFFSET);
 
-    // Storage slot of userPredictions[user][gameId]; userPredictions is at slot 12
+    // Storage slot of userPredictions[user][gameId], from the pinned engine layout
     // (mapping(address => mapping(uint32 => uint256))).
-    const baseSlot = ethers.zeroPadValue("0x0c", 32);
+    const layout = require("../storage-layouts/SatoriEngine.json");
+    const entry = (layout.storage || layout).find((e) => e.label === "userPredictions");
+    const baseSlot = ethers.zeroPadValue(ethers.toBeHex(BigInt(entry.slot)), 32);
     const inner = ethers.keccak256(
       ethers.concat([ethers.zeroPadValue(user.address, 32), baseSlot])
     );

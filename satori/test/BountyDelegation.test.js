@@ -160,11 +160,7 @@ describe("Bounty — delegation (v5: bounty surface is predictor-only)", functio
     // before predicting.
     await satori.connect(authority).vote(stream, VOTE);
 
-    // SEVERAL winning rounds, not one. Delegator payout is weighted by loyalty
-    // (docs/design/delegation-loyalty-weighting.md): a fresh delegation starts
-    // at L = 0 and the fold point is lagged by LOY_LAG rounds, so the first
-    // PAYING round is startRound + LOY_LAG + 1. Each cycle here is 3 rounds, so
-    // three cycles puts the last one comfortably past the lag.
+    // Several winning rounds; the delegator is paid for each of them.
     for (const base of [100, 200, 300]) {
       await advanceOneDay();
       await registry.connect(authority).setValue(stream, base);

@@ -42,9 +42,9 @@ it. After the deploy, one Safe transaction moves each slot to its holder.
 | `rootAuthority` | assigns all five below; `setRootAuthority` (two-step) / `renounceRootAuthority` |
 | `feeAuthority` | `proposeDevFeeBps` / `acceptDevFeeBps` / `cancelDevFeeBps` — **freezable** |
 | `upgradeAuthority` | `upgradeTo`, `renounceUpgrade` on all eight proxies |
-| `wiringAuthority` | `setController`, `setHook`, `setAirdrop`, `setBridgeAuthority` (all **freezable**), `hub.setSatoriMerkle` |
+| `wiringAuthority` | `setController`, `setHook`, `setBridgeAuthority` (all **freezable**), `setAirdrop` (not freezable), `hub.setSatoriMerkle` |
 | `appointAuthority` | `rewards.setAdmin`, `airdrop.setAirdropAuthority` (recall), `engine.setCurveOperator`, `setDustFloor`, `setDustTarget` |
-| `freezeAuthority` | `freezeController` / `freezeHook` / `freezeAirdrop` / `freezeBridgeAuthority` / `freezeDevFeeBps` — one-way |
+| `freezeAuthority` | `freezeController` / `freezeHook` / `freezeBridgeAuthority` / `freezeDevFeeBps` — one-way |
 
 Every upgrade in the system resolves to `upgradeAuthority` —
 `SatoriUUPS._upgradeGovernor()` returns `token.upgradeAuthority()` — so that one
@@ -82,19 +82,12 @@ second carve-out until 2026-10-07, when the airdrop moved into its own contract
 (`docs/issues/airdrop-own-contract.md`). It is now a role on `SatoriAirdrop`,
 seeded at construction with the deploy key and moved at handoff, rotated by its
 holder, recalled by `appointAuthority`, with no admin fallback. Still the only
-operational power that can put tokens somewhere: loading has no on-chain cap
-check, but the token's
-`freezeAirdrop(airdrop, loadedTotal)` refuses a total over the cap, or one that
-moved since the check, so an over-allocation is never frozen or paid. Loading
-closes at the token's `freezeAirdrop` (`loadAirdropBatch` reverts
-`AirdropLoadingClosed` once `airdropFrozen`), so the
-table checked before the freeze is exactly what pays; freeze only after the last
-batch is loaded and checked, because a freeze before loading would leave this
-airdrop empty for good. What is left is `finalizeAirdropLoading`, which opens
-every claim at once and reverts `AirdropNotFrozen` until the token's airdrop
-door is frozen on this contract (an emptied wiring slot does not count, because
-root can refill it): after that, nothing it can call changes anyone's claim
-(`airdrop-claim-at-finalize.md`).
+operational power that can put tokens somewhere: until `finalizeAirdropLoading`
+closes loading, it can allocate whatever remains under `AIRDROP_TOTAL_SUPPLY`
+(1,100,000) to any address, claimable from that block. `loadAirdropBatch`
+refuses a batch past the cap (`BudgetExceeded`), so an over-allocation never
+loads. Finalize opens nothing (claims are live on load); it ends the role's power
+(`airdrop-claim-at-finalize.md`; owner, 2026-10-23).
 
 **`admin`** keeps everything else:
 
@@ -203,17 +196,13 @@ nor any hub upgrade can mint airdrop.
 ## 11b. `airdrop` — a contract with no upgrade path
 
 `SatoriAirdrop`, the one caller of `token.airdropMint`. Deliberately not the
-controller: the hub is upgradeable, the airdrop contract is not, and the point of
-the split pointer is that the airdrop can be frozen (`freezeAirdrop`) without
-freezing anything else. Until the freeze, `wiringAuthority` can re-point it at a
-successor contract, which is how a corrected table or new airdrop behaviour
-ships. Re-pointing alone mints nothing: `airdropMint` reverts `AirdropNotFrozen`
-until the freeze, and `freezeAirdrop(airdrop, loadedTotal)` (one-way) pins only
-the door and table total the freeze authority checked, reverting if either has
-moved. After it no key, no hub upgrade and no redeployed airdrop contract can
-mint airdrop beyond the frozen contract's table, because the freeze also closes
-that table. Claims cannot open before the freeze: finalize requires
-`airdropFrozen`.
+controller: the hub is upgradeable, the airdrop contract is not. There is no
+airdrop freeze (removed 2026-10-23): `wiringAuthority` can re-point the door at a
+successor contract while it holds the slot, which is how new airdrop behaviour
+ships. A successor cannot pay anyone twice — every claim pays the allocation
+minus `token.airdropMintedTo(user)`, a cursor on the token — and the token's
+1,100,000 cap bounds all airdrop minting together. Emptying `wiringAuthority`
+is what pins the door (`airdropLocked()`).
 
 ## 12. `deployer` — dead after deploy
 
@@ -247,7 +236,7 @@ annoy?"
 | Role | Worst it can do | Steal? |
 |---|---|---|
 | `rootAuthority` | point any slot at itself, then do anything below | **yes, in two steps** |
-| `wiringAuthority` | re-point the controller and drain banked mint headroom; until `freezeAirdrop`, re-point the airdrop door (which mints nothing unless the freeze authority freezes it); on a copy off Base, approve a tier-2 bridge that mints there without limit | **yes** |
+| `wiringAuthority` | re-point the controller and drain banked mint headroom; re-point the airdrop door at a contract it controls, which can mint what is left under the 1,100,000 airdrop cap; on a copy off Base, approve a tier-2 bridge that mints there without limit | **yes** |
 | `upgradeAuthority` | upgrade any contract to anything | **yes** |
 | `rootPublisher` | direct the whole accrued Merkle reserve to itself | **yes, within its lane** |
 | `airdropAuthority` (on `SatoriAirdrop`) | allocate to itself before the freeze, which the pre-freeze check has to catch (a row added after the check makes the freeze revert, and a total over the cap cannot freeze at all); or never finalize, so nobody can claim | **yes** |
@@ -280,9 +269,8 @@ is nothing to point a recall at.
 - **`marketingFeeRecipient` likewise** — self-rotating only. Same resolution,
   lower stakes.
 - **`finalizeAirdropLoading` stays loader-only** (owner, 2026-09-12, as
-  admin-only; the role moved to `SatoriAirdrop` on 2026-10-07). Loading itself
-  now ends at the freeze authority's `freezeAirdrop`; finalize only opens claims
-  on the frozen table. It is the natural end of the loader's own one-time job
+  admin-only; the role moved to `SatoriAirdrop` on 2026-10-07). Finalize closes
+  loading for good; claims are live on load (2026-10-23). It is the natural end of the loader's own one-time job
   rather than the destruction of a standing office, and it cannot steal. See
   `dao-governance.md` §2.
 - **`setOffchainBudget` has its own slot**, `emissionSplitAuthority` (§3), which

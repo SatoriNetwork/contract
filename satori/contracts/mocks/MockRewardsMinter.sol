@@ -20,6 +20,14 @@ contract MockRewardsMinter {
         ISatoriCore(core).setMerkleReserveRate(rate);
     }
 
+    function freeze(address core, uint256 round) external returns (uint256) {
+        return ISatoriCore(core).freezeRoundGross(round);
+    }
+
+    function note(address core, uint256 general) external {
+        ISatoriCore(core).noteIssued(general);
+    }
+
     // `_onlyAdmin()` reads `satoriRewards.admin()`. After this mock is wired as
     // the rewards child, keep admin calls resolving to a known EOA so wiring
     // sequences that touch admin don't brick.

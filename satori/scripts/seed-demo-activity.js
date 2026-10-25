@@ -14,10 +14,8 @@
 //
 // SKILL IS REAL, NOT RANDOM. Each stream's price path is generated up front, so a
 // predictor's "skill" is the probability they call the direction the path is
-// actually about to take. That is what makes the loyalty weighting legible: with a
-// coin-flip cast, L* is only ~2.4 and tenure barely compounds, so an early
-// delegator and a late one end up level and the feature looks inert. With an 80%
-// predictor in the cast, L* is ~8 and the tenure gap is visible.
+// actually about to take, so a good predictor earns visibly more for the
+// delegators behind them than a coin-flipper does.
 //
 // SCORING. These are 1440-minute (every-round) streams, so their binary games
 // score on the ABC band: the movement between the first two values written
@@ -180,7 +178,7 @@ async function main() {
     { round: 20, who: "Niaj",  to: "Sage"   },
     { round: 30, who: "Judy",  to: null     },
     { round: 46, who: "Judy",  to: "Alice"  },
-    { round: 60, who: "Grace", to: "Oracle" }, // chases performance; loyalty resets
+    { round: 60, who: "Grace", to: "Oracle" }, // chases performance
     { round: 70, who: "Judy",  to: null     },
     { round: 84, who: "Heidi", to: "Oracle" }, // Frank's terms, 82 rounds later
     { round: 96, who: "Judy",  to: "Oracle" },
@@ -253,8 +251,7 @@ async function main() {
     }
 
     // And they guess, on up to THREE streams in one batch (the core allows a single
-    // predict per round, so multi-stream play has to be batched). A mixed batch is
-    // what gives the delegator loyalty rule a fractional q to blend.
+    // predict per round, so multi-stream play has to be batched).
     for (let u = 0; u < P.length; u++) {
       const p = P[u];
       if (rnd() > p.appetite) continue; // sat this one out
@@ -292,8 +289,7 @@ async function main() {
     for (const s of streams) await tryTx(() => engine.settlePrediction(P[u].s.address, s.gid));
   }
 
-  // Loyalty is materialised lazily by the claim walk, so it reads 0 until the
-  // delegator claims. Claim once here so the summary shows real scores.
+  // Delegator rewards are credited by the claim walk; claim once so balances show them.
   for (const d of D) await tryTx(() => hub.connect(d.s).claim());
 
   // ---- summary ----------------------------------------------------------
@@ -315,10 +311,9 @@ async function main() {
   for (const d of D) {
     const a = d.s.address;
     const n = Number(await rewards.delegationPeriodsLength(a));
-    let loy = 0n, to = "(none)", since = "-";
+    let to = "(none)", since = "-";
     if (n > 0) {
       const per = await rewards.delegationPeriodAt(a, n - 1);
-      loy = await rewards.delegationLoyaltyAt(a, n - 1);
       if (Number(per[2]) === 0) {
         const t = P.find((p) => p.s.address.toLowerCase() === per[0].toLowerCase());
         to = t ? t.n : per[0].slice(0, 8);
@@ -326,11 +321,9 @@ async function main() {
       } else { to = "(left)"; }
     }
     const bal = Number(ethers.formatEther(await token.balanceOf(a)));
-    console.log(`   ${d.n.padEnd(6)} -> ${to.padEnd(8)} L ${Number(ethers.formatEther(loy)).toFixed(2).padStart(6)}` +
+    console.log(`   ${d.n.padEnd(6)} -> ${to.padEnd(8)}` +
       `  periods ${String(n).padStart(2)}  since r${since.padEnd(7)} bal ${bal.toFixed(1).padStart(7)}`);
   }
-  console.log("   L* = 1/(1-0.97) = 33.3 only for a FLAWLESS predictor; at 80% it is ~8,");
-  console.log("   at 50% ~2.4 — which is why tenure barely compounds behind a coin-flipper.");
 
   // Publish the cast so the dapp's dev account switcher can label these signers
   // by who they actually are. Written here rather than hardcoded in the UI: the

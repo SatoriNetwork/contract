@@ -120,20 +120,13 @@ export function bountyBurn(): bigint {
 
 // DELIBERATELY NOT HERE: onChainRewardCeiling.
 //
-// It looks like the same shape and is not:
+// It is not arithmetic on constants: SatoriRewardsLens returns everything the
+// hub has reported to the token as earned, less the Merkle reserve
+// (`token.generalAccrued() - hub.merkleReserveCumulative()`), and that moves
+// with every scored win. A first draft here derived a clock formula instead and
+// was wrong by 452 SATORI against Base Sepolia.
 //
-//     SatoriRewardsLens.sol
-//     ROUND_REWARD_BUDGET * (round - deploymentRound + 1)
-//         - t.devFeeCeiling()
-//         - merkleReserveCeiling()
-//
-// A first draft of this file computed only the first line and was wrong by 452
-// SATORI against Base Sepolia (3600 local vs 3148 on chain). `devFeeCeiling`
-// encodes the dev-fee TIER SCHEDULE (DEV_FEE_BPS_T1/T2/T3 over DEV_TIER_ROUNDS)
-// — a policy the contract owns and may change on upgrade.
-//
-// So it stays a fetched value: still Class 2 (it can only change at a round
-// boundary, so one read per round), just not derivable. The line between the
+// So it stays a fetched value, not derivable. The line between the
 // two is whether the value is arithmetic on constants or encodes a rule. Copying
 // a rule into the UI is how the displayed number and the paid number drift
 // apart, which is the bug this whole exercise started from.

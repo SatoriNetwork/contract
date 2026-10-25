@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts/utils/math/Math.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 import "../libraries/SatoriTypes.sol";
@@ -10,16 +9,20 @@ import "../interfaces/ISatoriRewards.sol";
 import "../interfaces/ISatoriRegistry.sol";
 import "../interfaces/ISatoriGames.sol";
 import "../interfaces/ISatoriBounties.sol";
+import "../interfaces/ISatoriCore.sol";
 import "./interfaces/IHubDeps.sol";
 import "./interfaces/IEngineDeps.sol";
 import "./SatoriUUPS.sol";
+import "../interfaces/IMerkleLaneView.sol";
+import "../interfaces/ITransferHook.sol";
+import "../interfaces/ILockVoteHub.sol";
 
 interface IHubWiredImmutables {
     function token() external view returns (address);
     function engine() external view returns (address);
 }
 
-contract SatoriHub is IEngineGateway, SatoriUUPS {
+contract SatoriHub is IEngineGateway, ISatoriCore, IMerkleLaneView, ITransferHook, ILockVoteHub, SatoriUUPS {
 
     ISatoriTokenFull   public immutable token;
     ISatoriEngineView  public immutable engine;
@@ -43,14 +46,15 @@ contract SatoriHub is IEngineGateway, SatoriUUPS {
     // THE EMISSION SCHEDULE  (docs/issues/emission-issuance-indexed-schedule.md)
     //
     // The rate is stored state, stepped by ISSUANCE rather than the clock:
-    // each time `emission.issued` (genesis + every general-lane commit + the
-    // banked Merkle reserve, grossed up by the dev fee) crosses `nextStepAt`,
+    // each time `emission.issued` (the token's accrued total: genesis, every
+    // general-lane commit and the banked Merkle reserve, plus the fee the token
+    // booked on them) crosses `nextStepAt`,
     // the rate is multiplied by `ratioWad` (default φ−1, clamped at
     // ROUND_REWARD_BUDGET) and the next threshold moves STEP_ROUNDS × the new
     // rate further out. The first threshold is FLAT_ROUNDS × base.
     //
     // Every rate change lands at round cur+1 through `_setRateNextRound`, so a
-    // round is never split between two rates: SatoriRewards' `_roundGross`
+    // round is never split between two rates: SatoriRewards' round-budget
     // freeze, both dial bounds and `devRateNow` all rely on that.
     // ==================================================================
 
@@ -60,6 +64,8 @@ contract SatoriHub is IEngineGateway, SatoriUUPS {
 
     /// (φ−1) as 18-decimal fixed point: the default step ratio.
     uint256 public constant PHI_INV = 618033988749894848;
+    /// Floor on the admin-set emission ratio (0.001 as 18-decimal fixed point).
+    uint256 internal constant MIN_EMISSION_RATIO = 1e15;
 
     uint256 public constant STEP_ROUNDS = 730;
     uint256 public constant FLAT_ROUNDS = 1460;
@@ -69,8 +75,9 @@ contract SatoriHub is IEngineGateway, SatoriUUPS {
     // Token lock lanes (docs/design/lock-lane-accounting.md); the hub is the sole writer.
     uint8   internal constant LANE_A = 0; // prediction / delegation lock
     uint8   internal constant LANE_B = 1; // proposal vote lock (LockVoteGovernor via voteLock)
-    /// Ceiling on any vote lock: even a compromised vote-lock governor cannot
-    /// freeze a wallet for longer than this past now. 90 rounds = ~90 days.
+    /// Ceiling on any single vote lock: a compromised vote-lock governor cannot
+    /// lock a wallet for longer than this past now in one call, though it can
+    /// renew the lock on every call until the pointer is severed or frozen. 90 rounds = ~90 days.
     uint24  internal constant MAX_VOTE_LOCK_ROUNDS = 90;
     uint24  internal constant LOCK_INDEFINITE = type(uint24).max;
 
@@ -90,13 +97,12 @@ contract SatoriHub is IEngineGateway, SatoriUUPS {
     }
 
     event VoteLockGovernorSet(address indexed governor);
-    event ChildSyncFailed(address indexed child, address indexed from, address to, uint256 value);
+    event VoteLockGovernorFrozen();
+    event ChildSyncFailed(address indexed child, address indexed from, address indexed to, uint256 value);
     /// The reserve from `fromRound` grows by `min(newRate, residual - 1)` per round
-    /// (`_effDial`), clamped to the reserve cap: rounds before `fromRound` read the
-    /// bare cumulative, which already banks the old rate through them.
-    /// `MerkleReserveClamped` and `EmissionStepped.reserveCumulative` re-anchor it.
+    /// (`_effDial`): rounds before `fromRound` read the bare cumulative, which
+    /// already banks the old rate through them.
     event MerkleReserveRateSet(uint256 newRate, uint256 fromRound, uint256 cumulativeAtFromRound);
-    event MerkleReserveClamped(uint256 cumulative, uint256 atRound);
     event MerkleSet(address indexed merkle);
     event EmissionRatioSet(uint256 ratioWad, uint256 nextStepAt, address indexed setter);
     event EmissionStepped(uint256 stepsTaken, uint256 newRate, uint256 nextStepAt, uint256 issued, uint256 fromRound, uint256 reserveCumulative);
@@ -187,11 +193,15 @@ contract SatoriHub is IEngineGateway, SatoriUUPS {
         registry = ISatoriRegistry(_registry);
         games = ISatoriGames(_games);
         bounties = ISatoriBounties(_bounties);
-        onChainMinted = token.totalRewardsMinted() - token.devFeeMinted(); // = INITIAL_MINT - devGenesis (general lane's genesis share)
+        // The general lane's genesis share; a re-pointed controller also
+        // inherits whatever the previous one reported but never minted.
+        onChainMinted = token.generalMinted();
+        onChainAllowance = uint192(token.generalAccrued());
         uint256 dep = token.deploymentRound();
+        onChainPricedRound = uint64(dep - 1);   // the deploy round is priced on its first touch
         _merkleReserveLastRound = dep;
         emission = EmissionSchedule({
-            issued: uint128(token.totalRewardsMinted()),
+            issued: uint128(token.generalAccrued() + token.devFeeAccrued()),
             nextStepAt: uint128(FLAT_ROUNDS * BASE_EMISSION_PER_ROUND),
             rate: uint128(BASE_EMISSION_PER_ROUND),
             prevRate: uint128(BASE_EMISSION_PER_ROUND),
@@ -219,15 +229,25 @@ contract SatoriHub is IEngineGateway, SatoriUUPS {
     }
 
     /// Severing (zero) stops NEW locks only; existing ones simply expire.
+    /// Refused once `freezeVoteLockGovernor` has run.
     function setVoteLockGovernor(address g) external onlyGovernor {
+        if (voteLockGovernorFrozen) revert AlreadySet();
         voteLockGovernor = g;
         emit VoteLockGovernorSet(g);
     }
 
-    /// Lane B ONLY, never shortens a live lock, and capped at now + 90
-    /// rounds — the whole blast radius of a buggy or hostile vote governor
-    /// is "some wallets stay locked up to a quarter, until it is severed"
-    /// (docs/design/lock-vote-governor.md §3).
+    /// One-way: pins the vote-lock pointer where it is, severed or not. Without
+    /// this the wiring key could repoint it at any address that locks any wallet,
+    /// renewably, after every other freeze lever is gone (M29).
+    function freezeVoteLockGovernor() external onlyGovernor {
+        voteLockGovernorFrozen = true;
+        emit VoteLockGovernorFrozen();
+    }
+
+    /// Lane B ONLY, never shortens a live lock, and capped at now + 90 rounds
+    /// per call. The blast radius of a buggy or hostile vote governor is "some
+    /// wallets stay locked, renewably, until it is severed" (docs/design/lock-vote-governor.md §3);
+    /// the pointer can be severed or frozen by the wiring key, and moves no more once frozen.
     function voteLock(address user, uint256 untilRound) external {
         if (msg.sender != voteLockGovernor || voteLockGovernor == address(0)) revert Unauthorized();
         if (untilRound > getCurrentRound() + MAX_VOTE_LOCK_ROUNDS) revert BadInput();
@@ -272,20 +292,59 @@ contract SatoriHub is IEngineGateway, SatoriUUPS {
     }
 
     /// Counts a general-lane reward commit (`userPortion + committedDelegatorShare`)
-    /// and the round's due reserve, then applies any steps crossed.
+    /// and the round's due reserve, reports both to the token in one call, then
+    /// applies any steps crossed. Refuses a commit beyond the rounds priced so
+    /// far (`freezeRoundGross`): a Rewards that credits more than its frozen
+    /// budgets fails here, closed, instead of leaving credits nobody can mint.
     function noteIssued(uint256 general) external {
         if (msg.sender != address(rewards)) revert Unauthorized();
-        if (_merkleReserveRate != 0) {
-            uint256 cur = getCurrentRound();
-            if (cur > _merkleReserveLastRound) _addIssued(_bankReserve(cur, _generalCap()));
+        uint256 due;
+        if (_merkleReserveRate != 0) due = _bankReserve(getCurrentRound() + 1);
+        if (due + general != 0) {
+            uint256 generalTotal = _accrue(due + general);
+            if (generalTotal - merkleReserveCumulative > onChainAllowance) revert BudgetExceeded();
         }
-        _issue(general);
+        _applySteps();
     }
 
     /// Permissionless: banks the due reserve and applies pending steps (including
-    /// any left over by the per-bump cap).
+    /// any left over by the per-bump cap). Every bank site banks through the
+    /// current round inclusive, so a round's reserve is reported at its first
+    /// touch of any kind and `merkleReserveCeiling` projects exactly that.
     function syncEmission() external {
-        _issue(_bankReserve(getCurrentRound(), _generalCap()));
+        _issue(_bankReserve(getCurrentRound() + 1));
+    }
+
+    /// The on-chain gross a fresh round is priced at: the residual after the
+    /// senior fee, net of the dial. THE DIAL YIELDS rather than underflowing:
+    /// its bound is checked at set time against a residual that can shrink
+    /// later (a step or a fee raise), and this sits on the predict path.
+    /// Floors at 1 wei while any emission remains, because `budget == 0` is
+    /// SatoriRewards' "unset" sentinel.
+    function onChainGrossNow() public view returns (uint256) {
+        uint256 residual = _residual(emissionRateNow());
+        if (residual == 0) return 0;
+        uint256 dial = _merkleReserveRate;
+        return dial >= residual ? 1 : residual - dial;
+    }
+
+    /// Prices `round` once, on its first touch (SatoriRewards._ensureRoundBudget):
+    /// the on-chain lane may commit this much more, and the round's reserve is
+    /// banked in the same call, so both lanes are sized at the rate and fee
+    /// live when the round started. Rounds nobody touched are priced with the
+    /// next one that is; nothing was credited for them, so that room is only
+    /// the schedule's, as under the old cumulative cap. A second call for the
+    /// same round adds nothing. Only the current round, so a late freeze can
+    /// never price a round already in play at today's rate.
+    function freezeRoundGross(uint256 round) external returns (uint256 gross) {
+        if (msg.sender != address(rewards)) revert Unauthorized();
+        if (round != getCurrentRound()) revert BadInput();
+        uint256 priced = onChainPricedRound;
+        if (round <= priced) return 0;
+        gross = onChainGrossNow();
+        onChainPricedRound = uint64(round);
+        onChainAllowance += uint192(gross * (round - priced));
+        _issue(_bankReserve(round + 1));
     }
 
     /// The holder or the token's appoint authority may reassign; zero returns it
@@ -294,19 +353,20 @@ contract SatoriHub is IEngineGateway, SatoriUUPS {
         address holder = emissionHolder();
         if (msg.sender != holder && msg.sender != token.appointAuthority()) revert Unauthorized();
         emissionAuthority = who;
-        emit EmissionAuthorityChanged(holder, who);
+        emit EmissionAuthorityChanged(holder, emissionHolder());
     }
 
     /// @notice Sets the multiplier the NEXT emission step applies; never moves
     ///         the current or next round's rate. 1e18 stops steps entirely.
-    ///         0 reverts: emission is never ended outright (owner ruling
-    ///         2026-10-14); a dust multiplier winds it down instead.
+    ///         Below MIN_EMISSION_RATIO (0.001) reverts: emission is never ended
+    ///         outright (owner ruling 2026-10-14), and a mistyped `1` (wei, meant
+    ///         as 1.0) would zero the rate at the next step for good.
     ///         Leaving 1e18 re-bases the threshold to `issued + STEP_ROUNDS ×
     ///         rate`, so issuance counted while steps were off is not stepped
     ///         through in one burst.
     function setEmissionRatio(uint256 ratioWad) external {
         if (msg.sender != emissionHolder()) revert Unauthorized();
-        if (ratioWad == 0 || ratioWad > type(uint64).max) revert BadInput();
+        if (ratioWad < MIN_EMISSION_RATIO || ratioWad > type(uint64).max) revert BadInput();
         EmissionSchedule storage s = emission;
         if (s.ratioWad == 1e18 && ratioWad != 1e18) {
             uint256 rate = s.rate;
@@ -333,17 +393,21 @@ contract SatoriHub is IEngineGateway, SatoriUUPS {
         return rate - rate * token.devFeeBps() / 10000;
     }
 
-    function _addIssued(uint256 general) internal {
-        if (general == 0) return;
+    /// Reports `general` as earned; the token books the fee at its own rate and
+    /// the issuance counter adds exactly what the token added, so the hub holds
+    /// no copy of the fee arithmetic to drift. Seeded from the token in `_init`.
+    function _accrue(uint256 general) internal returns (uint256 generalTotal) {
+        uint256 fee;
+        (generalTotal, fee) = token.accrueRewards(general);
         uint256 old = emission.issued;
-        uint256 n = old + general * 10000 / (10000 - token.devFeeBps());
+        uint256 n = old + general + fee;
         if (n >= NO_STEP) n = NO_STEP - 1;
         emission.issued = uint128(n);
         emit EmissionIssued(n - old, n);
     }
 
     function _issue(uint256 general) internal {
-        _addIssued(general);
+        if (general != 0) _accrue(general);
         _applySteps();
     }
 
@@ -368,7 +432,8 @@ contract SatoriHub is IEngineGateway, SatoriUUPS {
         if (s.from == 0) revert EmissionUnseeded();
         if (ratio == 1e18) return;
         uint256 cur = getCurrentRound();
-        _addIssued(_bankReserve(cur + 1, _generalCap()));
+        uint256 due = _bankReserve(cur + 1);
+        if (due != 0) _accrue(due);
         uint256 issued = s.issued;
         uint256 next = s.nextStepAt;
         uint256 rate = s.rate;
@@ -399,22 +464,17 @@ contract SatoriHub is IEngineGateway, SatoriUUPS {
     function gameBurn()   internal pure returns (uint256) { return GAME_BURN; }
     function bountyBurn() internal pure returns (uint256) { return GAME_BURN; }
 
-    /// Called by rewards (on-chain path) or merkle (reserve path). The hub
-    /// enforces the merkle/on-chain split; the token enforces the global cap.
+    /// Called by rewards (on-chain path) or merkle (reserve path). Each lane
+    /// mints only what was reported for it; the token caps their sum.
     function rewardMint(address to, uint256 amount) external {
-        uint256 cur = getCurrentRound();
-        // A step fired here moves only rounds >= cur+1, so `generalCap` (through
-        // cur) is the same before and after `_issue`.
-        uint256 generalCap = _generalCap();
-        _issue(_bankReserve(cur, generalCap));
-        // Senior dev carve-out: the general lanes (on-chain + merkle reserve) may
-        // only fill the ceiling net of the token's full dev accrual, so the hub
-        // never hands the token a mint its own carve-out would reject near the cap.
         if (msg.sender == address(rewards)) {
-            // Addition form: never underflows even if the reserve outgrows the cap.
-            if (onChainMinted + amount + merkleReserveCumulative > generalCap) revert BudgetExceeded();
+            // Everything reported, less the reserve the merkle lane holds.
+            // Addition form: never underflows. No reserve bank here, so a full
+            // envelope can never block a claim of room already reported.
+            if (onChainMinted + amount + merkleReserveCumulative > token.generalAccrued()) revert BudgetExceeded();
             onChainMinted += amount;
         } else if (merkle != address(0) && msg.sender == merkle) {
+            _issue(_bankReserve(getCurrentRound() + 1));
             if (merkleMinted + amount > merkleReserveCumulative) revert BudgetExceeded();
             merkleMinted += amount;
         } else {
@@ -434,14 +494,11 @@ contract SatoriHub is IEngineGateway, SatoriUUPS {
     }
 
     function markParticipated(address user) external {
-        if (msg.sender != address(rewards) && msg.sender != address(voting) &&
-            msg.sender != address(registry) && msg.sender != address(games) &&
-            msg.sender != address(bounties) && msg.sender != address(engine)) revert Unauthorized();
+        if (msg.sender != address(rewards)) revert Unauthorized();
         token.markParticipated(user);
     }
 
-    /// Only rewards clears the delegator gate (on undelegate); no other child has
-    /// a reason to, so this stays tighter than markParticipated.
+    /// Only rewards sets and clears the delegator gate.
     function unmarkParticipated(address user) external {
         if (msg.sender != address(rewards)) revert Unauthorized();
         token.unmarkParticipated(user);
@@ -450,7 +507,7 @@ contract SatoriHub is IEngineGateway, SatoriUUPS {
     function chargeBountyBurn(address funder) external returns (uint256 fee) {
         if (msg.sender != address(bounties)) revert Unauthorized();
         fee = bountyBurn();
-        if (fee > 0) token.transferFrom(funder, address(this), fee);
+        token.burnFrom(funder, fee);
     }
 
     // ---- IEngineGateway (only the engine) ----
@@ -470,65 +527,26 @@ contract SatoriHub is IEngineGateway, SatoriUUPS {
         }
     }
 
-    /// The general lanes' shared cap. Asks the TOKEN for the arithmetic rather
-    /// than duplicating it: the fee rate moves and its reservation is segmented
-    /// at each change, so a second copy of the formula would drift. The hub
-    /// supplies its own stricter ceiling and takes the token's answer.
-    function _generalCap() internal view returns (uint256) {
-        return token.generalCeilingFor(emissionCeiling());
-    }
-
-    /// The most the Merkle reserve may ever hold: the general cap LESS what the
-    /// on-chain lane has already minted.
-    ///
-    /// Not the bare general cap. `onChainMinted` is seeded at initialize() with
-    /// the genesis mint's general share, before any reserve exists — so a
-    /// reserve clamped at the full cap could still carry the two lanes together
-    /// past it by exactly that seed.
-    ///
-    /// This never strands an already-banked reserve. The on-chain branch of
-    /// `rewardMint` enforces `onChainMinted + amount + reserve <= generalCap`,
-    /// so after every on-chain mint `generalCap - onChainMinted >= reserve`
-    /// already holds: the on-chain lane cannot grow into the reserve, and this
-    /// bound therefore only ever moves up.
-    function _reserveCap(uint256 generalCap) internal view returns (uint256) {
-        uint256 minted = onChainMinted;
-        return generalCap > minted ? generalCap - minted : 0;
-    }
-
     /// Banks reserve rounds [last, endExclusive) at the effective dial and
-    /// returns the positive change in the cumulative, which counts as issued.
-    ///
-    /// CLAMPED AT `_reserveCap()`. The rate can fall under a standing dial (a
-    /// step or a fee-bps raise), and the merkle branch of `rewardMint` bounds
-    /// itself by this cumulative alone, so an unclamped one would let the merkle
-    /// lane mint past the general cap. SatoriMerkle's partial-pay clamp mirrors
-    /// this exact number. Floored at `merkleMinted`; the cumulative may fall to
-    /// that floor after a fee-bps raise, which never underflows the delta.
-    function _bankReserve(uint256 endExclusive, uint256 generalCap) internal returns (uint256) {
+    /// returns the change in the cumulative, which the caller reports as
+    /// earned. Never clamped: a banked reserve is reported, and nothing
+    /// reported can be taken back.
+    function _bankReserve(uint256 endExclusive) internal returns (uint256) {
         uint256 last = _merkleReserveLastRound;
         if (endExclusive <= last) return 0;
         _merkleReserveLastRound = endExclusive;
         if (_merkleReserveRate == 0) return 0;
-        uint256 old = merkleReserveCumulative;
-        uint256 raw = old + _effDial() * (endExclusive - last);
-        uint256 next = _clampReserve(raw, generalCap);
-        if (next != raw) emit MerkleReserveClamped(next, endExclusive);
-        if (next != old) emit MerkleReserveBanked(next, endExclusive);
+        uint256 add = _effDial() * (endExclusive - last);
+        if (add == 0) return 0;
+        uint256 next = merkleReserveCumulative + add;
         merkleReserveCumulative = next;
-        return next > old ? next - old : 0;
-    }
-
-    function _clampReserve(uint256 v, uint256 generalCap) internal view returns (uint256) {
-        uint256 cap = _reserveCap(generalCap);
-        if (v > cap) v = cap;
-        uint256 floor = merkleMinted;
-        return v < floor ? floor : v;
+        emit MerkleReserveBanked(next, endExclusive);
+        return add;
     }
 
     /// The reserve yields to residual−1 when the rate falls under the dial,
-    /// mirroring the 1-wei on-chain gross floor in SatoriRewards._onChainGrossNow:
-    /// the two lanes then still sum to the residual.
+    /// mirroring the 1-wei on-chain gross floor in `onChainGrossNow`: the two
+    /// lanes then still sum to the residual.
     function _effDial() internal view returns (uint256) {
         uint256 d = _merkleReserveRate;
         uint256 res = _residual(emission.rate);
@@ -541,32 +559,29 @@ contract SatoriHub is IEngineGateway, SatoriUUPS {
     function setMerkleReserveRate(uint256 newRate) external {
         if (msg.sender != address(rewards)) revert Unauthorized();
         uint256 cur = getCurrentRound();
-        _issue(_bankReserve(cur + 1, _generalCap()));
+        _issue(_bankReserve(cur + 1));
         if (newRate >= residualNext()) revert BadInput();
         _merkleReserveRate = newRate;
         emit MerkleReserveRateSet(newRate, cur + 1, merkleReserveCumulative);
     }
 
+    /// What the merkle lane may mint once the due reserve is banked: exactly
+    /// what its `rewardMint` branch accepts, which SatoriMerkle's partial pay
+    /// mirrors.
     function merkleReserveCeiling() public view returns (uint256) {
-        uint256 cur = getCurrentRound();
+        uint256 end = getCurrentRound() + 1;
         uint256 last = _merkleReserveLastRound;
         uint256 cum = merkleReserveCumulative;
-        uint256 projected = cur > last ? cum + _effDial() * (cur - last) : cum;
-        return _clampReserve(projected, _generalCap());
+        return end > last ? cum + _effDial() * (end - last) : cum;
     }
 
     /// This round's dev slice: `devFeeBps` of the round's emission.
     ///
-    /// Computed HERE, not passed through, because the token no longer knows the
-    /// per-round rate — the schedule lives in this contract. The two stay
-    /// consistent by construction: 15% of each round's emission, accumulated,
-    /// is exactly the 3/17-of-the-general-lane that `token.devFeeCeiling()`
-    /// reports.
-    ///
-    /// The bps is read from the token rather than mirrored here. It is the
-    /// authority — its `rewardMint` enforces the same split — and a second copy
-    /// of a number that must agree is how copies drift apart. That decision is
-    /// what lets the DAO's fee dial flow through this contract untouched.
+    /// Computed HERE, not passed through, because the token does not know the
+    /// per-round rate — the schedule lives in this contract. The bps is read
+    /// from the token rather than mirrored here: the token books the fee at
+    /// that rate, and a second copy of a number that must agree is how copies
+    /// drift apart.
     function devRateNow() external view returns (uint256) {
         return _devRateNow();
     }
@@ -593,14 +608,17 @@ contract SatoriHub is IEngineGateway, SatoriUUPS {
     function initializeDefaultStream() external {
         if (defaultStreamInitialized) revert AlreadySet();
         defaultStreamInitialized = true;
-        uint32 defId = registry.createSimpleDataStream(address(this), "Satori Predictions", address(this), 1440);
+        // The default stream is the Coined stream "satori": its value is the crowd's
+        // own prediction flow, like any Coined stream, so nothing writes it by hand.
+        // Free and uncapped by capabilities because the protocol is the creator.
+        uint32 namedId = registry.namedAdapterId();
+        if (namedId == 0) revert DefaultStreamNotFirst();
+        uint32 defId = registry.createAdapterDataStream(address(this), "satori", namedId, address(engine), "", 60);
         if (defId != DEFAULT_STREAM_ID) revert DefaultStreamNotFirst();
         games.createGame(address(this), DEFAULT_STREAM_ID, 0, "", "Satori Predictions");
 
         // No bootstrap vote: the default game's weight is DERIVED (a floored
         // share of all other burned weight), and `voting.vote` rejects it outright.
-        engine.markDefaultStreamInitialized();
-        registry.setValueForRound(DEFAULT_STREAM_ID, 0, uint24(getCurrentRound()));
     }
 
     function _onlyAdmin() private view {
@@ -615,23 +633,21 @@ contract SatoriHub is IEngineGateway, SatoriUUPS {
         if (!rewards.capabilityAllowed(capId, who)) revert CapabilityDisabled();
     }
 
-    function registerCommunityAdapter(address impl, string calldata name) external returns (uint16 id) {
+    function registerCommunityAdapter(address impl, string calldata name) external returns (uint32 id) {
         _requireCapability(CAP_REGISTER_STREAM_ADAPTER);
-        uint256 fee = streamBurn();
-        if (fee > 0) token.transferFrom(msg.sender, address(this), fee);
+        _chargeRegistration();
         id = registry.registerAdapter(impl, name, msg.sender, true);
     }
-    function registerCommunityGameAdapter(address impl, string calldata name) external returns (uint16 gameTypeId) {
+    function registerCommunityGameAdapter(address impl, string calldata name) external returns (uint32 gameTypeId) {
         _requireCapability(CAP_REGISTER_GAME_ADAPTER);
-        uint256 fee = streamBurn();
-        if (fee > 0) token.transferFrom(msg.sender, address(this), fee);
+        _chargeRegistration();
         gameTypeId = games.registerGameAdapter(impl, msg.sender, name, true);
     }
-    function registerAdapter(address impl, string calldata name) external returns (uint16 id) {
+    function registerAdapter(address impl, string calldata name) external returns (uint32 id) {
         _onlyAdmin();
         id = registry.registerAdapter(impl, name, msg.sender, false);
     }
-    function registerGameAdapter(address impl, string calldata name) external returns (uint16 gameTypeId) {
+    function registerGameAdapter(address impl, string calldata name) external returns (uint32 gameTypeId) {
         _onlyAdmin();
         gameTypeId = games.registerGameAdapter(impl, msg.sender, name, false);
     }
@@ -648,7 +664,7 @@ contract SatoriHub is IEngineGateway, SatoriUUPS {
     /// @notice `createAdapterDataStream`, paying the stream fee (none for the named
     ///         adapter) with a signed SATORI authorization instead of a prior approval.
     function createAdapterDataStreamWithPermit(
-        string memory name, uint16 adapterId, address provider, bytes memory config,
+        string memory name, uint32 adapterId, address provider, bytes memory config,
         uint24 minCadenceMinutes, SatoriTypes.SatoriPermit calldata p
     ) external returns (uint32 streamId) {
         _tryPermit(p);
@@ -667,7 +683,7 @@ contract SatoriHub is IEngineGateway, SatoriUUPS {
     }
 
     function createAdapterDataStream(
-        string memory name, uint16 adapterId, address provider, bytes memory config, uint24 minCadenceMinutes
+        string memory name, uint32 adapterId, address provider, bytes memory config, uint24 minCadenceMinutes
     ) public returns (uint32 streamId) {
         // `adapterId != 0`: a registry with no named adapter reports 0, which must not make adapter 0 free.
         if (adapterId != 0 && adapterId == registry.namedAdapterId()) _requireCapability(CAP_CREATE_STREAM);
@@ -675,30 +691,36 @@ contract SatoriHub is IEngineGateway, SatoriUUPS {
         streamId = registry.createAdapterDataStream(msg.sender, name, adapterId, provider, config, minCadenceMinutes);
         games.createGame(address(this), streamId, 0, "", "");
     }
-    function createAdapterDataStream(string memory name, uint16 adapterId, address provider, bytes memory config) external returns (uint32) {
+    function createAdapterDataStream(string memory name, uint32 adapterId, address provider, bytes memory config) external returns (uint32) {
         return createAdapterDataStream(name, adapterId, provider, config, 1440);
     }
 
-    function createGame(uint32 streamId, uint16 gameTypeId, bytes memory gameConfig, string memory name) external returns (uint32 gameId) {
+    function createGame(uint32 streamId, uint32 gameTypeId, bytes memory gameConfig, string memory name) external returns (uint32 gameId) {
         _requireCapability(CAP_AUTHOR_GAME);
         uint256 fee = gameBurn();
-        if (fee > 0) token.transferFrom(msg.sender, address(this), fee);
+        token.burnFrom(msg.sender, fee);
         return games.createGame(msg.sender, streamId, gameTypeId, gameConfig, name);
     }
 
     /// @notice `createGame` with an EXPLICIT target — the ladder path
     ///         (question 6): weekly/monthly rungs on the same stream.
-    function createGame(uint32 streamId, uint16 gameTypeId, bytes memory gameConfig, string memory name, uint24 targetMinutes_) external returns (uint32 gameId) {
+    function createGame(uint32 streamId, uint32 gameTypeId, bytes memory gameConfig, string memory name, uint24 targetMinutes_) external returns (uint32 gameId) {
         _requireCapability(CAP_AUTHOR_GAME);
         uint256 fee = gameBurn();
-        if (fee > 0) token.transferFrom(msg.sender, address(this), fee);
+        token.burnFrom(msg.sender, fee);
         return games.createGame(msg.sender, streamId, gameTypeId, gameConfig, name, targetMinutes_);
+    }
+
+    /// Community adapter registration burns the admin-set `registrationFee`, not
+    /// the flat stream burn.
+    function _chargeRegistration() private {
+        token.burnFrom(msg.sender, rewards.registrationFee());
     }
 
     function _chargeStream() private {
         _requireCapability(CAP_CREATE_STREAM);
         uint256 fee = streamBurn();
-        if (fee > 0) token.transferFrom(msg.sender, address(this), fee);
+        token.burnFrom(msg.sender, fee);
     }
 
 
@@ -957,14 +979,20 @@ contract SatoriHub is IEngineGateway, SatoriUUPS {
         if (ECDSA.recover(digest, sig) != r.user) revert BadRelaySignature();
         _tryPermitFor(r.user, p);
         // A claim pays its fee out of the claim (rewards mints it to the relayer),
-        // so a transfer-locked wallet can claim. Every other action pulls the fee
-        // first: Predict and DelegatePrediction set the lane-A lock inside the
-        // action, and the token's transfer gate would then refuse it.
+        // so a transfer-locked wallet can claim. Every other action takes the fee
+        // first, before the action can set a lock: from the wallet when it can move
+        // SATORI, and from its unclaimed rewards when a lock (a prediction this or
+        // last round, or a delegation) blocks the transfer. The lock is never
+        // lowered for it: the relayer is the user's choice, so that would let a
+        // user move funds past the lock to a second wallet named as relayer.
         RelayAction a = RelayAction(r.action);
         if (a == RelayAction.Claim) {
             rewards.claimWithFee(r.user, abi.decode(r.data, (address)), msg.sender, r.fee);
         } else {
-            if (r.fee > 0) token.transferFrom(r.user, msg.sender, r.fee);
+            if (r.fee > 0) {
+                try token.transferFrom(r.user, msg.sender, r.fee) {}
+                catch { rewards.claimWithFee(r.user, r.user, msg.sender, r.fee); }
+            }
             _dispatchRelay(r.user, a, r.data);
         }
         emit Relayed(r.user, msg.sender, r.action, r.nonce, r.fee);
@@ -1039,10 +1067,20 @@ contract SatoriHub is IEngineGateway, SatoriUUPS {
     EmissionSchedule public emission;
     address public emissionAuthority;
 
+    /// What the on-chain lane may have reported in all: the genesis share plus
+    /// every priced round's gross (`freezeRoundGross`), packed with the round
+    /// last priced. 1440e18 x rounds never nears 2^192. Appended — append-only
+    /// layout.
+    uint192 public onChainAllowance;
+    uint64  public onChainPricedRound;
+
+    /// Set by `freezeVoteLockGovernor`; the pointer cannot move after. Appended.
+    bool public voteLockGovernorFrozen;
+
     /// Upgrade authority = the token's governor, read from PROXY STORAGE
     /// (`satoriToken`, set once at init) so a hub upgrade compiled with a
     /// different `token` immutable can't reroute upgrade authority (phase-2
-    /// review, Finding 2). Same key as the engine; dies with renounceGovernor().
+    /// review, Finding 2). Same key as the engine; renouncing the root governor does not end upgrades, only `renounceUpgrade` (per contract) does.
     /// Compile-time identity — pinned by SatoriUUPS.upgradeTo so only another
     /// SatoriHub implementation can ever be installed here.
     function _contractId() internal pure override returns (bytes32) {

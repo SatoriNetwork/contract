@@ -98,14 +98,15 @@ contract SatoriVoting is ISatoriVoting, SatoriUUPS {
         uint256 indexed round,
         uint256 amountBurned,
         uint256 weightAdded,
-        uint256 newGameWeight
+        uint256 newGameWeight,
+        uint256 newTotalBurnedWeight
     );
 
     event GameRecordedForRound(uint32 indexed gameId, uint256 indexed round, uint256 weight, uint256 roundTotal);
 
     event SatoriCoreSet(address indexed newCore);
 
-    event GameApprovedSet(uint32 indexed gameId, bool approved);
+    event GameApprovedSet(uint32 indexed gameId, bool approved, uint256 newTotalBurnedWeight);
 
     event VotesMoved(
         address indexed voter,
@@ -114,7 +115,8 @@ contract SatoriVoting is ISatoriVoting, SatoriUUPS {
         uint256 round,
         uint256 amount,
         uint256 newFromWeight,
-        uint256 newToWeight
+        uint256 newToWeight,
+        uint256 newTotalBurnedWeight
     );
 
     // ========== Custom Errors ==========
@@ -147,6 +149,11 @@ contract SatoriVoting is ISatoriVoting, SatoriUUPS {
 
     modifier onlyCore() {
         if (msg.sender != satoriCore && msg.sender != satoriEngine) revert OnlySatoriCore();
+        _;
+    }
+
+    modifier onlyEngine() {
+        if (msg.sender != satoriEngine) revert OnlySatoriCore();
         _;
     }
 
@@ -220,12 +227,14 @@ contract SatoriVoting is ISatoriVoting, SatoriUUPS {
      * @dev Revocation stops scoring for ALL rounds including those that predate
      *      it — without that, an operator could farm a manipulated game, wait
      *      for revocation, and still score rounds already predicted. Re-approving
-     *      restores the weight exactly (minus whatever `moveVotes` moved off in
-     *      between, which is not clawed back).
+     *      restores the weight (minus whatever `moveVotes` moved off in between,
+     *      which is not clawed back) and helps predictions still unsettled. A
+     *      prediction settled while the game is revoked earns nothing and is not
+     *      re-scored, so this is a kill switch, not a pause.
      */
     function setGameApproved(uint32 gameId, bool approved) external {
         if (msg.sender != _rewardsAdmin()) revert NotAdmin();
-        if (gameId == 0) revert UnknownGame();
+        if (gameId == 0 || !ISatoriGames(satoriGames).gameExists(gameId)) revert UnknownGame();
         if (gameId == DEFAULT_STREAM_ID) revert CannotSetDefaultApproval();
         if (gameApproved[gameId] == approved) return;   // idempotent
 
@@ -238,7 +247,7 @@ contract SatoriVoting is ISatoriVoting, SatoriUUPS {
                 totalBurnedWeight -= w;
             }
         }
-        emit GameApprovedSet(gameId, approved);
+        emit GameApprovedSet(gameId, approved, totalBurnedWeight);
     }
 
     /// @notice Whether `gameId` may carry weight, be recorded, and score:
@@ -276,7 +285,7 @@ contract SatoriVoting is ISatoriVoting, SatoriUUPS {
         gameBurnAtRound[gameId][round] += weightAdded;
         totalBurnAtRound[round] += weightAdded;
 
-        emit Voted(voter, gameId, round, amount, weightAdded, newWeight);
+        emit Voted(voter, gameId, round, amount, weightAdded, newWeight, totalBurnedWeight);
     }
 
     /// @dev The one place a game is judged fit to receive weight, shared by
@@ -318,7 +327,7 @@ contract SatoriVoting is ISatoriVoting, SatoriUUPS {
         gameWeight[toGame] = newToWeight;
         totalBurnedWeight += amount;
 
-        emit VotesMoved(msg.sender, fromGame, toGame, round, amount, newFromWeight, newToWeight);
+        emit VotesMoved(msg.sender, fromGame, toGame, round, amount, newFromWeight, newToWeight, totalBurnedWeight);
     }
 
     // ========== Weight reads ==========
@@ -415,7 +424,7 @@ contract SatoriVoting is ISatoriVoting, SatoriUUPS {
      * @dev A non-live game is skipped: the prediction still executes, it simply
      *      leaves no record here, so it can never be scored.
      */
-    function recordGameVotesForRound(uint32 gameId, uint256 round) external override onlyCore {
+    function recordGameVotesForRound(uint32 gameId, uint256 round) external override onlyEngine {
         if (!gameLive(gameId)) return;
         if (gameVotesAtRound[gameId][round] != 0) return;   // already recorded
 

@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo, useEffect } from 'react';
 import { StreamBasic } from './useStreamList';
+import { MAX_BATCH_PREDICTIONS } from '../lib/txGasBudget';
 
 // The selection queue stays stream-keyed (stream<->game is 1:1). At submit
 // time App.tsx resolves each `streamId` to its gameId via the useGames bridge
@@ -21,40 +22,11 @@ export interface PredictionEntry {
   displayDirection?: number;
 }
 
-/// Most games one batch may carry. A GAS ceiling, not a protocol rule — the
-/// contract imposes no cap at all (BatchPrediction.test.js: "No batch-size cap:
-/// large batches succeed as long as the user has enough power and gas"), so the
-/// only thing standing between a user and an unsendable transaction is this.
-///
-/// SIZED FOR THE WORST REALISTIC CASE, which is the DEFAULT case: a predictor
-/// who has been delegated to, and who is the first to predict each game this
-/// round. Delegation is what instant signing does, and at launch there is
-/// rarely anyone else to have recorded the game first — `_recordVotes` charges
-/// only the round's first predictor of a game, so "someone else went first" is
-/// a discount you cannot rely on.
-///
-/// Measured steady state (predict + settle last round) on that path:
-///    8 games → 2,298,305   (77% of a 3M limit)
-///   10 games → 2,763,608   (92%)  ← the last size that fits
-///   12 games → 3,208,158   (107% — over)
-///   16 games → 4,101,181   (137% — over by a third)
-///
-/// The same batch costs ~2.6M at 16 games when the user is NOT delegated and
-/// others already recorded the games — which is exactly the measurement that
-/// made 16 look safe. It is not, for the path most users will be on.
-///
-/// Delegator COUNT is irrelevant: 1, 4 and 8 delegators all cost the same, so
-/// this holds for a popular predictor as much as a fresh one.
-///
-/// Remaining headroom eater: a game the user holds a bounty stake on costs
-/// ~126k more. The wallet enforces the real ceiling; the hard cap below just
-/// stops the obvious overrun. See test/BatchPredictionGasScaling.test.js.
-///
-/// HARD cap — the most a single round's batch may queue. Base's ~30M block gas
-/// / ~334k per delegated predict+settle (~190k per-stream + ~142k delegation
-/// premium) ≈ 89, so 85 leaves headroom for the bounty-stake eater without a
-/// gas revert. At the hard cap the user must submit; they cannot add more.
-const HARD_MAX_PREDICTIONS = 85;
+/// Most games one batch may carry. A GAS ceiling, not a protocol rule: the
+/// contract imposes no cap (BatchPrediction.test.js), but Base rejects any
+/// transaction over 2^24 gas, so this is sized against that in lib/txGasBudget.
+/// At the hard cap the user must submit; they cannot add more.
+const HARD_MAX_PREDICTIONS = MAX_BATCH_PREDICTIONS;
 /// SOFT limit — how many the flow surfaces before the submit/continue screen.
 /// A human wants a quick game, not dozens of graphs, so the primary list is the
 /// user's eligible FAVORITES if they have at least this many, else their
@@ -113,17 +85,10 @@ export function usePredictionFlow(
   const orderedStreams = useMemo(() => {
     const favSet = new Set(favorites);
     // Only include streams that have values (the contract requires a recent
-    // value to predict). The default stream (id 1, bound 1:1 to the default
-    // binary game, gameId 1) is exempt: the contract auto-flushes its value
-    // via flushDefaultStream() so it's always predictable when eligible — even
-    // on a fresh deploy where its valueHour is still 0. We gate on the stream
-    // id here because the flow is stream-keyed (1:1 stream<->game) and
-    // DEFAULT_STREAM_ID == 1 — always predictable when eligible (its value is
-    // written lazily by flushDefaultStream at predict time). The eligibility
-    // grouping below decides whether it's shown. A named stream is exempt too:
-    // predict's own pull writes it once the clock hour has advanced
-    // (SatoriRegistry.updateValues).
-    const predictable = streams.filter((s) => s.valueHour > 0 || s.id === 1 || s.isNamed);
+    // value to predict). A named stream is exempt: predict's own pull writes it
+    // once the clock hour has advanced (SatoriRegistry.updateValues). That
+    // includes the default stream, which is the Sentiment stream "satori".
+    const predictable = streams.filter((s) => s.valueHour > 0 || s.isNamed);
 
     const favEligible = favorites
       .filter((id) => {

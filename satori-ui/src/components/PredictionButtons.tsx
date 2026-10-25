@@ -61,10 +61,11 @@ export function PredictionButtons({
     return pressed ? 'text-red-100' : dark ? 'text-red-500' : 'text-red-600';
   };
 
-  /// The sub-label IS the game's question. The scored move runs from the value
-  /// at the moment you predict to the first sample at least `targetMinutes`
-  /// later, so "Higher in 24 hours?" is both the whole rule and the honest
-  /// wording — no region to name, no cadence split.
+  /// The sub-label is the game's ADVERTISED question. The scored move runs from
+  /// the value at the moment you predict to the first sample at least
+  /// `targetMinutes` later — except on a stream posting at least daily with a
+  /// target under 24 cadences, which resolves on the next two samples (about
+  /// 1-2 cadences), whatever duration is advertised.
   const note = (side: 'up' | 'down') =>
     `${side === 'up' ? 'Higher' : 'Lower'} in ${formatTargetDuration(targetMinutes)}?`;
 

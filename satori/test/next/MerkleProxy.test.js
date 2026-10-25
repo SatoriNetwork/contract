@@ -212,7 +212,7 @@ describe("SatoriMerkle behind a proxy — upgradeable claim channel", function (
         publisher: await merkle.rootPublisher(),
         root: await merkle.merkleRoot(),
         cursor: await merkle.alreadyMintedTo(alice.address),
-        total: await merkle.merkleClaimedTotal(),
+        total: await satori.merkleMinted(),
         token: await merkle.satoriToken(),
       };
 
@@ -223,7 +223,7 @@ describe("SatoriMerkle behind a proxy — upgradeable claim channel", function (
       expect(await merkle.rootPublisher()).to.equal(before.publisher);
       expect(await merkle.merkleRoot()).to.equal(before.root);
       expect(await merkle.alreadyMintedTo(alice.address)).to.equal(before.cursor);
-      expect(await merkle.merkleClaimedTotal()).to.equal(before.total);
+      expect(await satori.merkleMinted()).to.equal(before.total);
       expect(await merkle.satoriToken()).to.equal(before.token);
 
       // the channel is not merely readable — it still pays, cumulatively, off
@@ -231,7 +231,7 @@ describe("SatoriMerkle behind a proxy — upgradeable claim channel", function (
       await merkle.connect(publisher).setMerkleRoot(leafOf(alice.address, E(250)));
       await (await merkle.connect(alice).claimMerkle(E(250), [])).wait();
       expect(await token.balanceOf(alice.address)).to.equal(E(250));
-      expect(await merkle.merkleClaimedTotal()).to.equal(E(250));
+      expect(await satori.merkleMinted()).to.equal(E(250));
     });
 
     it("a publisher rotation started before an upgrade completes after it", async function () {

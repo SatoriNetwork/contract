@@ -93,7 +93,7 @@ describe("Bounty fee + payout simulation (end-to-end, demo ERC-20)", function ()
     await bounties.connect(funder).fundBounty(stream, await meme.getAddress(), E(1000), E(100));
 
     expect(await satori.balanceOf(funder.address)).to.equal(funderSatBefore - fee, "funder pays exactly bountyBurn in SATORI");
-    expect(await satori.balanceOf(coreAddr)).to.equal(coreSatBefore + fee, "burn is locked into the core (not sent to a splitter)");
+    expect(await satori.balanceOf(coreAddr)).to.equal(coreSatBefore, "the fee is burned, not held by the core or sent to a splitter");
     // The fee buys NO vote weight. Weight comes only from burnt SATORI, and the
     // default game's share is derived from that — a fee transfer moves neither.
     expect(await voting.weightOf(1)).to.equal(defaultWeightBefore, "the locked fee does not buy the default game any weight");
@@ -164,11 +164,13 @@ describe("Bounty fee + payout simulation (end-to-end, demo ERC-20)", function ()
     expect(aliceEarned).to.be.closeTo((drip * 300n) / 600n, TOL, "Alice gets 3/6 of the drip");
     expect(bobEarned).to.be.closeTo((drip * 100n) / 600n, TOL, "Bob gets 1/6 of the drip");
     expect(carolEarned).to.equal(0n, "wrong-direction staker earns nothing");
-    // Carol's 2/6 stays in the round's pot for reclaimStrandedPot (no leakage).
+    // Carol's 2/6 went back to the pool when her wrong call settled (no leakage).
     const round = (await satori.getCurrentRound()) - 2n;
     expect(await bounties.roundBountyPot(stream, round, memeAddr)
       - await bounties.roundBountyPotClaimed(stream, round, memeAddr))
-      .to.be.closeTo((drip * 200n) / 600n, TOL, "the wrong call's share stays in the pot");
+      .to.equal(0n, "nothing is left in the round's pot");
+    expect(await bounties.pool(stream, memeAddr))
+      .to.be.closeTo(E(3000) - drip + (drip * 200n) / 600n, TOL, "the wrong call's share is back in the pool");
     // The platform fee recipient never receives bounty tokens (payout fee removed).
     expect(await bounties.bountyStake(feeRecipient, memeAddr)).to.equal(0n);
   });

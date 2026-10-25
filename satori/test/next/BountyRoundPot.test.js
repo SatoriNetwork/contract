@@ -88,7 +88,8 @@ describe("B3: a bounty round never pays more than its pot", function () {
       expect(await engine.streaks(u.address, gid)).to.equal(1n);
     }
     expect(await token.getCurrentRound()).to.equal(round);
-    expect(await bounties.roundBountyPot(gid, round, usdAddr)).to.equal(0n);
+    expect(await bounties.roundBountyPot(gid, round, usdAddr)).to.equal(RATE);
+    expect(await bounties.roundBountyPotClaimed(gid, round, usdAddr)).to.equal(0n);
 
     await time.increaseTo(t.base + DAY + 60);
     for (const u of [alice, bob, carol]) {

@@ -106,6 +106,7 @@ contract HistoricalBalanceGovernor {
         uint256 indexed proposalId,
         bytes32 stateRoot,
         bytes32 tokenStorageRoot,
+        uint256 snapshotTotalSupply,
         uint256 voteStart,
         uint256 voteEnd
     );
@@ -236,7 +237,7 @@ contract HistoricalBalanceGovernor {
         p.voteEnd = uint48(block.timestamp + VOTING_PERIOD);
         p.activated = true;
 
-        emit ProposalActivated(proposalId, stateRoot, storageRoot, p.voteStart, p.voteEnd);
+        emit ProposalActivated(proposalId, stateRoot, storageRoot, p.snapshotTotalSupply, p.voteStart, p.voteEnd);
     }
 
     // ------------------------------------------------------------------

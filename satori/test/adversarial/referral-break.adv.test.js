@@ -44,7 +44,7 @@
  */
 
 const { expect } = require("chai");
-const { deploySatoriFixtureNoFee, pack1, warmUpStreak, VOTE, voteFor, warmUpLoyalty } = require("../fixtures");
+const { deploySatoriFixtureNoFee, pack1, warmUpStreak, VOTE, voteFor } = require("../fixtures");
 const { TEST_MARKETING_FEE_RECIPIENT } = require("../next/splitFixture");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
@@ -449,18 +449,14 @@ describe("Referral credit-time skim — adversarial break-test", function () {
       const gid = await makeEligibleStream("Dust", carol);
       await satori.transfer(dave.address, ethers.parseEther("100"));
       await satori.transfer(bob.address, ethers.parseEther("300"));
-      // eve holds a few wei — small enough that her loyalty-weighted pull of
+      // eve holds a few wei — small enough that her pro-rata pull of
       // the whole round pool still lands under the 20-wei skim floor.
       await satori.transfer(eve.address, 5n);
 
       // bob (large) + eve (tiny) delegate to dave. eve's pull lands < 20 wei.
       await satori.connect(bob).delegatePredictionPower(dave.address);
       await satori.connect(eve).delegatePredictionPower(dave.address);
-      // Delegator weight is capital x loyalty and a fresh delegation starts at
-      // L = 0, so eve's sub-20-wei pull -- the whole point of this test -- is
-      // zero without a warm-up. Drains to `owner`; eve's few-wei balance is
-      // her delegated capital and must not move.
-      await warmUpLoyalty(satori, registry, null, dave, [bob, eve], owner, gid);
+      await time.increase(86400);
       await rewards.connect(eve).setReferral(alice.address);
 
       await winOneRound(dave, gid, carol);
@@ -745,11 +741,7 @@ describe("Referral credit-time skim — adversarial break-test", function () {
       await satori.transfer(eve.address, 3n); // eve holds a few wei
       await satori.connect(bob).delegatePredictionPower(dave.address);
       await satori.connect(eve).delegatePredictionPower(dave.address);
-      // Delegator weight is capital x loyalty and a fresh delegation starts at
-      // L = 0, so eve's sub-20-wei pull -- the whole point of this test -- is
-      // zero without a warm-up. Drains to `owner`; eve's few-wei balance is
-      // her delegated capital and must not move.
-      await warmUpLoyalty(satori, registry, null, dave, [bob, eve], owner, gid);
+      await time.increase(86400);
       await rewards.connect(eve).setReferral(alice.address);
 
       const eveStart = await satori.balanceOf(eve.address);

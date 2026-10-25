@@ -61,9 +61,6 @@ export function DelegationTab() {
   const load = useCallback(async () => {
     if (!contracts || !address) return;
     try {
-      // feeSlot() is no longer read: the "How it works" copy used to interpolate
-      // the platform fee, and now states the average share and the loyalty
-      // incentive instead, so the extra round-trip bought nothing.
       const [predInfo, claimInfo, pfEffective, pfStored] = await Promise.all([
         contracts.cached.live.rewards.predictionDelegateInfo(address),
         contracts.cached.live.rewards.claimDelegateInfo(address),
@@ -282,12 +279,7 @@ export function DelegationTab() {
 
       <Collapsible title="How it works:">
         <ul className="space-y-1 text-sm text-blue-800 dark:text-blue-300">
-          {/* Kept to two ideas on purpose. The delegator's actual share is set by
-              a loyalty curve that rewards backing a predictor BEFORE they do
-              well, so any exact percentage stated here would be wrong for most
-              people most of the time. The average and the incentive are the
-              parts worth knowing. */}
-          <li>&#8226; <strong>Prediction Power</strong>: your tokens stay in your wallet but lock while delegated. The delegate predicts using your power, and on average you keep <strong>~90%</strong> of what your share earns while the predictor takes a <strong>10%</strong> fee. Back a predictor who goes on to predict well <em>after</em> you delegate and you earn more than that — the earlier you were behind them, the bigger your share. One-day lock after revoking. Only your token <em>balance</em> is delegated. Any <strong>unclaimed rewards</strong> stay with you, so claim them first if you want them counted toward your delegate&apos;s power.</li>
+          <li>&#8226; <strong>Prediction Power</strong>: your tokens stay in your wallet but lock while delegated. The delegate predicts using your power, and the reward on your share of their power is split with them: the predictor keeps their fee (<strong>10%</strong> unless they set another) and the rest is shared among everyone delegating to them in proportion to the tokens each delegated. One-day lock after revoking. Only your token <em>balance</em> is delegated. Any <strong>unclaimed rewards</strong> stay with you, so claim them first if you want them counted toward your delegate&apos;s power.</li>
           <li>&#8226; <strong>Claim</strong>: pure authorization, the delegate can trigger your claim and pick the recipient. No token lock. They can't predict or vote on your behalf.</li>
           <li>&#8226; All three are independent, delegating one doesn't affect the others. None of these are related to the bounty-token stakes on the Bounty Staking tab, which lock ERC-20s for predict-time boost.</li>
         </ul>

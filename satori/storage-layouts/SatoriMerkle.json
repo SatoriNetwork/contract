@@ -3,60 +3,63 @@
     "label": "_status",
     "slot": "0",
     "offset": 0,
-    "type": "t_uint256"
+    "type": "t_uint256",
+    "shape": "uint256/32"
   },
   {
     "label": "satoriCore",
     "slot": "1",
     "offset": 0,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "rootPublisher",
     "slot": "2",
     "offset": 0,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "pendingRootPublisher",
     "slot": "3",
     "offset": 0,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "merkleRoot",
     "slot": "4",
     "offset": 0,
-    "type": "t_bytes32"
+    "type": "t_bytes32",
+    "shape": "bytes32/32"
   },
   {
     "label": "alreadyMintedTo",
     "slot": "5",
     "offset": 0,
-    "type": "t_mapping(t_address,t_uint256)"
-  },
-  {
-    "label": "merkleClaimedTotal",
-    "slot": "6",
-    "offset": 0,
-    "type": "t_uint256"
+    "type": "t_mapping(t_address,t_uint256)",
+    "shape": "mapping(address/20=>uint256/32)"
   },
   {
     "label": "satoriToken",
-    "slot": "7",
+    "slot": "6",
     "offset": 0,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "deployer",
-    "slot": "8",
+    "slot": "7",
     "offset": 0,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "_initialized",
-    "slot": "8",
+    "slot": "7",
     "offset": 20,
-    "type": "t_bool"
+    "type": "t_bool",
+    "shape": "bool/1"
   }
 ]

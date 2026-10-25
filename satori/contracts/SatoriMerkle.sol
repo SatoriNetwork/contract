@@ -5,26 +5,18 @@ import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "./interfaces/ISatoriCore.sol";
 import "./next/SatoriUUPS.sol";
-
-/// The hub's merkle-lane accounting, as this contract reads it to size a
-/// partial claim: `merkleReserveCeiling()` is the lane's accrual-adjusted
-/// ceiling and `merkleMinted` what the lane has already minted — their
-/// difference is exactly the headroom `SatoriHub.rewardMint` will accept.
-interface IMerkleLaneView {
-    function merkleReserveCeiling() external view returns (uint256);
-    function merkleMinted() external view returns (uint256);
-}
+import "./interfaces/IMerkleLaneView.sol";
 
 /**
  * @title SatoriMerkle
  * @notice The off-chain reward channel: a cumulative Merkle drop that mints
- *         through the Satori core's shared `1440 × rounds` cap as a SECOND,
+ *         through the Satori core's emission schedule as a SECOND,
  *         isolated mint authority.
  *
  *         Its claim path is runtime-independent of `SatoriRewards`: it reads and
  *         calls only the core, never `satoriRewards`, so a broken or paused rewards
  *         contract cannot disable claims directly. And since Phase 2b shipped, the
- *         two minters no longer merely share the `1440 × rounds` cap — the CORE's
+ *         two minters no longer merely share the emission budget — the CORE's
  *         `rewardMint` enforces STRICT per-lane reservation: this channel may mint
  *         at most `merkleReserveCumulative` (the accrued sum of the `offchainBudget`
  *         dial), and the on-chain lane gets the complement. So on-chain emission
@@ -58,9 +50,9 @@ contract SatoriMerkle is ReentrancyGuard, SatoriUUPS {
 
     mapping(address => uint256) public alreadyMintedTo;
 
-    /// The binding per-lane ceiling is enforced in the CORE (`merkleMinted ≤
-    /// merkleReserveCumulative` in `SatoriHub.rewardMint`), not here.
-    uint256 public merkleClaimedTotal;
+    // The per-lane ceiling and the running total of Merkle mints live in the CORE
+    // (`merkleMinted ≤ merkleReserveCumulative` in `SatoriHub.rewardMint`); this
+    // contract keeps only the per-user cursor.
 
     event SatoriCoreSet(address indexed core);
     event RootPublisherTransferStarted(address indexed oldPublisher, address indexed pendingPublisher);
@@ -199,19 +191,8 @@ contract SatoriMerkle is ReentrancyGuard, SatoriUUPS {
         if (available > 0 && claimable > available) claimable = available;
 
         alreadyMintedTo[msg.sender] = already + claimable; // cursor moves by what is PAID (CEI)
-        merkleClaimedTotal += claimable;
-        ISatoriCore(satoriCore).rewardMint(msg.sender, claimable); // shared 1440×rounds cap
+        ISatoriCore(satoriCore).rewardMint(msg.sender, claimable); // capped by the lane's banked reserve
         emit MerkleClaimed(msg.sender, lifetimeEntitlement, claimable);
-    }
-
-    /// @notice What `user` could still be owed against the current root, given
-    ///         their cumulative entitlement `lifetimeEntitlement`. NOTE: the
-    ///         actual payout of a single claim is additionally clamped to the
-    ///         merkle lane's accrued reserve (see `claimMerkle`) — this view is
-    ///         the outstanding ENTITLEMENT, not a promise it all pays this block.
-    function claimableMerkle(address user, uint256 lifetimeEntitlement) external view returns (uint256) {
-        uint256 already = alreadyMintedTo[user];
-        return lifetimeEntitlement > already ? lifetimeEntitlement - already : 0;
     }
 
     // ========== Proxy plumbing (appended — append-only layout) ==========

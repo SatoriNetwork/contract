@@ -51,8 +51,8 @@
 //      the minter, and a watcher gets a warning shot. What it is NOT worth:
 //      nothing here protects against a deployer key that is compromised while
 //      it still holds root. Step 5 remains the step that actually closes it.
-//   3. MOVE THE ADMIN. Single-step and immediate (`setAdmin` doubles as the
-//      renounce path, which is why it has no accept leg).
+//   3. MOVE THE ADMIN. Single-step and immediate, with no accept leg.
+//      `setAdmin` rejects the zero address, so it cannot renounce.
 //   4. NOMINATE THE ROOT. `setRootAuthority` only nominates — the deployer stays
 //      root until the Safe accepts. Starting it early is what lets the humans
 //      begin collecting signatures.
@@ -294,7 +294,7 @@ async function main() {
   if (!adminDone && adminNow.toLowerCase() === deployer.address.toLowerCase()) {
     steps.push({
       n: 3, label: `set rewards admin to ${newAdmin}`,
-      why: "single-step and immediate — setAdmin doubles as the renounce path",
+      why: "single-step and immediate — no accept leg; zero is rejected",
       run: () => rewards.setAdmin(newAdmin),
     });
   } else if (!adminDone) {

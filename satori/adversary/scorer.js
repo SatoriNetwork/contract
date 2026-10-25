@@ -35,30 +35,23 @@ class Scorer {
     this.startSupply = await token.totalSupply();
     this.startRewardCeiling = await token.rewardCeiling();
     this.startGeneralCap = await this._generalCap();
-    this.startDevCeiling = await token.devFeeCeiling();
+    this.startDevAccrued = await token.devFeeAccrued();
     this.startBlock = await ethers.provider.getBlockNumber();
     this.capitalShare1e18 = (this.startExtraction * 10n ** 18n) / this.startSupply;
   }
 
-  /// The general lanes' shared cap: 85% of the HUB's emission ceiling, the same
-  /// figure SatoriHub.rewardMint enforces.
+  /// What the general lanes could have emitted so far: the HUB's emission
+  /// ceiling net of the fee at the live rate.
   ///
-  /// This replaces `rewardCeiling() - devFeeCeiling()` as the measure of "what
-  /// could have been emitted in the window". That expression was the token's
-  /// `1440 x rounds` envelope less the fee's realized accrual, and both halves
-  /// went wrong at once: the envelope is no longer the emission rate (the hub's
-  /// schedule sits well inside it and decays), and the fee's accrual now tracks
-  /// what was MINTED rather than the clock. The two errors compound in the same
-  /// direction — a fair share computed from the envelope is far too generous,
-  /// which is exactly the direction that makes the clairvoyance detector go
-  /// quiet on a real attack.
+  /// Not the token's `1440 x rounds` envelope: the hub's schedule sits well
+  /// inside it and decays, so a fair share computed from the envelope is far
+  /// too generous — exactly the direction that makes the clairvoyance detector
+  /// go quiet on a real attack.
   async _generalCap() {
     const { token, satori } = this.ctx;
-    // ASK THE TOKEN. It owns the carve-out arithmetic — which is segmented now
-    // that the fee rate can move (humble.md 1b), so a copy here would be both
-    // wrong and silently wrong. Supply the HUB's ceiling, the same way the hub
-    // and the Lens do.
-    return token.generalCeilingFor(await satori.emissionCeiling());
+    const bps = await token.devFeeBps();
+    const ceiling = await satori.emissionCeiling();
+    return ceiling - (ceiling * bps) / 10000n;
   }
 
   async _attackerScored() {
@@ -71,10 +64,10 @@ class Scorer {
   }
 
   async snapshot() {
-    const { token } = this.ctx;
+    const { token, satori } = this.ctx;
     const extraction = await this._extraction(this.attacker);
     const rewardCeiling = await token.rewardCeiling();
-    const devCeiling = await token.devFeeCeiling();
+    const devAccrued = await token.devFeeAccrued();
     const generalCap = await this._generalCap();
     // What the GENERAL lanes could have emitted over the window.
     const emittedInWindow = generalCap - this.startGeneralCap;
@@ -85,18 +78,19 @@ class Scorer {
     const tripwires = [];
     const minted = await token.totalRewardsMinted();
     if (minted > rewardCeiling) tripwires.push(`totalRewardsMinted ${minted} > rewardCeiling ${rewardCeiling}`);
-    // ONE WEI OF SLACK. The genesis split floors the GENERAL share onto the
-    // hub's cap and gives the dev the remainder, while devFeeCeiling floors the
-    // fee's own 3/17 — two roundings that need not agree, so the fee sits a wei
-    // ahead of its ceiling on a fresh deployment. That is why mintDevFee
-    // saturates; asserting strict `<=` here flags every honest run as a break.
+    // The fee is booked at the report (M03): the dev pulls only what was
+    // booked, and nothing mints that was not reported.
     const devMinted = await token.devFeeMinted();
-    if (devMinted > devCeiling + 1n) tripwires.push(`devFeeMinted ${devMinted} > devFeeCeiling ${devCeiling} + 1`);
-    // The lane cap the hub actually enforces. The token's rewardCeiling above is
-    // the outer envelope and would not fire until the hub's schedule had already
-    // been breached many times over.
+    if (devMinted > devAccrued) tripwires.push(`devFeeMinted ${devMinted} > devFeeAccrued ${devAccrued}`);
     const general = minted - devMinted;
-    if (general > generalCap) tripwires.push(`generalMinted ${general} > generalCap ${generalCap}`);
+    const generalAccrued = await token.generalAccrued();
+    if (general > generalAccrued) tripwires.push(`generalMinted ${general} > generalAccrued ${generalAccrued}`);
+    // The hub reports only what its priced rounds allow, which never exceeds
+    // the schedule. The token's rewardCeiling above is the outer envelope and
+    // would not fire until the schedule had already been breached many times
+    // over.
+    const inFlight = await satori.onChainGrossNow();
+    if (generalAccrued > generalCap + inFlight) tripwires.push(`generalAccrued ${generalAccrued} > generalCap ${generalCap} + a round in flight`);
 
     // Fair share of the window's emission for this capital (context for the
     // profit test below).

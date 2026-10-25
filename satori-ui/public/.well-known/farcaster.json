@@ -2,9 +2,9 @@
   "miniapp": {
     "version": "1",
     "name": "Satori",
-    "homeUrl": "https://app.satorinet.io",
-    "iconUrl": "https://app.satorinet.io/icon-1024.png",
-    "splashImageUrl": "https://app.satorinet.io/splash-200.png",
+    "homeUrl": "https://games.satorinet.io",
+    "iconUrl": "https://games.satorinet.io/icon-1024.png",
+    "splashImageUrl": "https://games.satorinet.io/splash-200.png",
     "splashBackgroundColor": "#10051d",
     "subtitle": "On-chain prediction game",
     "tagline": "Predict. Be right. Earn.",
@@ -13,7 +13,7 @@
     "tags": ["prediction", "forecasting", "base", "onchain", "defi"],
     "ogTitle": "Satori Prediction Game",
     "ogDescription": "Predict the next value on any data stream. Build streaks, earn SATORI.",
-    "canonicalDomain": "app.satorinet.io",
+    "canonicalDomain": "games.satorinet.io",
     "requiredChains": ["eip155:8453"]
   }
 }

@@ -52,35 +52,6 @@ async function getStreamIdFromTx(tx, satori) {
     return satori.interface.parseLog(event).args.streamId;
 }
 
-/// Put loyalty on the books before a split can be measured.
-///
-/// Delegator weight is capital x loyalty (docs/design/delegation-loyalty-weighting.md)
-/// and a fresh delegation starts at L = 0, so a delegate's FIRST scored round
-/// pays its delegators nothing — every pinned split below would read zero.
-/// Win one round, then let the fold lag clear so the loyalty materialises.
-///
-/// The pinned wei are UNCHANGED by this: when a predictor's delegators all
-/// share one L, `credit = c*L*share/(L*C)` collapses back to `c*share/C`.
-/// What would move them is leftover earnings, so both sides drain to `sink` —
-/// the predictor's unclaimed counts toward ownPower and would shift the
-/// predictor/delegator ratio, and a delegator's balance IS their capital.
-async function warmLoyalty(satori, registry, predictor, delegators, sink, sid) {
-    // The caller has usually written this stream already this round; setValue is
-    // cadence-gated, so start from a clean one.
-    await advanceRound();
-    await registry.setValue(sid, 50);
-    await satori.connect(predictor).predictMultipleWithPayloads([{ gameId: sid, payload: pack1(UP) }]);
-    await advanceRound();
-    await registry.setValue(sid, 60);
-    await advanceRound();
-    await registry.setValue(sid, 70);
-    await satori.settlePrediction(predictor.address, sid);
-    for (let i = 0; i < 6; i++) await advanceRound();
-    for (const p of [predictor, ...delegators]) {
-        await satori.connect(p)["claim(address)"](sink.address);
-    }
-}
-
 describe("Delegator next-round auto-include", function () {
     let satori, voting, rewards, bounties, registry;
     let owner, alice, bob, carol, dave, eve, platform;
@@ -115,7 +86,6 @@ describe("Delegator next-round auto-include", function () {
         // at 100 effective for round D (pending 50 buffered for D+1). Carol's
         // checkpoint stamped at D+1 with effective 150.
         await satori.connect(carol).delegatePredictionPower(bob.address);
-        await warmLoyalty(satori, registry, bob, [carol], alice, sid);
         await satori.transfer(carol.address, ethers.parseEther("50"));
 
         // No prediction on day D — skip straight to D+1.
@@ -165,9 +135,6 @@ describe("Delegator next-round auto-include", function () {
         // Day D: delegate, receive, predict — all same day. Pool stays at
         // 100 effective for day D's predictions. Pre-receipt invariant.
         await satori.connect(carol).delegatePredictionPower(bob.address);
-        await warmLoyalty(satori, registry, bob, [carol], alice, sid);
-        // Day D proper. The warm-up left a clean round, so the receipt and the
-        // predict below still land on the SAME day, which is what this asserts.
         await advanceRound();
         await registry.setValue(sid, 100);
         await satori.transfer(carol.address, ethers.parseEther("50"));
@@ -216,21 +183,16 @@ describe("Delegator next-round auto-include", function () {
         await satori.transfer(carol.address, ethers.parseEther("50"));
         await satori.connect(carol).delegatePredictionPower(eve.address);
 
-        // "New period captures live balance" is now read off the period
-        // directly. It used to be inferred from the payout on the switch round,
-        // but that is zero either way: the switch opens a fresh period at L = 0,
-        // and delegator weight is capital x loyalty. `startBalance` is the sharp
-        // observable, and it is the value the pool decrements were supposed to
-        // produce — 150 live, not 100 with a stale 50 pending on Bob's side.
+        // "New period captures live balance" is read off the period directly:
+        // `startBalance` is the sharp observable, and it is the value the pool
+        // decrements were supposed to produce — 150 live, not 100 with a stale 50
+        // pending on Bob's side.
         const [p2delegate, , , , p2start] = await rewards.delegationPeriodAt(carol.address, 1);
         expect(p2delegate).to.equal(eve.address);
         expect(p2start).to.equal(ethers.parseEther("150"));
 
-        // Warm Eve's side so the SHARE is measurable too. Eve's own power is 0,
-        // so her whole slice is the delegator pot and Carol takes all of it —
-        // the same 150/150 arithmetic the pinned wei below encode.
-        await warmLoyalty(satori, registry, eve, [carol], alice, sid);
-
+        // Eve's own power is 0, so her whole slice is the delegator pot and Carol
+        // takes all of it — the 150/150 arithmetic the pinned wei below encode.
         await advanceRound();
         await registry.setValue(sid, 100);
         await satori.connect(eve).predictMultipleWithPayloads([{ gameId: sid, payload: pack1(UP) }]);

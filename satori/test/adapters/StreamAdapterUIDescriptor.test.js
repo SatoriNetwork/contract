@@ -20,14 +20,14 @@ const ANY_ADDR = "0x000000000000000000000000000000000000dEaD";
 
 async function deployChainlink() {
   const F = await ethers.getContractFactory("ChainlinkV3Adapter");
-  const c = await F.deploy();
+  const c = await F.deploy(ethers.ZeroAddress);
   await c.waitForDeployment();
   return c;
 }
 
 async function deployUniswap() {
   const F = await ethers.getContractFactory("UniswapV3Adapter");
-  const c = await F.deploy();
+  const c = await F.deploy(ethers.ZeroAddress);
   await c.waitForDeployment();
   return c;
 }

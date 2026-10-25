@@ -52,8 +52,8 @@ library SatoriTypes {
     ///      in practice because every create path rejects `provider == 0`.
     /// @dev `minCadenceMinutes` is set once at creation and never mutated. The
     ///      single static slot packs `provider` (20) + `streamType` (1) +
-    ///      `minCadenceMinutes` (3) + `adapterId` (2)
-    ///      = 26/32 bytes; `config` and `name` are dynamic.
+    ///      `minCadenceMinutes` (3) + `adapterId` (4)
+    ///      = 28/32 bytes; `config` and `name` are dynamic.
     ///      Semantics: minimum minutes that must elapse between successive
     ///      value updates. Updates can come slower; they cannot come faster.
     ///      `adapterId` is 0 for Simple streams; for Adapter streams it indexes
@@ -82,9 +82,9 @@ library SatoriTypes {
                                     //     round drifts on elapsed time alone;
                                     //     a round and above stays bound to the
                                     //     round + the 30-min early allowance.
-        uint16  adapterId;          //  2: Adapter registry index; 0 for Simple
+        uint32  adapterId;          //  4: Adapter registry index; 0 for Simple
         bool    named;              //  1: Named stream (A_named_streams), set once at creation
-        // 27/32 bytes used in slot 0; 5 bytes slack. This repack (2026-09-06,
+        // 29/32 bytes used in slot 0; 3 bytes slack. This repack (2026-09-06,
         // phase 4) deleted the dead derivedBase field and BREAKS the storage
         // lineage: from here the branch is redeploy-only. Authority field removed; the
         // provider's address absorbs both the data-source role (adapter streams)

@@ -1,5 +1,5 @@
 const { expect } = require("chai");
-const { deploySatoriFixture, pack1, voteFor, warmUpLoyalty } = require("./fixtures");
+const { deploySatoriFixture, pack1, voteFor } = require("./fixtures");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
 
@@ -61,12 +61,7 @@ describe("Phantom-credit regression: closed delegation period must not earn endR
         // Alice and Dave both delegate to Bob on day N.
         await satori.connect(alice).delegatePredictionPower(bob.address);
         await satori.connect(dave).delegatePredictionPower(bob.address);
-        // Delegator weight is capital x loyalty and a fresh delegation starts
-        // at L = 0, so dave's "should earn > 0" reads zero without a warm-up.
-        // The helper also DRAINS both, which matters here: alice must end at
-        // exactly 0, and warm-up earnings would otherwise sit in her bucket
-        // and be mistaken for the phantom credit this test hunts.
-        await warmUpLoyalty(satori, registry, null, bob, [alice, dave], eve, streamId);
+        await time.increase(86400);
 
         // Same day N: ALICE UNDELEGATES BEFORE BOB PREDICTS.
         await satori.connect(alice).delegatePredictionPower(ethers.ZeroAddress);
@@ -108,12 +103,7 @@ describe("Phantom-credit regression: closed delegation period must not earn endR
     it("switch before predictor predicts: closed period earns 0 from prior delegate", async function () {
         await satori.connect(alice).delegatePredictionPower(bob.address);
         await satori.connect(dave).delegatePredictionPower(bob.address);
-        // Delegator weight is capital x loyalty and a fresh delegation starts
-        // at L = 0, so dave's "should earn > 0" reads zero without a warm-up.
-        // The helper also DRAINS both, which matters here: alice must end at
-        // exactly 0, and warm-up earnings would otherwise sit in her bucket
-        // and be mistaken for the phantom credit this test hunts.
-        await warmUpLoyalty(satori, registry, null, bob, [alice, dave], eve, streamId);
+        await time.increase(86400);
 
         // Alice switches to eve BEFORE bob predicts.
         await satori.connect(alice).delegatePredictionPower(eve.address);

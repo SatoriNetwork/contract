@@ -2,7 +2,7 @@ const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { loadFixture } = require("@nomicfoundation/hardhat-network-helpers");
 const { deploySatoriFixtureNoFee, pack1, VOTE } = require("../fixtures");
-const { BASE, issuedOf, rewardsSigner, advanceRound } = require("./emissionHelpers");
+const { BASE, issuedOf, issueTo, rewardsSigner, advanceRound, atRound } = require("./emissionHelpers");
 
 // docs/issues/events-are-the-read-model.md: `emission().issued` and
 // `merkleReserveCumulative` must be rebuildable from the hub's logs alone, at
@@ -14,7 +14,6 @@ const E = (n) => ethers.parseEther(String(n));
 
 const RESERVE_ANCHORS = {
   MerkleReserveRateSet: "cumulativeAtFromRound",
-  MerkleReserveClamped: "cumulative",
   MerkleReserveBanked: "cumulative",
   EmissionStepped: "reserveCumulative",
 };
@@ -74,10 +73,9 @@ describe("Emission read model — issued and the Merkle reserve rebuild from log
     await expectFolds("genesis");
   });
 
-  it("scores with and without delegator weight (an evaporated share) fold exactly", async function () {
+  it("scores with delegators fold exactly", async function () {
     await satori.connect(alice).delegatePredictionPower(bob.address);
-    let sawEvaporated = false, sawCommitted = false;
-    for (let i = 0, base = 100; i < 8 && !(sawEvaporated && sawCommitted); i++, base += 100) {
+    for (let i = 0, base = 100; i < 4; i++, base += 100) {
       await registry.setValue(gameA, base);
       await satori.connect(bob).predictMultipleWithPayloads([{ gameId: gameA, payload: pack1(UP) }]);
       await advanceRound();
@@ -88,38 +86,43 @@ describe("Emission read model — issued and the Merkle reserve rebuild from log
       const split = rc.logs.map((l) => { try { return rewards.interface.parseLog(l); } catch { return null; } })
         .find((p) => p && p.name === "RewardSplit");
       expect(split, `round ${i} pays a split`).to.not.equal(undefined);
-      if ((await rewards.delegatorRewardRatePerRound(bob.address, split.args.round)) > 0n) sawCommitted = true;
-      else sawEvaporated = true;
+      expect(await rewards.delegatorRewardRatePerRound(bob.address, split.args.round)).to.be.gt(0n);
       await expectFolds(`round ${i}`);
       await advanceRound();
     }
-    expect(sawEvaporated && sawCommitted).to.equal(true);
   });
 
   it("a silent bank before a fee raise under a capped dial still folds exactly", async function () {
+    const merkleLane = sink;
+    await hub.connect(owner).setSatoriMerkle(merkleLane.address);
     const residual = (await hub.emissionRateNow()) - (await hub.devRateNow());
     await rewards.connect(owner).setOffchainBudget(residual - 1n);
     for (let i = 0; i < 5; i++) await advanceRound();
     await hub.connect(sink).syncEmission();         // banks at the old effective dial
     await expectFolds("after the early bank");
-    for (let i = 0; i < 3; i++) await advanceRound();
+    await atRound(token, (await token.deploymentRound()) + 30n);   // the fee dial's gap counts from genesis
     await token.connect(owner).proposeDevFeeBps(2500);
     await token.connect(owner).acceptDevFeeBps();   // residual - 1 falls under the dial
     await advanceRound();
     const rw = await rewardsSigner(rewards);
-    await hub.connect(rw).noteIssued(E(1));           // banks the rest at the new one
-    await expectFolds("after the fee raise");
+    const banks = async (label, send) => {
+      const before = await hub.merkleReserveCumulative();
+      await send();
+      expect(await hub.merkleReserveCumulative(), `${label} banks`).to.be.gt(before);
+      await expectFolds(label);
+    };
+    await banks("after the fee raise", () => hub.connect(rw).noteIssued(E(1)));   // banks the rest at the new one
     await advanceRound();
-    await hub.connect(rw).rewardMint(sink.address, 1n);
-    await expectFolds("after a rewardMint bank");
+    await banks("after a merkle-lane rewardMint bank", () => hub.connect(merkleLane).rewardMint(sink.address, 1n));
+    await advanceRound();
+    await banks("after a round-pricing bank", async () => hub.connect(rw).freezeRoundGross(await token.getCurrentRound()));
   });
 
   it("an emission step folds exactly", async function () {
     await rewards.connect(owner).setOffchainBudget(E(100));
     await advanceRound();
-    const rw = await rewardsSigner(rewards);
-    const e = await hub.emission();
-    await hub.connect(rw).noteIssued(e.nextStepAt - e.issued);
+    // Real reports cannot reach a threshold inside the envelope; the harness moves the counter.
+    await issueTo(hub, token, null, (await hub.emission()).nextStepAt);
     expect((await hub.emission()).stepsTaken).to.equal(1n);
     await expectFolds("after the step");
   });

@@ -30,6 +30,10 @@ contract BountyInvariantTest is Test {
     function setUp() public {
         handler = new Handler();
         targetContract(address(handler));
+        // bumpIssued warps years ahead, and INV-B4 walks every round since deploy.
+        bytes4[] memory skip = new bytes4[](1);
+        skip[0] = Handler.bumpIssued.selector;
+        excludeSelector(FuzzSelector({addr: address(handler), selectors: skip}));
     }
 
     // ------------------------------------------------------------------

@@ -96,7 +96,7 @@ describe("Prediction System", function () {
       await time.setNextBlockTimestamp(t);
       await expect(satori.connect(alice).predictMultipleWithPayloads([{ gameId: stream1, payload: pack1(UP) }]))
         .to.emit(engine, "PredictionMade")
-        .withArgs(alice.address, stream1, round1, UP, 0, POWER, Math.floor(t / 3600));
+        .withArgs(alice.address, stream1, round1, UP, 0, POWER, Math.floor(t / 3600), (m) => m > 0n, (w) => w > 0n);
 
       // Check prediction stored
       const pred = await satori.predictions(alice.address, stream1, round1);
@@ -492,7 +492,7 @@ describe("Prediction System", function () {
       const currentRound = await satori.getCurrentRound();
       await expect(satori.connect(alice).predictMultipleWithPayloads([{ gameId: stream1, payload: pack1(UP) }]))
         .to.emit(engine, "PredictionMade")
-        .withArgs(alice.address, stream1, currentRound, UP, 0, 1, anyValue);
+        .withArgs(alice.address, stream1, currentRound, UP, 0, 1, anyValue, (m) => m > 0n, anyValue);
     });
 
     it("Should ADMIT a zero-power predictor, who simply earns nothing", async function () {

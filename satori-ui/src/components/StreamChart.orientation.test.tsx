@@ -73,13 +73,11 @@ describe('StreamChart on a plain stream', () => {
 // ---------------------------------------------------------------------------
 // Which moment the reading belongs to, and gaps in the history
 // ---------------------------------------------------------------------------
-// The default stream stores a value only for rounds in which someone predicted,
-// and the value stamped on round N is the number of predictions made in round
-// N-1. Both facts made a correct chart look broken: the newest value is often
+// A stream stores a value only for hours someone touched it, so quiet stretches
+// have no row. That made a correct chart look broken: the newest value is often
 // not the current round's, and the X axis is indexed by POINT, so two bars days
-// apart look adjacent. Rows are HOUR-keyed now (the registry ring is hour-keyed);
-// the default stream writes once per 24h round, so its hours step in 24s and the
-// quiet rounds simply have no row.
+// apart look adjacent. Rows are HOUR-keyed (the registry ring is hour-keyed);
+// this fixture steps in 24s, as a stream touched once a day does.
 
 /// Stream 1's stored history, hour-keyed (round N -> hour N*24).
 const withGaps: ChartStream = {

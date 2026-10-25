@@ -57,7 +57,9 @@ export interface IndexerState {
 /// v10: BountyFunded carries newPool (new topic hash), and BountyDripped /
 ///    StrandedPotReclaimed are indexed into bounty_pool_state, so a pair's
 ///    pool, rate and liveness are folds; bounty_funded is dropped and refilled.
-const EVENT_SCHEMA_VERSION = '13';
+/// v14: PredictionMade's multiplier and weight are stored (prediction_made is
+///    dropped and refilled), and NamedCounterMoved / GameRoundWeight are indexed.
+const EVENT_SCHEMA_VERSION = '14';
 
 export class Indexer {
   private db: Database.Database;
@@ -222,7 +224,7 @@ export class Indexer {
             // finally-judged prediction look identical to a pending one.
             TOPICS.predictionVoided, TOPICS.predictionUnrecoverable,
             TOPICS.predictionDisplaced,
-            TOPICS.streakThresholdSet, TOPICS.curveConfigSet,
+            TOPICS.streakThresholdSet, TOPICS.curveConfigSet, TOPICS.namedCounterMoved,
           ]],
           fromBlock: cursor, toBlock: chunkEnd,
         }),
@@ -241,6 +243,7 @@ export class Indexer {
             TOPICS.rewardSplit, TOPICS.delegatorRewardsAccrued, TOPICS.rewardsClaimed,
             TOPICS.roundBudgetFrozen, TOPICS.offchainBudgetSet,
             TOPICS.predictionDelegated, TOPICS.predictionUndelegated, TOPICS.delegatePowerSynced,
+            TOPICS.gameRoundWeight,
           ]],
           fromBlock: cursor, toBlock: chunkEnd,
         }),
@@ -295,7 +298,7 @@ export class Indexer {
       'INSERT OR REPLACE INTO prediction_scored (block, log_index, tx, user, game_id, round, correct, streak, scaled_weight) VALUES (?,?,?,?,?,?,?,?,?)');
     for (const r of b.scored) scored.run(...r);
     const made = this.db.prepare(
-      'INSERT OR REPLACE INTO prediction_made (block, log_index, tx, predictor, game_id, round, direction, streak, power_wei, power_eth, hour) VALUES (?,?,?,?,?,?,?,?,?,?,?)');
+      'INSERT OR REPLACE INTO prediction_made (block, log_index, tx, predictor, game_id, round, direction, streak, power_wei, power_eth, hour, multiplier, weight) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)');
     for (const r of b.made) made.run(...r);
     const funded = this.db.prepare(
       'INSERT OR REPLACE INTO bounty_funded (block, log_index, tx, funder, game_id, token, received, proposed_rate, new_rate, new_pool) VALUES (?,?,?,?,?,?,?,?,?,?)');
@@ -353,6 +356,12 @@ export class Indexer {
     const curve = this.db.prepare(
       'INSERT OR REPLACE INTO curve_config (block, log_index, tx, dust_floor, top_gradient, bottom_gradient, top_shift) VALUES (?,?,?,?,?,?,?)');
     for (const r of b.curveConfig) curve.run(...r);
+    const counter = this.db.prepare(
+      'INSERT OR REPLACE INTO named_counter_moved (block, log_index, tx, game_id, value) VALUES (?,?,?,?,?)');
+    for (const r of b.namedCounter) counter.run(...r);
+    const roundWeight = this.db.prepare(
+      'INSERT OR REPLACE INTO game_round_weight (block, log_index, tx, game_id, round, up, down) VALUES (?,?,?,?,?,?,?)');
+    for (const r of b.roundWeight) roundWeight.run(...r);
     const namedAdapter = this.db.prepare(
       'INSERT OR REPLACE INTO named_adapter_set (block, log_index, tx, adapter_id) VALUES (?,?,?,?)');
     for (const r of b.namedAdapterSet) namedAdapter.run(...r);
@@ -396,6 +405,8 @@ interface DecodedBatch {
   gameAuthorityTransferred: unknown[][];
   streakThreshold: unknown[][];
   curveConfig: unknown[][];
+  namedCounter: unknown[][];
+  roundWeight: unknown[][];
   namedAdapterSet: unknown[][];
   namedStreamCreated: unknown[][];
   streamValue: unknown[][];
@@ -416,7 +427,7 @@ const emptyBatch = (): DecodedBatch => ({
   voided: [], unrecoverable: [], displaced: [],
   streamCreated: [], namedAdapterSet: [], namedStreamCreated: [],
   gameCreated: [], gameNameUpdated: [], gameAuthorityTransferred: [],
-  streakThreshold: [], curveConfig: [],
+  streakThreshold: [], curveConfig: [], namedCounter: [], roundWeight: [],
   streamValue: [], nameUpdated: [], providerChanged: [],
   voted: [], gameApproved: [], voteMoved: [],
 });
@@ -425,7 +436,7 @@ const countBatch = (b: DecodedBatch) =>
   b.voided.length + b.unrecoverable.length + b.displaced.length +
   b.streamCreated.length + b.namedAdapterSet.length + b.namedStreamCreated.length + b.streamValue.length +
   b.gameCreated.length + b.gameNameUpdated.length + b.gameAuthorityTransferred.length +
-  b.streakThreshold.length + b.curveConfig.length +
+  b.streakThreshold.length + b.curveConfig.length + b.namedCounter.length + b.roundWeight.length +
   b.nameUpdated.length + b.providerChanged.length + b.referralSet.length +
   b.ledger.length + b.roundBudget.length + b.offchainBudget.length + b.delegation.length +
   b.voted.length + b.gameApproved.length + b.voteMoved.length;
@@ -455,7 +466,7 @@ function decodeInto(
         String(a.predictor).toLowerCase(), Number(a.gameId), Number(a.round),
         Number(a.direction), Number(a.streak),
         a.predictionPower.toString(), Number(formatEther(a.predictionPower)),
-        Number(a.hour),
+        Number(a.hour), a.multiplier.toString(), a.weight.toString(),
       ]);
     } else if (t0 === TOPICS.predictionVoided) {
       const a = engineIface.decodeEventLog('PredictionVoided', log.data, log.topics);
@@ -492,6 +503,10 @@ function decodeInto(
         log.blockNumber, log.index, log.transactionHash,
         Number(a.dustFloor), Number(a.topGradient), Number(a.bottomGradient), Number(a.topShift),
       ]);
+    } else if (t0 === TOPICS.namedCounterMoved) {
+      const a = engineIface.decodeEventLog('NamedCounterMoved', log.data, log.topics);
+      // int232: stringified, never coerced.
+      batch.namedCounter.push([log.blockNumber, log.index, log.transactionHash, Number(a.gameId), a.value.toString()]);
     }
   }
   for (const log of bountyLogs) {
@@ -537,6 +552,9 @@ function decodeInto(
       const referral = String(a.referral).toLowerCase();
       batch.referral.push([...head, String(a.owner).toLowerCase(), referral, a.amount.toString(), Number(a.round)]);
       batch.ledger.push([...head, referral, 'referral', null, Number(a.round), a.amount.toString(), a.newUnclaimed.toString()]);
+    } else if (t0 === TOPICS.gameRoundWeight) {
+      const a = rewardsIface.decodeEventLog('GameRoundWeight', log.data, log.topics);
+      batch.roundWeight.push([...head, Number(a.gameId), Number(a.round), a.up.toString(), a.down.toString()]);
     } else if (t0 === TOPICS.rewardSplit) {
       const a = rewardsIface.decodeEventLog('RewardSplit', log.data, log.topics);
       batch.ledger.push([...head, String(a.predictor).toLowerCase(), 'win', Number(a.gameId), Number(a.round),

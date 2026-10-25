@@ -356,7 +356,6 @@ describe("SIM burn-weight conservation", function () {
       await registry.setValue(sA, 1000 + round * 7);
       await registry.setValue(sB, 2000 - round * 5);
       await registry.setValue(sC, 3000 + round * 3);
-      try { await satori.flushDefaultStream(); } catch (e) {}
 
       const burst = 4 + rng.int(5); // 4..8 actions per round
       for (let b = 0; b < burst; b++) {

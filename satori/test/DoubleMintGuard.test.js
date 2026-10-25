@@ -1,5 +1,5 @@
 const { expect } = require("chai");
-const { deploySatoriFixture, pack1, VOTE, warmUpLoyalty } = require("./fixtures");
+const { deploySatoriFixture, pack1, VOTE } = require("./fixtures");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
 
@@ -57,10 +57,7 @@ describe("Double-mint guard for prediction delegators", function () {
   it("delegator cannot double-claim her share across repeated claims", async function () {
     // Alice delegates to Bob (alice = delegator, bob = predictor)
     await satori.connect(alice).delegatePredictionPower(bob.address);
-    // Delegator weight is capital x loyalty and a fresh delegation starts at
-    // L = 0, so alice has nothing to double-claim without a warm-up. Drains to
-    // `carol`, who only votes here, so no balance the test relies on moves.
-    await warmUpLoyalty(satori, registry, null, bob, [alice], carol, stream1);
+    await time.increase(86400);
 
     // R1: Bob predicts (stream1's weight is already permanent from beforeEach)
     await registry.setValue(stream1, 100);
@@ -114,10 +111,7 @@ describe("Double-mint guard for prediction delegators", function () {
   it("delegator who has NOT claimed can still claim after predictor claims", async function () {
     // Alice delegates to Bob
     await satori.connect(alice).delegatePredictionPower(bob.address);
-    // Delegator weight is capital x loyalty and a fresh delegation starts at
-    // L = 0, so alice has nothing to double-claim without a warm-up. Drains to
-    // `carol`, who only votes here, so no balance the test relies on moves.
-    await warmUpLoyalty(satori, registry, null, bob, [alice], carol, stream1);
+    await time.increase(86400);
 
     // R1: Bob predicts (stream1's weight is already permanent from beforeEach)
     await registry.setValue(stream1, 100);

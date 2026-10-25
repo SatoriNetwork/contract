@@ -12,7 +12,7 @@
  *     called directly from a non-core EOA.
  *   - Cross-reference resolution at wiring: after setSatoriCore the resolved
  *     back-references (Registry.satoriRewards, Rewards.satoriRegistry,
- *     Rewards.satoriGames, Games.satoriRegistry) equal the core's getters.
+ *     Games.satoriRegistry) equal the core's getters.
  *   - _update skip-mask correctness: a transfer into a participant
  *     prediction-delegator from a never-participated sender STILL runs the
  *     sync (delegate pool grows); a transfer between two never-participated
@@ -176,17 +176,15 @@ describe("COV dependencies-wiring: setSatoriCore guards, onlyCore, cross-refs, s
     // must equal the core's getters after setSatoriCore.
     // ------------------------------------------------------------------
     describe("cross-reference resolution at wiring", function () {
-        it("Registry.satoriRewards / Rewards.satoriRegistry / Rewards.satoriGames / Games.satoriRegistry == core getters", async function () {
+        it("Registry.satoriRewards / Rewards.satoriRegistry / Games.satoriRegistry == core getters", async function () {
             const f = await deploySatoriFixture();
             const core = f.satori;
 
             const coreRewards  = await core.satoriRewards();
             const coreRegistry = await core.satoriRegistry();
-            const coreGames    = await core.satoriGames();
 
             expect(await f.registry.satoriRewards()).to.equal(coreRewards);
             expect(await f.rewards.satoriRegistry()).to.equal(coreRegistry);
-            expect(await f.rewards.satoriGames()).to.equal(coreGames);
             expect(await f.games.satoriRegistry()).to.equal(coreRegistry);
 
             // satoriCore on each child equals the core address.
@@ -244,11 +242,6 @@ describe("COV dependencies-wiring: setSatoriCore guards, onlyCore, cross-refs, s
 
         it("SatoriRegistry.createSimpleDataStream rejects non-core caller", async function () {
             await expect(f.registry.connect(attacker).createSimpleDataStream(attacker.address, "X", attacker.address, 720))
-                .to.be.revertedWithCustomError(f.registry, "OnlySatoriCore");
-        });
-
-        it("SatoriRegistry.setValueForRound rejects non-core caller", async function () {
-            await expect(f.registry.connect(attacker).setValueForRound(1, 100, 1))
                 .to.be.revertedWithCustomError(f.registry, "OnlySatoriCore");
         });
     });

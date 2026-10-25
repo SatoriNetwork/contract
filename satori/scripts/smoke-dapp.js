@@ -178,7 +178,7 @@ async function main() {
   // (rewards.feeSlot() smoke step removed 2026-08-31 — getter deleted with the
   //  dead fee storage it exposed.)
   await step("rewards.admin()", () => dRewards.admin());
-  await step("rewards.PLATFORM_FEE_RECIPIENT()", () => dRewards.PLATFORM_FEE_RECIPIENT());
+  await step("token.PLATFORM_FEE_RECIPIENT()", () => dToken.PLATFORM_FEE_RECIPIENT());
   await step("rewards.predictorFeeStored(addr)", () => dRewards.predictorFeeStored(owner.address));
   await step("rewards.getPredictionPower(addr)", () => dRewards.getPredictionPower(owner.address));
   await step("lens.getTotalClaimableRewards(addr)", () => dLens.getTotalClaimableRewards(owner.address));
@@ -194,11 +194,10 @@ async function main() {
     async () => dVoting.getGameWeights(1, 50, await dSatori.getCurrentRound()));
 
   await step("satori.getCurrentRound()", () => dSatori.getCurrentRound());
-  await step("satori.streamBurn()", () => dSatori.streamBurn());
-  await step("satori.gameBurn()", () => dSatori.gameBurn());
-  await step("satori.bountyBurn()", () => dSatori.bountyBurn());
-  await step("satori.streaks(user,gameId)", () => dSatori.streaks(owner.address, defaultGameId ?? 1n));
-  await step("satori.getLatestPrediction(user,gameId)", () => dSatori.getLatestPrediction(owner.address, defaultGameId ?? 1n));
+  await step("satori.STREAM_BURN()", () => dSatori.STREAM_BURN());
+  await step("satori.GAME_BURN()", () => dSatori.GAME_BURN());
+  await step("engine.streaks(user,gameId)", () => dEngine.streaks(owner.address, defaultGameId ?? 1n));
+  await step("engine.getLatestPrediction(user,gameId)", () => dEngine.getLatestPrediction(owner.address, defaultGameId ?? 1n));
 
   // bounty reads (keyed by gameId,token)
   await step("bounties.pool(gameId,token)", () => dBounties.pool(defaultGameId ?? 1n, ethers.ZeroAddress));
@@ -375,9 +374,9 @@ async function main() {
   // path. CustomAdapter.validate only rejects a zero target, so owner.address
   // is an acceptable provider/target. config = "0x" (ignored by CustomAdapter).
   let adapterStreamId, adapterGameId;
-  await step("satori.createAdapterDataStream(string,uint16,address,bytes) [community adapter]", async () => {
+  await step("satori.createAdapterDataStream(string,uint32,address,bytes) [community adapter]", async () => {
     if (newAdapterId === undefined) throw new Error("no new adapter id captured");
-    const tx = await dSatori["createAdapterDataStream(string,uint16,address,bytes)"](
+    const tx = await dSatori["createAdapterDataStream(string,uint32,address,bytes)"](
       "CommunityStream", newAdapterId, owner.address, "0x"
     );
     const rcpt = await tx.wait();
@@ -428,7 +427,7 @@ async function main() {
     if (newAdapterId === undefined) throw new Error("no new community adapter id captured");
     const before = Number(await dRegistry.getDataStreamCount());
     let adapterStreamId;
-    const tx = await dSatori["createAdapterDataStream(string,uint16,address,bytes,uint24)"](
+    const tx = await dSatori["createAdapterDataStream(string,uint32,address,bytes,uint24)"](
       "CommunityPlain", newAdapterId, owner.address, "0x", 1440
     );
     const rcpt = await tx.wait();
@@ -465,7 +464,7 @@ async function main() {
     await agg.waitForDeployment();
     const aggAddr = await agg.getAddress();
     // Chainlink adapter id is 1 (canonical).
-    const tx = await dSatori["createAdapterDataStream(string,uint16,address,bytes)"](
+    const tx = await dSatori["createAdapterDataStream(string,uint32,address,bytes)"](
       "CHAINLINK/CFG", 1, aggAddr, config
     );
     const rcpt = await tx.wait();

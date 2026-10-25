@@ -101,26 +101,26 @@ describe("Slice 3/4: pure stake-share formula", function () {
       .withArgs(alice.address, usdAddr, bob.address, ethers.parseEther("40"), ethers.parseEther("260"));
   });
 
-  it("a win emits BountyPaid (never BountyTokenStaked), and the drip reports the pool it left", async function () {
+  it("a win emits BountyPaid (never BountyTokenStaked), and the reservation at predict reports the pool it left", async function () {
     const usdAddr = await usd.getAddress();
     const scale = await bounties.RATE_SCALE();
     await stakeFor(bounties, alice, usd, ethers.parseEther("200"));
 
     await registry.connect(authority).setValue(stream, 100);
-    await satori.connect(alice).predictMultipleWithPayloads([{ gameId: stream, payload: pack1(UP) }]);
+    const bountyLogs = (rcpt) => rcpt.logs
+      .filter((l) => l.address === bounties.target)
+      .map((l) => bounties.interface.parseLog(l));
+    const predictRcpt = await (await satori.connect(alice).predictMultipleWithPayloads([{ gameId: stream, payload: pack1(UP) }])).wait();
     await advanceOneDay();
     await registry.connect(authority).setValue(stream, 110);
     await advanceOneDay();
     await registry.connect(authority).setValue(stream, 120);
 
-    const rcpt = await (await satori.settlePrediction(alice.address, stream)).wait();
-    const logs = rcpt.logs
-      .filter((l) => l.address === bounties.target)
-      .map((l) => bounties.interface.parseLog(l));
-    const names = logs.map((p) => p.name);
-    expect(names).to.not.include("BountyTokenStaked");
+    const drip = bountyLogs(predictRcpt).find((p) => p.name === "BountyDripped");
+    const logs = bountyLogs(await (await satori.settlePrediction(alice.address, stream)).wait());
+    expect(logs.map((p) => p.name)).to.not.include("BountyTokenStaked");
+    expect(logs.map((p) => p.name)).to.not.include("BountyDripped");
 
-    const drip = logs.find((p) => p.name === "BountyDripped");
     expect(drip.args.gameId).to.equal(stream);
     expect(drip.args.amount).to.equal(RATE);
     expect(drip.args.newPool).to.equal(POT - RATE);

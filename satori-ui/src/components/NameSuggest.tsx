@@ -38,8 +38,8 @@ export function nameBlocker(streams: StreamBasic[], raw: string, keepCase: boole
   if (problem) return problem[0].toUpperCase() + problem.slice(1) + '.';
   const sent = submitNameOf(raw, keepCase);
   const taken = namedStreamTaken(streams, sent);
-  if (taken) return `"${trimName(taken.name)}" is already a named stream (#${taken.id}).`;
-  return chainTaken ? `"${sent}" is already a named stream.` : null;
+  if (taken) return `"${trimName(taken.name)}" is already a Sentiment stream (#${taken.id}).`;
+  return chainTaken ? `"${sent}" is already a Sentiment stream.` : null;
 }
 
 export interface NamedNameRegistry {

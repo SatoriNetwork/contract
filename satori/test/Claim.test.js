@@ -1,5 +1,5 @@
 const { expect } = require("chai");
-const { deploySatoriFixture, pack1, VOTE, warmUpLoyalty } = require("./fixtures");
+const { deploySatoriFixture, pack1, VOTE } = require("./fixtures");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
 
@@ -334,10 +334,7 @@ describe("Claim Feature", function () {
     it("Should handle claiming with delegation splits to recipient", async function () {
       // Alice delegates prediction power to Bob
       await satori.connect(alice).delegatePredictionPower(bob.address);
-      // Delegator weight is capital x loyalty and a fresh delegation starts at
-      // L = 0, so any delegator share measured below reads zero without a
-      // warm-up. Drains to `carol` so no balance the test relies on moves.
-      await warmUpLoyalty(satori, registry, null, bob, [alice], carol, stream1, 40, 2);
+      await time.increase(86400);
 
       // R1: Bob predicts using Alice's delegated power
       await registry.setValue(stream1, 100);
@@ -365,10 +362,7 @@ describe("Claim Feature", function () {
     it("Should maintain reward split when claiming to different address", async function () {
       // Alice delegates prediction power to Bob
       await satori.connect(alice).delegatePredictionPower(bob.address);
-      // Delegator weight is capital x loyalty and a fresh delegation starts at
-      // L = 0, so any delegator share measured below reads zero without a
-      // warm-up. Drains to `carol` so no balance the test relies on moves.
-      await warmUpLoyalty(satori, registry, null, bob, [alice], carol, stream1, 40, 2);
+      await time.increase(86400);
 
       // R1: Bob predicts using Alice's delegated power
       await registry.setValue(stream1, 100);

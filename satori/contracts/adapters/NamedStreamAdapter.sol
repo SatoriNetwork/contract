@@ -5,6 +5,7 @@ import "../interfaces/IStreamAdapter.sol";
 import "../interfaces/IStreamAdapterUIDescriptor.sol";
 import "../interfaces/INamedStreamAdapter.sol";
 import "../interfaces/ISatoriRegistry.sol";
+import "../interfaces/ISatoriEngineNamed.sol";
 
 /**
  * @title NamedStreamAdapter
@@ -20,10 +21,6 @@ import "../interfaces/ISatoriRegistry.sol";
  *      snapshot, always-write) key off `registry.namedAdapterId`, so an instance
  *      that is not the wired one refuses to create streams at all.
  */
-interface ISatoriEngineNamed {
-    function namedStreamValue(uint32 streamId) external view returns (int232);
-}
-
 interface ICoined {
     function register(string calldata text) external returns (bytes32 id);
 }
@@ -34,6 +31,7 @@ interface ICoinedErrors {
     error EmptyName();
     error BadName();
     error MixedScript();
+    error MixedDigits();
 }
 
 contract NamedStreamAdapter is IStreamAdapter, IStreamAdapterUIDescriptor, INamedStreamAdapter, ICoinedErrors {
@@ -60,7 +58,7 @@ contract NamedStreamAdapter is IStreamAdapter, IStreamAdapterUIDescriptor, IName
         if (coined == address(0)) revert NotWired();
         ISatoriRegistry reg = ISatoriRegistry(registry);
         if (abi.decode(config, (uint32)) != reg.nextStreamId()) revert StreamIdMismatch();
-        uint16 id = reg.namedAdapterId();
+        uint32 id = reg.namedAdapterId();
         if (id == 0 || reg.adapter(id) != address(this)) revert NotWired();
     }
 
@@ -91,7 +89,7 @@ contract NamedStreamAdapter is IStreamAdapter, IStreamAdapterUIDescriptor, IName
 
     /// @inheritdoc IStreamAdapterUIDescriptor
     function configSchema() external pure override returns (string memory) {
-        return '{"version":1,"fields":[{"name":"streamId","type":"uint32","label":"Stream id (next id at creation)"}]}';
+        return '{"version":1,"fields":[]}';
     }
 
     /// @inheritdoc IStreamAdapterUIDescriptor

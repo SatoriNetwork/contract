@@ -8,10 +8,10 @@
  *   - Merkle lane can NEVER spend on-chain headroom
  *     (merkleMinted + amt <= merkleReserveCumulative).
  *   - On-chain lane can NEVER spend Merkle's reserve
- *     (onChainMinted + amt <= globalCap − merkleReserveCumulative).
- *   - COMBINED across BOTH lanes we can NEVER mint more than the global cap
- *     `1440 × roundsElapsed` — even by racing the dial up after the on-chain
- *     lane already consumed early-round headroom while the reserve was 0.
+ *     (onChainMinted + amt + merkleReserveCumulative <= token.generalAccrued()).
+ *   - Nothing mints that was not reported, and everything reported (general +
+ *     fee) stays under the token's `1440 × roundsElapsed` — even by racing the
+ *     dial up after the on-chain lane already spent all it was allowed.
  *   - dial=0 is byte-for-byte DORMANT (no reserve state written).
  *   - the 1-wei floor: offchainBudget / reserve rate can never reach the
  *     general residual (emission net of the fee's 15%).
@@ -33,20 +33,12 @@ const { deployMerkleProxied } = require("../next/splitFixture");
 const E = (n) => ethers.parseEther(String(n));
 const ROUND_BUDGET = E(1440); // ROUND_REWARD_BUDGET — the token's OUTER envelope
 
-// The per-round emission is the HUB's now, not the token's 1440, and the dev fee
-// is a flat 15% of it. Both are READ FROM THE HUB rather than written out: the
-// old literals (1440 / 288 / 1152) were the tier-1 step-down arithmetic, and
-// rewriting them as new literals would just move the staleness forward a version.
+// Read, never written out: the rate steps on the hub and the fee bps lives on the token.
 // No test here issues anywhere near the hub's first step threshold, so the
 // rate is constant across the handful of rounds any one test advances.
 let RATE;  // emission per round
 let DEV1;  // the fee's slice of it
 let GEN1;  // the general residual = RATE - DEV1; the reserve-rate ceiling (exclusive)
-
-// The general lanes' shared cap after `e` elapsed rounds. Mirrors the hub's
-// `emissionCeiling() * 8500 / 10000` — ONE floor over the whole product, which
-// is not the same as `e` copies of a floored per-round share.
-const genCap = (e) => (RATE * e * 8500n) / 10000n;
 
 async function advanceRounds(n) {
   const t = await time.latest();
@@ -76,19 +68,19 @@ async function deployStack(admin, publisher) {
   // the rewards admin defaults to the deployer/governor (== admin here). (Burn
   // voting has no top-N cap, so the old `votingCap` fixture knob is gone.)
   const fix = await deploySatoriFixtureOpts(0);
-  const { satori, rewards, voting, registry, games, bounties } = fix;
+  const { satori, token, rewards, voting, registry, games, bounties } = fix;
   const core = await satori.getAddress(); // hub address (the mint authority)
 
   const merkle = await deployMerkleProxied(publisher.address, fix.token.target);
   await satori.connect(admin).setSatoriMerkle(await merkle.getAddress()); // governor wires, write-once
   await merkle.setSatoriCore(core);                                       // proxy deployer wires core (hub), write-once
-  return { satori, rewards, merkle, voting, registry, games, bounties, coreAddr: core };
+  return { satori, token, rewards, merkle, voting, registry, games, bounties, coreAddr: core };
 }
 
 // Impersonate the REAL rewards proxy so we can drive the hub's authorized
-// rewards-child paths directly (rewardMint / setMerkleReserveRate) to arbitrary
-// amounts — simulating an over-issuing rewards path — while the real rewards
-// child stays wired. Returns the hub bound to the rewards signer.
+// rewards-child paths directly (freezeRoundGross / noteIssued / rewardMint /
+// setMerkleReserveRate) to arbitrary amounts — simulating an over-issuing
+// rewards path — while the real rewards child stays wired.
 async function asRewards(rewards, coreAddr) {
   const rewardsAddr = await rewards.getAddress();
   await impersonateAccount(rewardsAddr);
@@ -98,13 +90,42 @@ async function asRewards(rewards, coreAddr) {
   return { hub, rewardsSigner };
 }
 
+// What Rewards may still report before noteIssued's schedule backstop refuses.
+async function allowanceRoom(hub, token) {
+  return (await hub.onChainAllowance()) - ((await token.generalAccrued()) - (await hub.merkleReserveCumulative()));
+}
+
+// Prices the current round, then reports `amount` (default: the whole room).
+async function priceAndReport(hub, rw, token, amount) {
+  await hub.connect(rw).freezeRoundGross(await token.getCurrentRound());
+  const amt = amount === undefined ? await allowanceRoom(hub, token) : amount;
+  if (amt > 0n) await hub.connect(rw).noteIssued(amt);
+  return amt;
+}
+
+// What every step must keep, whatever the dial did.
+async function expectLedgers(satori, token) {
+  const e = (await token.getCurrentRound()) - (await token.deploymentRound()) + 1n;
+  const gA = await token.generalAccrued();
+  const cum = await satori.merkleReserveCumulative();
+  expect(gA + (await token.devFeeAccrued())).to.be.lte(ROUND_BUDGET * e);
+  expect(gA - cum, "on-chain reports inside the priced allowance").to.be.lte(await satori.onChainAllowance());
+  expect((await satori.onChainMinted()) + cum, "on-chain lane never spends the reserve").to.be.lte(gA);
+  expect(await satori.merkleMinted(), "merkle lane inside the banked reserve").to.be.lte(cum);
+  expect((await satori.onChainMinted()) + (await satori.merkleMinted())).to.equal(await token.generalMinted());
+  expect(await token.generalMinted()).to.be.lte(gA);
+  expect(await token.totalRewardsMinted()).to.equal(
+    (await token.devFeeMinted()) + (await satori.onChainMinted()) + (await satori.merkleMinted())
+  );
+}
+
 describe("ADVERSARIAL: off-chain dial + Merkle lanes", function () {
-  let satori, rewards, merkle, coreAddr;
+  let satori, token, rewards, merkle, coreAddr;
   let owner, alice, bob, publisher, stranger;
 
   beforeEach(async function () {
     [owner, alice, bob, publisher, stranger] = await ethers.getSigners();
-    ({ satori, rewards, merkle, coreAddr } = await deployStack(owner, publisher));
+    ({ satori, token, rewards, merkle, coreAddr } = await deployStack(owner, publisher));
     RATE = await satori.emissionRateNow();
     DEV1 = await satori.devRateNow();
     GEN1 = RATE - DEV1;
@@ -115,86 +136,72 @@ describe("ADVERSARIAL: off-chain dial + Merkle lanes", function () {
   // ------------------------------------------------------------------
 
   it("ATTACK: cannot exceed the global cap by racing the dial up after the on-chain lane consumed early headroom", async function () {
-    // Deploy round: the genesis mint is exactly ONE ROUND of the hub's emission,
-    // split 15/85 — so the hub's general lane starts exactly saturated at
-    // genCap(1), with reserve = 0. (The token's own 1440 envelope has slack
-    // left; the hub's schedule is the binding wall.)
-    // Give the on-chain lane a real over-issuing minter and let it eat every wei
-    // of headroom each round while the reserve is still 0.
-    const { hub, rewardsSigner } = await asRewards(rewards, coreAddr);
+    const { hub, rewardsSigner: rw } = await asRewards(rewards, coreAddr);
 
-    await advanceRounds(1); // round +1: general cap genCap(2)
-    let onChainCeil = await satori.onChainRewardCeiling();
-    let headroom = onChainCeil - (await satori.onChainMinted());
-    // Each round adds RATE to the cap, 15% of it reserved for the senior fee;
-    // the genesis round's general lane already holds its full genCap(1), so the
-    // remaining headroom is exactly the second round's share.
-    expect(headroom).to.equal(genCap(2n) - genCap(1n));
-    await hub.connect(rewardsSigner).rewardMint(stranger.address, headroom); // general lane now == its cap, reserve still 0
-    expect(await satori.onChainMinted()).to.equal(genCap(2n));
-    expect(await satori.totalRewardsMinted()).to.equal((await satori.devFeeMinted()) + genCap(2n));
+    // The on-chain lane eats every wei it was allowed while the reserve is 0.
+    await advanceRounds(1);
+    await hub.connect(rw).freezeRoundGross(await token.getCurrentRound());
+    const room = await allowanceRoom(hub, token);
+    // Two rounds priced (the deploy round on its first touch, then this one).
+    expect(room).to.equal(GEN1 * 2n);
+    await expect(hub.connect(rw).noteIssued(room + 1n)).to.be.revertedWithCustomError(satori, "BudgetExceeded");
+    await hub.connect(rw).noteIssued(room);
+    const headroom = (await satori.onChainRewardCeiling()) - (await satori.onChainMinted());
+    expect(headroom).to.equal(room);
+    await hub.connect(rw).rewardMint(stranger.address, headroom);
+    await expect(hub.connect(rw).rewardMint(stranger.address, 1n)).to.be.revertedWithCustomError(satori, "BudgetExceeded");
 
-    // NOW the adversary dials the off-chain budget to the max and lets the
-    // reserve balloon. The already-minted on-chain lane is NOT clawed back.
-    // If the reserve could hand the Merkle lane fresh budget on TOP of an
-    // already-maxed general lane, we'd breach the combined cap. We drive the
-    // reserve rate AS the authorized rewards child (impersonated).
-    await hub.connect(rewardsSigner).setMerkleReserveRate(GEN1 - 1n); // max legal rate via the rewards child
-    // Dial is effective NEXT round now, so advance one extra round for it to
-    // actually accrue: rate begins the round after it was set.
-    await advanceRounds(2); // reserve accrues (GEN1 - ε) for this gap
+    // NOW the adversary dials the reserve to the max and lets it balloon. If the
+    // reserve handed the on-chain lane room, or banked past the token envelope,
+    // the combined cap would break.
+    await hub.connect(rw).setMerkleReserveRate(GEN1 - 1n);
+    await advanceRounds(2);
+    await hub.connect(rw).freezeRoundGross(await token.getCurrentRound());
+    const reserve = await satori.merkleReserveCumulative();
+    expect(reserve).to.equal((GEN1 - 1n) * 2n);
+    expect(await satori.merkleReserveCeiling()).to.equal(reserve);
+    // The on-chain lane gained only its own gross for the two rounds: 1 wei each.
+    expect(await allowanceRoom(hub, token)).to.equal(2n);
+    await expect(hub.connect(rw).noteIssued(3n)).to.be.revertedWithCustomError(satori, "BudgetExceeded");
+    await hub.connect(rw).noteIssued(2n);
+    await hub.connect(rw).rewardMint(stranger.address, 2n);
+    await expect(hub.connect(rw).rewardMint(stranger.address, 1n)).to.be.revertedWithCustomError(satori, "BudgetExceeded");
 
-    const deploymentRound = await satori.deploymentRound();
-    const roundsElapsed = (await satori.getCurrentRound()) - deploymentRound + 1n;
-    const globalCap = ROUND_BUDGET * roundsElapsed;
-    // The general lanes (on-chain + merkle) share the cap NET of the dev accrual.
-    const generalCap = genCap(roundsElapsed); // 85% of the hub's emission ceiling
-
-    // Merkle lane ceiling is the accrued reserve; try to claim ALL of it.
-    const reserve = await satori.merkleReserveCeiling();
     await merkle.connect(publisher).setMerkleRoot(leafOf(alice.address, reserve));
+    await merkle.connect(alice).claimMerkle(reserve, []);
+    expect(await satori.merkleMinted()).to.equal(reserve);
 
-    // The backstop must catch any attempt that would push the general lanes past
-    // generalCap, regardless of the per-lane arithmetic. onChainMinted + reserve
-    // may or may not exceed generalCap; whichever the case, totalRewardsMinted
-    // after any successful claim must stay <= globalCap.
-    const onChain = await satori.onChainMinted();
-    if (onChain + reserve > generalCap) {
-      await expect(merkle.connect(alice).claimMerkle(reserve, []))
-        .to.be.revertedWithCustomError(satori, "BudgetExceeded");
-    } else {
-      await merkle.connect(alice).claimMerkle(reserve, []);
-    }
-
-    // INVARIANT (the whole point): no matter what, the sum of ALL THREE lanes is
-    // never above the global cap, and the three-lane ledger identity holds.
-    expect(await satori.totalRewardsMinted()).to.be.lte(globalCap);
-    expect(await satori.totalRewardsMinted()).to.equal(
-      (await satori.devFeeMinted()) + (await satori.onChainMinted()) + (await satori.merkleMinted())
-    );
+    // Every reported wei is minted (fee included) and the sum is under 1440 x rounds.
+    await token.mintDevFee();
+    const e = (await token.getCurrentRound()) - (await token.deploymentRound()) + 1n;
+    const accrued = (await token.generalAccrued()) + (await token.devFeeAccrued());
+    expect(await token.totalRewardsMinted()).to.equal(accrued);
+    expect(accrued).to.be.lte(ROUND_BUDGET * e);
+    await expectLedgers(satori, token);
   });
 
-  it("ATTACK: fill BOTH lanes to their exact ceilings, then one wei on either side reverts (combined == cap, not over)", async function () {
-    // Dial a moderate reserve, impersonate the rewards child so we can drive the
-    // on-chain lane precisely, then top BOTH lanes to their exact ceilings and probe +1 wei.
-    const { hub, rewardsSigner } = await asRewards(rewards, coreAddr);
-    await hub.connect(rewardsSigner).setMerkleReserveRate(E(200)); // reserve rate 200/round
-    // Dial effective next round: advance 4 so 3 full rounds bank at rate 200.
-    await advanceRounds(4); // reserve = 200*3 = 600
+  it("ATTACK: fill BOTH lanes to their exact ceilings, then one wei on either side reverts (combined == everything reported, not over)", async function () {
+    const { hub, rewardsSigner: rw } = await asRewards(rewards, coreAddr);
+    await hub.connect(rw).setMerkleReserveRate(E(200));
+    const room0 = await allowanceRoom(hub, token);
+    const priced0 = await hub.onChainPricedRound();
+    const gA0 = await token.generalAccrued();
+    expect(await satori.merkleReserveCumulative()).to.equal(0n);
+    await advanceRounds(3); // the dial lands next round: 3 rounds x 200
+    expect(await satori.merkleReserveCeiling()).to.equal(E(600));
 
-    const deploymentRound = await satori.deploymentRound();
-    const roundsElapsed = (await satori.getCurrentRound()) - deploymentRound + 1n;
-    const globalCap = ROUND_BUDGET * roundsElapsed;
-    // The general lanes tile the cap NET of the senior dev accrual.
-    const generalCap = genCap(roundsElapsed); // 85% of the hub's emission ceiling
-    const reserve = await satori.merkleReserveCeiling();
+    // Price (banks the reserve) and report the on-chain lane's whole allowance.
+    const reported = await priceAndReport(hub, rw, token);
+    const reserve = await satori.merkleReserveCumulative();
     expect(reserve).to.equal(E(600));
+    // Every round not yet priced is priced at the residual less the dial.
+    expect(reported).to.equal(room0 + (GEN1 - E(200)) * ((await token.getCurrentRound()) - priced0));
 
-    // Fill the on-chain lane EXACTLY to its ceiling (the general residual minus reserve).
+    // Fill the on-chain lane EXACTLY: everything reported, less the reserve.
     const onChainCeil = await satori.onChainRewardCeiling();
-    expect(onChainCeil).to.equal(generalCap - reserve);
-    const onHeadroom = onChainCeil - (await satori.onChainMinted());
-    await hub.connect(rewardsSigner).rewardMint(stranger.address, onHeadroom);
+    expect(await token.generalAccrued()).to.equal(gA0 + reported + reserve);
+    expect(onChainCeil).to.equal(gA0 + reported);
+    await hub.connect(rw).rewardMint(stranger.address, onChainCeil - (await satori.onChainMinted()));
     expect(await satori.onChainMinted()).to.equal(onChainCeil);
 
     // Fill the Merkle lane EXACTLY to its ceiling.
@@ -202,67 +209,63 @@ describe("ADVERSARIAL: off-chain dial + Merkle lanes", function () {
     await merkle.connect(alice).claimMerkle(reserve, []);
     expect(await satori.merkleMinted()).to.equal(reserve);
 
-    // Now BOTH general lanes are full; combined == generalCap exactly (the dev
-    // slice is carved off-budget on the token, so total == devFeeMinted + generalCap).
-    expect((await satori.onChainMinted()) + (await satori.merkleMinted())).to.equal(generalCap);
-    expect(await satori.totalRewardsMinted()).to.equal((await satori.devFeeMinted()) + generalCap);
+    // Both general lanes full: together they minted exactly what was reported.
+    const generalAccrued = await token.generalAccrued();
+    expect((await satori.onChainMinted()) + (await satori.merkleMinted())).to.equal(generalAccrued);
 
-    // One wei more on the on-chain side -> revert (its lane is full).
-    await expect(hub.connect(rewardsSigner).rewardMint(stranger.address, 1n))
+    // One wei more on the on-chain side -> revert, as a mint (its lane is full)
+    // and as a report (the priced allowance is spent).
+    await expect(hub.connect(rw).rewardMint(stranger.address, 1n))
+      .to.be.revertedWithCustomError(satori, "BudgetExceeded");
+    await expect(hub.connect(rw).noteIssued(1n))
       .to.be.revertedWithCustomError(satori, "BudgetExceeded");
     // One wei more on the Merkle side -> revert (its lane is full).
     await merkle.connect(publisher).setMerkleRoot(leafOf(alice.address, reserve + 1n));
     await expect(merkle.connect(alice).claimMerkle(reserve + 1n, []))
       .to.be.revertedWithCustomError(satori, "BudgetExceeded");
 
-    // Ledgers still reconcile and nothing leaked over the cap.
-    expect((await satori.onChainMinted()) + (await satori.merkleMinted())).to.equal(generalCap);
-    expect(await satori.totalRewardsMinted()).to.equal(
-      (await satori.devFeeMinted()) + (await satori.onChainMinted()) + (await satori.merkleMinted())
-    );
+    expect(await token.generalAccrued()).to.equal(generalAccrued);
+    expect(await token.generalMinted()).to.equal(generalAccrued);
+    await expectLedgers(satori, token);
   });
 
-  it("INVARIANT: through an interleaved dial/mint/claim sequence, totalRewardsMinted == onChain + merkle <= globalCap at every step", async function () {
-    const { hub, rewardsSigner } = await asRewards(rewards, coreAddr);
+  it("INVARIANT: through an interleaved dial/report/mint/claim sequence, both lanes stay inside what was reported and the total under 1440 x rounds", async function () {
+    const { hub, rewardsSigner: rw } = await asRewards(rewards, coreAddr);
     const check = async () => {
-      const dr = await satori.deploymentRound();
-      const cap = ROUND_BUDGET * ((await satori.getCurrentRound()) - dr + 1n);
-      const tot = await satori.totalRewardsMinted();
-      // Three-lane identity: dev lane (token) + on-chain + merkle == total minted.
-      expect(tot).to.equal((await satori.devFeeMinted()) + (await satori.onChainMinted()) + (await satori.merkleMinted()));
-      expect(tot).to.be.lte(cap);
+      await expectLedgers(satori, token);
       expect(await satori.merkleMinted()).to.be.lte(await satori.merkleReserveCeiling());
       expect(await satori.onChainMinted()).to.be.lte(await satori.onChainRewardCeiling());
     };
 
-    let cursor = 0n;
+    let onMinted = 0n;
     for (const [rate, adv, mintOn, claimTo] of [
       [E(100), 2, E(300), E(150)],
       [E(400), 1, E(50), E(500)],
       [E(0), 3, E(900), E(600)],
-      // ~95% of the general residual, as the 550 above was of 576. Written as a
-      // fraction of GEN1 rather than a literal, so it tracks the hub's rate.
+      // ~95% of the general residual, as a fraction of GEN1 so it tracks the rate.
       [(GEN1 * 95n) / 100n, 2, E(10), E(1200)],
     ]) {
-      await hub.connect(rewardsSigner).setMerkleReserveRate(rate);
+      await hub.connect(rw).setMerkleReserveRate(rate);
       await advanceRounds(adv);
       await check();
-      // best-effort on-chain mint (skip if it would exceed the lane)
-      const onRoom = (await satori.onChainRewardCeiling()) - (await satori.onChainMinted());
-      const doOn = mintOn <= onRoom ? mintOn : onRoom;
-      if (doOn > 0n) await hub.connect(rewardsSigner).rewardMint(stranger.address, doOn);
-      await check();
-      // best-effort merkle claim to a growing cursor
-      if (claimTo > cursor) {
-        const ceil = await satori.merkleReserveCeiling();
-        if (claimTo <= ceil) {
-          await merkle.connect(publisher).setMerkleRoot(leafOf(alice.address, claimTo));
-          await merkle.connect(alice).claimMerkle(claimTo, []);
-          cursor = claimTo;
-        }
+      // best-effort on-chain report + mint, capped at the priced allowance
+      await hub.connect(rw).freezeRoundGross(await token.getCurrentRound());
+      const room = await allowanceRoom(hub, token);
+      const doOn = mintOn <= room ? mintOn : room;
+      if (doOn > 0n) {
+        await hub.connect(rw).noteIssued(doOn);
+        await hub.connect(rw).rewardMint(stranger.address, doOn);
+        onMinted += doOn;
       }
       await check();
+      expect(claimTo, "the claim fits the banked reserve").to.be.lte(await satori.merkleReserveCeiling());
+      await merkle.connect(publisher).setMerkleRoot(leafOf(alice.address, claimTo));
+      await merkle.connect(alice).claimMerkle(claimTo, []);
+      expect(await satori.merkleMinted(), "the merkle lane paid the whole claim").to.equal(claimTo);
+      await check();
     }
+    // Each doOn is capped at its mintOn, so the sum matches only if every step minted in full.
+    expect(onMinted).to.equal(E(300) + E(50) + E(900) + E(10));
   });
 
   // ------------------------------------------------------------------
@@ -271,18 +274,21 @@ describe("ADVERSARIAL: off-chain dial + Merkle lanes", function () {
 
   it("WALL: the Merkle lane cannot borrow on-chain headroom even when the global cap is nearly empty", async function () {
     await rewards.connect(owner).setOffchainBudget(E(10)); // tiny reserve rate
-    // Dial effective next round: advance 3 so 2 full rounds bank at rate 10.
-    await advanceRounds(3); // reserve = 20; globalCap = 1440*4 = 5760 (tons of on-chain headroom)
+    await advanceRounds(2); // the dial lands next round: reserve = 2 x 10
+    // Give the on-chain lane real, unminted headroom for the claim to try to borrow.
+    const { hub, rewardsSigner: rw } = await asRewards(rewards, coreAddr);
+    await priceAndReport(hub, rw, token);
+    const onRoom = (await satori.onChainRewardCeiling()) - (await satori.onChainMinted());
+    expect(onRoom).to.be.gt(E(2000));
     expect(await satori.merkleReserveCeiling()).to.equal(E(20));
-    // On-chain headroom is enormous but the Merkle lane is walled at 20: under
-    // partial pay (pre-launch review) the over-sized claim mints EXACTLY the
-    // walled reserve — not a wei of the on-chain complement — and the cursor
-    // advances only by what was paid, so the remainder stays claimable.
+    // Partial pay: the over-sized claim mints EXACTLY the walled reserve — not a
+    // wei of the on-chain room — and the cursor advances only by what was paid.
     await merkle.connect(publisher).setMerkleRoot(leafOf(alice.address, E(2000)));
     await merkle.connect(alice).claimMerkle(E(2000), []);
     expect(await satori.merkleMinted()).to.equal(E(20));                  // the wall held
     expect(await satori.balanceOf(alice.address)).to.equal(E(20));
     expect(await merkle.alreadyMintedTo(alice.address)).to.equal(E(20));  // cursor == paid, not entitlement
+    expect((await satori.onChainRewardCeiling()) - (await satori.onChainMinted())).to.equal(onRoom);
     // With the lane now EXACTLY full, a re-claim has zero headroom to clamp to
     // and falls through to the core's loud refusal — no borrowing, ever.
     await expect(merkle.connect(alice).claimMerkle(E(2000), []))
@@ -293,40 +299,47 @@ describe("ADVERSARIAL: off-chain dial + Merkle lanes", function () {
   it("WALL: the on-chain lane cannot borrow the Merkle reserve; the walled-off reserve stays claimable", async function () {
     await rewards.connect(owner).setOffchainBudget(E(200));
     await advanceRounds(2); // reserve = 400
-    const reserve = await satori.merkleReserveCeiling();
     // The real rewards child stays wired (rate 200 accrues unchanged); impersonate
     // it to drive the on-chain lane directly.
-    const { hub, rewardsSigner } = await asRewards(rewards, coreAddr);
+    const { hub, rewardsSigner: rw } = await asRewards(rewards, coreAddr);
+    await priceAndReport(hub, rw, token); // banks the reserve too
+    const reserve = await satori.merkleReserveCumulative();
+    expect(reserve).to.equal(E(400));
 
-    const onChainCeil = await satori.onChainRewardCeiling();
-    const laneHeadroom = onChainCeil - (await satori.onChainMinted());
-    await hub.connect(rewardsSigner).rewardMint(stranger.address, laneHeadroom); // fill on-chain lane exactly
-    await expect(hub.connect(rewardsSigner).rewardMint(stranger.address, 1n))
+    const laneHeadroom = (await satori.onChainRewardCeiling()) - (await satori.onChainMinted());
+    expect(laneHeadroom).to.be.gt(0n);
+    await hub.connect(rw).rewardMint(stranger.address, laneHeadroom); // fill on-chain lane exactly
+    // The reserve's 400 is in generalAccrued, yet not a wei of it is on-chain room.
+    await expect(hub.connect(rw).rewardMint(stranger.address, 1n))
       .to.be.revertedWithCustomError(satori, "BudgetExceeded");
 
     // The reserve is real and still belongs to Merkle.
     await merkle.connect(publisher).setMerkleRoot(leafOf(alice.address, reserve));
     await merkle.connect(alice).claimMerkle(reserve, []);
     expect(await satori.merkleMinted()).to.equal(reserve);
+    expect(await token.generalMinted()).to.equal(await token.generalAccrued());
   });
 
   // ------------------------------------------------------------------
   // dial=0 dormant, byte-for-byte.
   // ------------------------------------------------------------------
 
-  it("DORMANT: a never-dialed protocol writes NO reserve state; on-chain lane is the whole cap across many rounds", async function () {
+  it("DORMANT: a never-dialed protocol writes NO reserve state; on-chain lane is the whole schedule across many rounds", async function () {
+    const { hub, rewardsSigner: rw } = await asRewards(rewards, coreAddr);
+    const genesisGeneral = await token.generalAccrued();
     // Never touch the dial. Reserve state must stay pristine at 0.
     for (const n of [1, 5, 20]) {
+      const before = await satori.onChainRewardCeiling();
       await advanceRounds(n);
+      expect(await satori.onChainRewardCeiling()).to.equal(before); // time alone adds nothing
+      await priceAndReport(hub, rw, token);
       expect(await satori.merkleReserveCumulative()).to.equal(0n);
       expect(await satori.merkleReserveCeiling()).to.equal(0n);
       expect(await satori.merkleMinted()).to.equal(0n);
-      const dr = await satori.deploymentRound();
-      const e = (await satori.getCurrentRound()) - dr + 1n;
-      const cap = ROUND_BUDGET * e;
-      // Whole GENERAL cap on-chain (the fee's 15% carved off the top): with the
-      // dial dormant the merkle reserve is 0, so on-chain gets all of genCap(e).
-      expect(await satori.onChainRewardCeiling()).to.equal(genCap(e));
+      const e = (await token.getCurrentRound()) - (await token.deploymentRound()) + 1n;
+      // Every priced round's whole residual is on-chain room.
+      expect(await satori.onChainRewardCeiling()).to.equal(genesisGeneral + GEN1 * e);
+      expect(await satori.onChainRewardCeiling()).to.equal(await token.generalAccrued());
     }
     // Any positive Merkle claim is refused while dormant.
     await merkle.connect(publisher).setMerkleRoot(leafOf(alice.address, 1n));
@@ -335,11 +348,13 @@ describe("ADVERSARIAL: off-chain dial + Merkle lanes", function () {
   });
 
   it("DORMANT: rewardMint on a never-dialed protocol never writes merkleReserveCumulative", async function () {
-    const { hub, rewardsSigner } = await asRewards(rewards, coreAddr);
+    const { hub, rewardsSigner: rw } = await asRewards(rewards, coreAddr);
     await advanceRounds(3);
-    // Many on-chain mints, dial never touched.
-    await hub.connect(rewardsSigner).rewardMint(stranger.address, E(500));
-    await hub.connect(rewardsSigner).rewardMint(stranger.address, E(700));
+    // Many on-chain reports and mints, dial never touched.
+    await priceAndReport(hub, rw, token, E(500));
+    await hub.connect(rw).rewardMint(stranger.address, E(500));
+    await hub.connect(rw).noteIssued(E(700));
+    await hub.connect(rw).rewardMint(stranger.address, E(700));
     expect(await satori.merkleReserveCumulative()).to.equal(0n); // still pristine
   });
 
@@ -350,8 +365,7 @@ describe("ADVERSARIAL: off-chain dial + Merkle lanes", function () {
   it("FLOOR: setOffchainBudget(GEN1) reverts; (GEN1 - 1) succeeds and leaves on-chain gross >= 1 wei", async function () {
     // The reserve dial is capped at the general residual (emission - the fee's
     // 15%): the senior dev fee is carved first, so the merkle reserve can never
-    // claim the whole per-round budget. (setOffchainBudget also caps at
-    // TOKENS_PER_ROUND on the rewards side, but the hub's GEN1 wall binds first.)
+    // claim the whole per-round budget.
     await expect(rewards.connect(owner).setOffchainBudget(ROUND_BUDGET))
       .to.be.revertedWithCustomError(rewards, "BadInput");
     await expect(rewards.connect(owner).setOffchainBudget(GEN1))
@@ -359,9 +373,8 @@ describe("ADVERSARIAL: off-chain dial + Merkle lanes", function () {
     // exactly one wei under the general residual is allowed
     await rewards.connect(owner).setOffchainBudget(GEN1 - 1n);
     expect(await rewards.offchainBudget()).to.equal(GEN1 - 1n);
-    // core mirrored the rate; on-chain ceiling still non-negative (never underflows)
     await advanceRounds(1);
-    expect(await satori.onChainRewardCeiling()).to.be.gte(0n);
+    expect(await satori.onChainGrossNow()).to.equal(1n);
   });
 
   it("FLOOR: core.setMerkleReserveRate(GEN1) reverts even from the rewards child", async function () {
@@ -377,17 +390,22 @@ describe("ADVERSARIAL: off-chain dial + Merkle lanes", function () {
   });
 
   it("FLOOR: even at rate GEN1-ε, one full round of reserve leaves >=1 wei of on-chain ceiling", async function () {
-    const rate = GEN1 - 1n; // 1151.999999999999999999 — the max legal reserve rate
-    await rewards.connect(owner).setOffchainBudget(rate);
-    await advanceRounds(1); // reserve = GEN1 - 1 for this round
-    const dr = await satori.deploymentRound();
-    const e = (await satori.getCurrentRound()) - dr + 1n;
-    const cap = ROUND_BUDGET * e;
-    const merkleCeil = await satori.merkleReserveCeiling();
-    const onCeil = await satori.onChainRewardCeiling();
-    // conservation: the two general lanes tile the cap NET of the senior dev slice
-    expect(merkleCeil + onCeil).to.equal(genCap(e)); // the two general lanes tile 85% of emission
-    expect(onCeil).to.be.gte(1n);                          // never underflows / never hits 0-across-cap
+    const rate = GEN1 - 1n; // the max legal reserve rate
+    await rewards.connect(owner).setOffchainBudget(rate); // prices this round at the old dial
+    await advanceRounds(1);
+    const { hub, rewardsSigner: rw } = await asRewards(rewards, coreAddr);
+    const allowance0 = await satori.onChainAllowance();
+    await hub.connect(rw).freezeRoundGross(await token.getCurrentRound()); // banks the round's reserve
+    const gross = (await satori.onChainAllowance()) - allowance0;
+    expect(await satori.merkleReserveCumulative()).to.equal(rate);
+    // The two general lanes tile the round's residual, and the on-chain one keeps a wei.
+    expect(gross + rate).to.equal(GEN1);
+    expect(gross).to.be.gte(1n);
+    // ... which it can actually report and mint.
+    const room = await allowanceRoom(hub, token);
+    await hub.connect(rw).noteIssued(room);
+    await hub.connect(rw).rewardMint(stranger.address, room);
+    await expectLedgers(satori, token);
   });
 
   // ------------------------------------------------------------------
@@ -395,11 +413,12 @@ describe("ADVERSARIAL: off-chain dial + Merkle lanes", function () {
   // ------------------------------------------------------------------
 
   it("PIECEWISE: a mid-round dial move is never retroactive — accrual banks the OLD rate, then applies the new", async function () {
-    await rewards.connect(owner).setOffchainBudget(E(100)); // rate 100
-    await advanceRounds(2);                                 // 200 pending at next touch
-    await rewards.connect(owner).setOffchainBudget(E(300)); // banks 200, then rate 300
-    await advanceRounds(4);                                 // rate 300 effective next round → 3 rounds banked = +900
-    expect(await satori.merkleReserveCeiling()).to.equal(E(1100)); // 200 + 900 (NOT 300*5=1500)
+    await rewards.connect(owner).setOffchainBudget(E(100)); // rate 100 from next round
+    await advanceRounds(2);
+    await rewards.connect(owner).setOffchainBudget(E(300)); // banks 2 x 100 through this round, then rate 300
+    expect(await satori.merkleReserveCeiling()).to.equal(E(200));
+    await advanceRounds(4);
+    expect(await satori.merkleReserveCeiling()).to.equal(E(1400)); // 200 + 4 x 300 (NOT 300 x 6 = 1800)
   });
 
   it("PIECEWISE: dialing UP mid-round does not let the Merkle lane retroactively claim the higher rate for elapsed rounds", async function () {
@@ -472,8 +491,7 @@ describe("ADVERSARIAL: off-chain dial + Merkle lanes", function () {
 
   it("MERKLE: an over-reserve claim pays exactly the reserve (partial pay); a full lane's refusal leaves the cursor intact (CEI)", async function () {
     await rewards.connect(owner).setOffchainBudget(E(10));
-    // Dial effective next round: advance 3 so 2 full rounds bank at rate 10.
-    await advanceRounds(3); // reserve 20
+    await advanceRounds(2); // the dial lands next round: reserve = 2 x 10
     await merkle.connect(publisher).setMerkleRoot(leafOf(alice.address, E(5000)));
     // Partial pay drains exactly the 20 accrued; cursor == paid.
     await merkle.connect(alice).claimMerkle(E(5000), []);
@@ -556,18 +574,23 @@ describe("ADVERSARIAL: off-chain dial + Merkle lanes", function () {
   // On-chain ceiling never underflows at the extreme dial.
   // ------------------------------------------------------------------
 
-  it("NO-UNDERFLOW: at the max legal rate, onChainRewardCeiling stays >= 0 and equals cap - devFee - reserve every round", async function () {
-    await rewards.connect(owner).setOffchainBudget(GEN1 - 1n); // near-max legal rate
-    for (let i = 0; i < 6; i++) {
+  it("NO-UNDERFLOW: at the max legal rate, each round banks GEN1-1 to the reserve and prices exactly 1 wei of on-chain gross, and onChainRewardCeiling never underflows", async function () {
+    await rewards.connect(owner).setOffchainBudget(GEN1 - 1n); // prices this round at the old dial
+    expect(await satori.merkleReserveCumulative()).to.equal(0n);
+    const allow0 = await satori.onChainAllowance();
+    const gA0 = await token.generalAccrued();
+    expect(allow0 - gA0, "the deploy round priced at the old dial").to.equal(GEN1);
+    const { hub, rewardsSigner: rw } = await asRewards(rewards, coreAddr);
+    for (let i = 1n; i <= 6n; i++) {
       await advanceRounds(1);
-      const dr = await satori.deploymentRound();
-      const e = (await satori.getCurrentRound()) - dr + 1n;
-      const cap = ROUND_BUDGET * e;
-      const merkleCeil = await satori.merkleReserveCeiling();
-      const onCeil = await satori.onChainRewardCeiling();
-      expect(merkleCeil).to.be.lte(cap);                    // reserve never exceeds the cap
-      expect(onCeil).to.equal(genCap(e) - merkleCeil); // exact complement net of the fee, no underflow revert
-      expect(onCeil).to.be.gte(0n);
+      const reported = await priceAndReport(hub, rw, token); // banks the reserve, reports the on-chain room
+      const cum = await satori.merkleReserveCumulative();
+      expect(cum, "GEN1-1 banked per round").to.equal((GEN1 - 1n) * i);
+      expect(await satori.merkleReserveCeiling()).to.equal(cum);
+      expect(await satori.onChainAllowance(), "1 wei of gross priced per round").to.equal(allow0 + i);
+      expect(reported, "the whole round's 1 wei reported").to.equal(i === 1n ? allow0 - gA0 + 1n : 1n);
+      expect(await satori.onChainRewardCeiling()).to.equal(allow0 + i);
+      await expectLedgers(satori, token);
     }
   });
 
@@ -579,7 +602,11 @@ describe("ADVERSARIAL: off-chain dial + Merkle lanes", function () {
     const roundsElapsed = (await satori.getCurrentRound()) - dr + 1n;
     const cap = ROUND_BUDGET * roundsElapsed;
     const reserve = await satori.merkleReserveCeiling();
-    expect(reserve).to.be.lt(cap); // strictly under — the +1 genesis round + the carved dev slice are the slack
+    expect(reserve).to.be.lt(cap);
+    // Banking all 100 rounds at once reports them, fee included, inside the envelope.
+    await satori.syncEmission();
+    expect(await satori.merkleReserveCumulative()).to.equal(reserve);
+    expect((await token.generalAccrued()) + (await token.devFeeAccrued())).to.be.lte(cap);
   });
 
   // helper: a fully-wired stack EXCEPT satoriMerkle (left unwired) so wiring

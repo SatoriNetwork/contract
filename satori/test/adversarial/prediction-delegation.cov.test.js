@@ -24,7 +24,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
-const { deploySatoriFixtureNoFee, pack1, VOTE, voteFor, warmUpLoyalty } = require("../fixtures");
+const { deploySatoriFixtureNoFee, pack1, VOTE, voteFor } = require("../fixtures");
 
 const UP = 1;
 // The value-provider cut is gone, so stream creation no longer takes a cut-bps
@@ -130,10 +130,7 @@ describe("prediction-delegation coverage (intended behavior)", function () {
 
     await satori.connect(A).delegatePredictionPower(D.address);
 
-    // Receipt to the (delegated) A one round BEFORE D predicts.    // Delegator weight is capital x loyalty and a fresh delegation starts at
-    // L = 0, so every credit measured below reads zero without a warm-up.
-    // Drains to `owner`, who holds the untouched remainder of supply.
-    await warmUpLoyalty(satori, registry, null, D, [A], owner, sid);
+    await time.increase(86400);
 
     // Receipt to the (delegated) A one round BEFORE D predicts. Receiving while
     // delegated is allowed (only the sender side is lock-checked). The increment
@@ -192,11 +189,8 @@ describe("prediction-delegation coverage (intended behavior)", function () {
 
     await satori.connect(A).delegatePredictionPower(P.address);
     await satori.connect(B).delegatePredictionPower(Q.address);
-    // Delegator weight is capital x loyalty and a fresh delegation starts at
-    // L = 0, so every credit measured below reads zero without a warm-up.
-    // Drains to `owner`, who holds the untouched remainder of supply.
-    await warmUpLoyalty(satori, registry, null, P, [A], owner, sid);
-    await warmUpLoyalty(satori, registry, null, Q, [B], owner, sid);
+    await time.increase(86400);
+    await time.increase(86400);
 
     // Settle delegations into the rate pool a round before predicting.
     await advanceRound();
@@ -277,25 +271,21 @@ describe("prediction-delegation coverage (intended behavior)", function () {
     const sid = await makeStream(satori, registry, owner, "S");
     await voteFor(satori, voter, sid);
 
-    // A and B both delegate BEFORE the warm-up. This test's subject is the
-    // stake-proportional 2:1 split between them, and loyalty only cancels
-    // out of that ratio when both carry the SAME L — which means both must
-    // be present for the same warm-up. (Late-joiner behaviour has its own
-    // dedicated coverage in the H1 probes.)
+    // A and B both delegate before D predicts. This test's subject is the
+    // stake-proportional 2:1 split between them. (Late-joiner behaviour has its
+    // own dedicated coverage in the H1 probes.)
     await satori.connect(A).delegatePredictionPower(D.address);
     await advanceRound();
     await registry.setValue(sid, 100);
 
     await satori.connect(B).delegatePredictionPower(D.address);
-    await warmUpLoyalty(satori, registry, null, D, [A, B], owner, sid);
+    await time.increase(86400);
     await advanceRound();
     await registry.setValue(sid, 100);
 
     const stake = await rewards.getPredictionPower(D.address); // own10 + 30 = 40
     const R = await satori.getCurrentRound();
-    // Marketing bucket DELTA from here, not its absolute value: the loyalty
-    // warm-up above is itself a scored round and skims into the same bucket,
-    // so an absolute read carries that in and the conservation sum over-counts.
+    // Marketing bucket DELTA from here, not its absolute value.
     const marketingStart = await rewards.unclaimedRewards(await rewards.marketingFeeRecipient());
     await satori.connect(D).predictMultipleWithPayloads([{ gameId: sid, payload: pack1(UP) }]);
 
@@ -393,11 +383,7 @@ describe("prediction-delegation coverage (intended behavior)", function () {
     await voteFor(satori, voter, sid);
 
     await satori.connect(A).delegatePredictionPower(D.address);
-    // Warm A's loyalty before the measured window. Without it the first
-    // LOY_LAG+1 rounds have A at L = 0, so their delegator share EVAPORATES
-    // -- the RewardSplit reference sum would then include amounts nobody
-    // can receive and could never equal A's one-shot claim.
-    await warmUpLoyalty(satori, registry, null, D, [A], owner, sid);
+    await time.increase(86400);
     await advanceRound();
     await registry.setValue(sid, 100);
 

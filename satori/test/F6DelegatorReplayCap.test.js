@@ -88,21 +88,6 @@ async function runScenario(useCap) {
   await satori.connect(alice).delegatePredictionPower(bob.address);
   await advanceRound(); // let the delegation period activate before bob predicts
 
-  // LOYALTY WARM-UP. Delegator weight is capital x loyalty
-  // (docs/design/delegation-loyalty-weighting.md) and a fresh delegation starts
-  // at L = 0, so without this alice carries zero weight through the open rounds
-  // below and every replayed delta is legitimately zero — the test would pass
-  // its chunking comparison while proving nothing. Win one round on s0 up
-  // front, then let the fold lag clear so the loyalty is actually materialised.
-  await registry.setValue(s0, 50);
-  await satori.connect(bob).predictMultipleWithPayloads([{ gameId: s0, payload: pack1(UP) }]);
-  await advanceRound();
-  await registry.setValue(s0, 60);
-  await advanceRound();
-  await registry.setValue(s0, 70);
-  await satori.connect(carol).settlePrediction(bob.address, s0);
-  for (let i = 0; i < 6; i++) await advanceRound();
-
   // R0/R1/R2: bob predicts s0/s1/s2 respectively; leave them silent so each
   // round stays pending (an open round for alice's period).
   await registry.setValue(s0, 100);

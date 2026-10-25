@@ -382,7 +382,6 @@ describe("MEGASIM all-invariants conservation simulation", function () {
       // Tick the default stream every round: fee accrual + default-stream cut +
       // fee schedule. Past the FEE_DROP_ROUND boundary the schedule drops the
       // fee; we additionally force the boundary partway through (see below).
-      try { await satori.flushDefaultStream(); } catch (e) {}
 
       // --- publish fresh values (one per stream per cadence step) ---
       // Drive each stream's value so a prediction made LAST step resolves
@@ -555,7 +554,6 @@ describe("MEGASIM all-invariants conservation simulation", function () {
     // Final drain sweep: settle everything still pending, everyone claims,
     // fee recipient accrues + claims, then re-assert the full invariant set.
     await advanceCadenceStep();
-    try { await satori.flushDefaultStream(); } catch (e) {}
     for (const sid of streams) {
       streamVal[sid] += 100;
       try { await registry.setValue(sid, streamVal[sid]); } catch (e) {}

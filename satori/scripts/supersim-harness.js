@@ -237,7 +237,7 @@ async function main() {
   check("sum(minted) == sum(burned) across chains — nothing in flight, nothing invented",
     minted === burned, `${ethers.formatEther(minted)} / ${ethers.formatEther(burned)}`);
   check("home emission budget untouched by all of it",
-    (await homeToken.totalRewardsMinted()) === ethers.parseEther("720"));
+    (await homeToken.totalRewardsMinted()) === (await homeToken.INITIAL_MINT()));
 
   console.log(failures === 0
     ? "\nAll checks passed. The lane works against the real predeploy."

@@ -106,9 +106,9 @@
       "inputs": [
         {
           "indexed": true,
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "gameTypeId",
-          "type": "uint16"
+          "type": "uint32"
         },
         {
           "indexed": true,
@@ -186,9 +186,9 @@
         },
         {
           "indexed": false,
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "gameTypeId",
-          "type": "uint16"
+          "type": "uint32"
         },
         {
           "indexed": false,
@@ -268,9 +268,9 @@
       "name": "BUILTIN_BINARY",
       "outputs": [
         {
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "",
-          "type": "uint16"
+          "type": "uint32"
         }
       ],
       "stateMutability": "view",
@@ -334,9 +334,9 @@
           "type": "uint32"
         },
         {
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "gameTypeId",
-          "type": "uint16"
+          "type": "uint32"
         },
         {
           "internalType": "bytes",
@@ -378,9 +378,9 @@
           "type": "uint32"
         },
         {
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "gameTypeId",
-          "type": "uint16"
+          "type": "uint32"
         },
         {
           "internalType": "bytes",
@@ -426,9 +426,9 @@
     {
       "inputs": [
         {
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "",
-          "type": "uint16"
+          "type": "uint32"
         }
       ],
       "name": "gameAdapter",
@@ -445,9 +445,9 @@
     {
       "inputs": [
         {
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "gameTypeId",
-          "type": "uint16"
+          "type": "uint32"
         }
       ],
       "name": "gameAdapterAddress",
@@ -483,9 +483,9 @@
     {
       "inputs": [
         {
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "",
-          "type": "uint16"
+          "type": "uint32"
         }
       ],
       "name": "gameAdapterName",
@@ -611,9 +611,9 @@
               "type": "address"
             },
             {
-              "internalType": "uint16",
+              "internalType": "uint32",
               "name": "gameTypeId",
-              "type": "uint16"
+              "type": "uint32"
             },
             {
               "internalType": "uint32",
@@ -636,7 +636,7 @@
               "type": "bytes"
             }
           ],
-          "internalType": "struct SatoriGames.GameMeta",
+          "internalType": "struct ISatoriGames.GameMeta",
           "name": "",
           "type": "tuple"
         }
@@ -655,9 +655,9 @@
       "name": "gameTypeIdOf",
       "outputs": [
         {
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "",
-          "type": "uint16"
+          "type": "uint32"
         }
       ],
       "stateMutability": "view",
@@ -679,9 +679,9 @@
           "type": "address"
         },
         {
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "gameTypeId",
-          "type": "uint16"
+          "type": "uint32"
         },
         {
           "internalType": "uint32",
@@ -774,9 +774,9 @@
     {
       "inputs": [
         {
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "",
-          "type": "uint16"
+          "type": "uint32"
         }
       ],
       "name": "isCommunityGameAdapter",
@@ -814,9 +814,9 @@
       "name": "nextGameTypeId",
       "outputs": [
         {
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "",
-          "type": "uint16"
+          "type": "uint32"
         }
       ],
       "stateMutability": "view",
@@ -861,9 +861,9 @@
       "name": "registerGameAdapter",
       "outputs": [
         {
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "gameTypeId",
-          "type": "uint16"
+          "type": "uint32"
         }
       ],
       "stateMutability": "nonpayable",
@@ -978,6 +978,19 @@
           "internalType": "uint24",
           "name": "",
           "type": "uint24"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "upgradeGovernor",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
         }
       ],
       "stateMutability": "view",

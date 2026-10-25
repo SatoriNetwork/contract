@@ -114,7 +114,8 @@ contract SatoriSplitterImmutable is ReentrancyGuard {
     /// @notice The threshold used when the constructor is passed 0. Deliberately
     ///         90% rather than 100%: true unanimity would let a single lost key
     ///         freeze the escape hatch forever, which in an immutable contract is
-    ///         unrecoverable.
+    ///         unrecoverable. On a table where every holder has an equal large
+    ///         share (C's 50/50), 90% still needs both: it is unanimity there.
     uint256 public constant DEFAULT_ROTATION_THRESHOLD_BPS = 9000;
 
     /// @notice Share weight (of `totalShares`) that must approve a rotation for
@@ -185,6 +186,8 @@ contract SatoriSplitterImmutable is ReentrancyGuard {
     /// @notice May trigger `rotateAt` with no consent, transfer that right, or
     ///         renounce it forever. That is its complete power set.
     address public authority;
+    /// The address `transferAuthority` named; it becomes the authority when it accepts.
+    address public pendingAuthority;
 
     // ========== Per-token accounting (lazy, unregistered) ==========
 
@@ -215,6 +218,7 @@ contract SatoriSplitterImmutable is ReentrancyGuard {
     ///      indexer never has to infer a gate change from a rotation.
     event WithdrawCallerSet(uint256 indexed slotId, address indexed caller);
     event AuthorityTransferred(address indexed previousAuthority, address indexed newAuthority);
+    event AuthorityTransferStarted(address indexed currentAuthority, address indexed pendingAuthority);
     event SlotCreated(uint256 indexed slotId, address indexed payee, uint256 shares);
     /// Once, after every SlotCreated. `authority` may be zero (consent-only), which
     /// AuthorityTransferred does not record; the threshold is the resolved one.
@@ -234,6 +238,7 @@ contract SatoriSplitterImmutable is ReentrancyGuard {
     error NothingToWithdraw();
     error EthTransferFailed();
     error NotAuthority();
+    error NotPendingAuthority();
     error NotWithdrawCaller();
     error LengthMismatch();
     error NoRecipients();
@@ -307,19 +312,40 @@ contract SatoriSplitterImmutable is ReentrancyGuard {
 
     // ========== Authority ==========
 
-    /// @notice Hand the rotation right to someone else. Authority-only.
+    /// @notice Offer the rotation right to someone else. Authority-only. The right
+    ///         moves only when `newAuthority` calls `acceptAuthority`, so a mistyped
+    ///         address cannot take it. The zero address gives it up at once
+    ///         (the same as `renounceAuthority`). A new offer replaces the last.
     function transferAuthority(address newAuthority) external onlyAuthority {
-        emit AuthorityTransferred(authority, newAuthority);
-        authority = newAuthority;
+        if (newAuthority == address(0)) {
+            _renounce();
+            return;
+        }
+        pendingAuthority = newAuthority;
+        emit AuthorityTransferStarted(authority, newAuthority);
+    }
+
+    /// @notice Take the rotation right the current authority offered to the caller.
+    function acceptAuthority() external {
+        if (msg.sender != pendingAuthority) revert NotPendingAuthority();
+        emit AuthorityTransferred(authority, msg.sender);
+        authority = msg.sender;
+        pendingAuthority = address(0);
     }
 
     /// @notice Give up the unilateral rotation right forever. After this, the
     ///         only way this splitter's slot in a parent can move is
-    ///         `rotationThresholdBps` share consent of its own recipients. This
-    ///         is the "set in stone" call.
+    ///         `rotationThresholdBps` share consent of its own recipients. At or
+    ///         below 5000 that is not set in stone: a recipient holding that share
+    ///         can still move the slot alone, and nobody can undo it.
     function renounceAuthority() external onlyAuthority {
+        _renounce();
+    }
+
+    function _renounce() private {
         emit AuthorityTransferred(authority, address(0));
         authority = address(0);
+        pendingAuthority = address(0);
     }
 
     // ========== Withdraw (pull) ==========
@@ -523,9 +549,9 @@ contract SatoriSplitterImmutable is ReentrancyGuard {
      *      only the second.
      *
      *      This is the single most dangerous power in the contract: it redirects
-     *      ALL FUTURE income from `parent` to `newPayee`. It cannot touch funds
-     *      already here — those stay claimable by the existing slots under the
-     *      existing shares — so the blast radius is future inflow only. Give the
+     *      ALL FUTURE income from `parent` to `newPayee`, and the slot's
+     *      unpulled balance goes with it (accounting is per slot). It cannot touch
+     *      what the other slots are owed. Give the
      *      authority to someone you would give the revenue stream to, or pass
      *      address(0) at construction and never have the door at all.
      *

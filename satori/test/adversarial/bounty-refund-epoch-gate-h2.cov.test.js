@@ -11,6 +11,12 @@
 //      inside fundBounty's VIRGIN branch (oldWeight == 0).
 //  (2) _dripTokenForRound: `if (round < _fundingEpochStartRound[gameId][tk]) return;`
 //
+// Since a round's pot is reserved at its first boost (M27), a winner's round has
+// always dripped from its own epoch's pool by the time it can be settled, so the
+// stale-round state the gate refuses no longer arises. These probes pin the
+// property the gate protected: a late settle after a drain and re-fund pays only
+// the round's own reserved pot and never touches the re-funded pool.
+//
 // This file tries HARD to break it (siphon a re-funded pool, or over-block a
 // legitimate path). Probes 1-7 below.
 
@@ -132,11 +138,11 @@ describe("VERIFY H2: cross-epoch fund-leak gate", function () {
     await registry.connect(authority).setValue(streamId, 130);
     await advanceOneDay();
     await registry.connect(authority).setValue(streamId, 140);
-    await satori.settlePrediction(bob.address, streamId); // drains in R2
+    await satori.settlePrediction(bob.address, streamId);
 
     expect(await bounties.pool(streamId, usdAddr)).to.equal(0n);
     expect(await bounties.ratePerRound(streamId, usdAddr)).to.equal(0n);
-    expect(await bounties.roundBountyPot(streamId, R, usdAddr)).to.equal(0n); // R never dripped
+    expect(await bounties.roundBountyPot(streamId, R, usdAddr)).to.equal(SMALL); // R reserved the whole pool at Alice's predict
 
     // Re-fund (epoch 2). No cleanup. Virgin branch fires because pool==0.
     const REFUND = ethers.parseEther("500");
@@ -159,8 +165,8 @@ describe("VERIFY H2: cross-epoch fund-leak gate", function () {
       "| drippedOld:", ethers.formatEther(drippedOld),
       "| poolAfter:", ethers.formatEther(poolAfter));
 
-    expect(aliceEarned).to.equal(0n);                  // stale predictor earns nothing
-    expect(drippedOld).to.equal(0n);                   // old round stays empty
+    expect(aliceEarned).to.equal(SMALL);               // paid only the pot her round reserved
+    expect(drippedOld).to.equal(SMALL);                // and that pot did not grow
     expect(poolAfter).to.equal(REFUND);                // re-funded pool intact to the wei
     expect(contractAfter).to.equal(contractBefore);    // no token moved out
   });
@@ -250,10 +256,10 @@ describe("VERIFY H2: cross-epoch fund-leak gate", function () {
       "| bobEarned:", ethers.formatEther(bobEarned),
       "| poolAfter:", ethers.formatEther(poolAfter));
 
-    expect(aliceEarned).to.equal(0n);   // epoch1 stale -> 0
-    expect(bobEarned).to.equal(0n);     // epoch2 stale -> 0
-    expect(drippedRa).to.equal(0n);
-    expect(drippedRb).to.equal(0n);
+    expect(aliceEarned).to.equal(SMALL);  // epoch1 stale winner: only its own round's pot
+    expect(bobEarned).to.equal(SMALL);    // epoch2 stale winner: only its own round's pot
+    expect(drippedRa).to.equal(SMALL);
+    expect(drippedRb).to.equal(SMALL);
     expect(poolAfter).to.equal(poolBefore); // epoch3 pool fully intact
   });
 
@@ -346,8 +352,8 @@ describe("VERIFY H2: cross-epoch fund-leak gate", function () {
   // Token A drains+refunds (advancing A's epoch) while token B stays in its
   // original epoch the whole time. A stale round-R prediction that snapshotted
   // BOTH tokens settles late:
-  //   - token A's epoch advanced past R -> A drip refused (0).
-  //   - token B never advanced (R >= B epoch start) -> B drips & pays.
+  //   - token A pays Alice only round R's own reserved pot, never the re-fund.
+  //   - token B is unaffected and pays.
   // Confirms the gate is per-token and doesn't cross-contaminate.
   // ================================================================
   it("PROBE E: per-token epoch boundaries are independent", async function () {
@@ -415,12 +421,12 @@ describe("VERIFY H2: cross-epoch fund-leak gate", function () {
       "| B earned:", ethers.formatEther(aliceBearned),
       "| A poolAfter:", ethers.formatEther(poolAafter));
 
-    // Token A: epoch advanced past R -> refused -> nothing siphoned.
-    expect(aliceAearned).to.equal(0n);
-    expect(drippedAold).to.equal(0n);
-    expect(poolAafter).to.equal(poolAbefore); // A re-fund intact
+    // Token A: Alice takes only the pot her round reserved; the re-fund is intact.
+    expect(aliceAearned).to.equal(SMALL);
+    expect(drippedAold).to.equal(SMALL);
+    expect(poolAafter).to.equal(poolAbefore);
 
-    // Token B: never advanced its epoch (still epoch 1, R >= start) -> drips & pays.
+    // Token B: never re-funded -> its round-R pot pays as before.
     expect(drippedBold).to.be.gt(0n);
     expect(aliceBearned).to.be.gt(0n);
   });
@@ -469,22 +475,23 @@ describe("VERIFY H2: cross-epoch fund-leak gate", function () {
       drippedOld: await bounties.roundBountyPot(streamId, R, usdAddr),
       poolAfter: await bounties.pool(streamId, usdAddr),
       REFUND,
+      SMALL,
     };
   }
 
   it("PROBE F1: gate holds WITH cleanup between drain and refund", async function () {
     const r = await staleSiphonAttempt(true);
     console.log("PROBE F1(cleanup) | aliceEarned:", ethers.formatEther(r.aliceEarned));
-    expect(r.aliceEarned).to.equal(0n);
-    expect(r.drippedOld).to.equal(0n);
+    expect(r.aliceEarned).to.equal(r.SMALL);
+    expect(r.drippedOld).to.equal(r.SMALL);
     expect(r.poolAfter).to.equal(r.REFUND);
   });
 
   it("PROBE F2: gate holds WITHOUT cleanup between drain and refund", async function () {
     const r = await staleSiphonAttempt(false);
     console.log("PROBE F2(no-cleanup) | aliceEarned:", ethers.formatEther(r.aliceEarned));
-    expect(r.aliceEarned).to.equal(0n);
-    expect(r.drippedOld).to.equal(0n);
+    expect(r.aliceEarned).to.equal(r.SMALL);
+    expect(r.drippedOld).to.equal(r.SMALL);
     expect(r.poolAfter).to.equal(r.REFUND);
   });
 
@@ -529,7 +536,7 @@ describe("VERIFY H2: cross-epoch fund-leak gate", function () {
   // predictor one round BEFORE the refund (round == start-1) must be refused.
   // This pins the off-by-one.
   // ================================================================
-  it("PROBE H: epoch boundary is exact — round==start pays, round==start-1 refused", async function () {
+  it("PROBE H: epoch boundary — round==start pays, an older round pays only its own reserved pot", async function () {
     const SMALL = ethers.parseEther("50");
     await bounties.connect(funder).fundBounty(streamId, usdAddr, SMALL, SMALL);
 
@@ -590,9 +597,9 @@ describe("VERIFY H2: cross-epoch fund-leak gate", function () {
       "| aliceEarned(stale):", ethers.formatEther(aliceEarned),
       "| carolEarned(boundary):", ethers.formatEther(carolEarned));
 
-    expect(aliceEarned).to.equal(0n);          // strictly-older round refused
+    expect(aliceEarned).to.equal(SMALL);       // the older round pays only its own reserved pot
     expect(carolEarned).to.be.gt(0n);          // round == start is the NEW epoch, pays
     expect(carolRoundPot).to.be.gt(0n);
-    expect(await bounties.roundBountyPot(streamId, Rprev, usdAddr)).to.equal(0n);
+    expect(await bounties.roundBountyPot(streamId, Rprev, usdAddr)).to.equal(SMALL);
   });
 });

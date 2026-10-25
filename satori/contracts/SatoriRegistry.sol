@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import "./libraries/SatoriTypes.sol";
 import "./interfaces/ISatoriCore.sol";
+import "./interfaces/ISatoriRegistry.sol";
 import "./interfaces/ISatoriRewards.sol";
 import "./interfaces/IStreamAdapter.sol";
 import "./interfaces/INamedStreamAdapter.sol";
@@ -12,13 +13,13 @@ import "./interfaces/INamedStreamAdapter.sol";
  * @notice Manages DataStream registry for Satori protocol
  * @dev Owns per-stream metadata and a 768-slot circular buffer of value history.
  *      The anchor + first post-anchor entries serve the on-chain A-B-C
- *      scoring walk (getFirstTwoValuesAfter / getFirstValueAfter, which may
+ *      scoring walk (getFirstTwoValuesAfter / getAnchorFirstAfter, which may
  *      look back up to HISTORY_SIZE-2 ticks); the full 768-slot buffer also
  *      serves UI chart rendering.
  */
 import "./next/SatoriUUPS.sol";
 
-contract SatoriRegistry is SatoriUUPS {
+contract SatoriRegistry is ISatoriRegistry, SatoriUUPS {
     // ========== Constants ==========
 
     /// @notice Size of the per-stream history circular buffer.
@@ -41,24 +42,24 @@ contract SatoriRegistry is SatoriUUPS {
     ///         auto-assigned at registration time and never reused. Existing
     ///         streams never have their adapter swapped under them.
     /// @dev Read on every `updateValue` for Adapter-type streams.
-    mapping(uint16 => address) public adapter;
+    mapping(uint32 => address) public adapter;
 
     /// @notice Caller-supplied human-readable label for the adapter at `id`.
     ///         Not unique, not validated, purely informational; the assigned
     ///         numeric ID is the canonical handle dapps should bind to.
-    mapping(uint16 => string) public adapterName;
+    mapping(uint32 => string) public adapterName;
 
     /// @notice True if the adapter at `id` was registered via the
     /// permissionless `registerCommunityAdapter` path, false if it was
     /// registered by the protocol admin (`rewards.admin()`) via `registerAdapter`. Lets
     /// dapps and users distinguish official adapters from community-
     /// contributed ones at a glance.
-    mapping(uint16 => bool) public isCommunityAdapter;
+    mapping(uint32 => bool) public isCommunityAdapter;
 
     /// @notice Next adapter ID to assign. Starts at 1 (ID 0 = "no adapter"
     ///         sentinel for Simple streams). Reverts on wraparound past
-    ///         65535, mirroring the game-adapter ID space.
-    uint16 public nextAdapterId = 1;
+    ///         2^32 - 1, mirroring the game-adapter ID space.
+    uint32 public nextAdapterId = 1;
 
     // ========== Core Reference ==========
 
@@ -111,24 +112,9 @@ contract SatoriRegistry is SatoriUUPS {
 
     // ========== Events ==========
 
-    /// @notice The whole creation record: every StreamMeta field plus who created it, so a
-    ///         reader rebuilds a stream from this log alone (`adapterId == 0` is Simple).
-    ///         `creator` is the hub's caller and is not stored; `provider` is the key or
-    ///         source the stream was given.
-    event DataStreamCreated(
-        uint32 indexed streamId,
-        address indexed creator,
-        address indexed provider,
-        uint16 adapterId,
-        uint24 minCadenceMinutes,
-        bytes config,
-        string name
-    );
-    /// @notice One-shot wiring of the named adapter (`setNamedAdapterId`).
-    event NamedAdapterSet(uint16 indexed adapterId);
-    /// @notice A named stream's Coined id, alongside its `DataStreamCreated`.
-    event NamedStreamCreated(uint32 indexed streamId, bytes32 indexed nameKey);
-    event StreamValueUpdated(uint32 indexed streamId, int256 oldValue, int256 newValue, uint256 hour);
+    /// @notice A due pull found the value unchanged: the cadence clock advanced to
+    ///         `checkedAt`, and no ring entry was written.
+    event StreamChecked(uint32 indexed streamId, uint256 checkedAt);
     /// @notice One per `updateValues` call. `requested` is the batch size, `updated` how many
     ///         actually took a value — the difference is streams skipped (not due, or a
     ///         failed read). Per-stream detail is the `StreamValueUpdated` events above.
@@ -136,10 +122,6 @@ contract SatoriRegistry is SatoriUUPS {
     /// @notice One per `setValues` call. `written` < `requested` means some streams were not
     ///         due yet; per-stream detail is the `StreamValueUpdated` events above.
     event StreamValuesBatchSet(address indexed provider, uint256 requested, uint256 written);
-    event NameUpdated(uint32 indexed streamId, string newName);
-    event ProviderChanged(uint32 indexed streamId, address indexed oldProvider, address indexed newProvider);
-    event SatoriCoreSet(address indexed newCore);
-    event AdapterRegistered(uint16 indexed adapterId, address indexed impl, address indexed registrant, bool community, string name);
 
     // ========== Custom Errors (Item P) ==========
 
@@ -179,7 +161,7 @@ contract SatoriRegistry is SatoriUUPS {
     /// @dev Adapter read failed with no revert payload to re-throw (empty returndata,
     ///      a short buffer, or an out-of-int232-range value).
     error AdapterReadFailed();
-    /// @notice `registerAdapter` exhausted the uint16 ID space (65535
+    /// @notice `registerAdapter` exhausted the uint32 ID space (4,294,967,295
     ///         adapters registered). Mirrors `GameAdapterIdSpaceExhausted`.
     error AdapterIdSpaceExhausted();
     /// @notice `registerAdapter` called with `impl == address(0)`.
@@ -207,13 +189,6 @@ contract SatoriRegistry is SatoriUUPS {
     error NameTaken();
     /// @notice A named stream's config is its own id, written by the registry.
     error NamedStreamConfig();
-    /// @notice `setValueForRound` was called with a round at or before the ring's
-    ///         newest entry. The history ring must stay strictly round-ordered:
-    ///         `getFirstTwoValuesAfter` walks it newest-to-oldest and takes the
-    ///         first entry at or below the prediction round as the anchor, so an
-    ///         out-of-order write would silently mis-score rather than fail loudly
-    ///         (audit B-4).
-    error NonMonotonicRound();
 
     // ========== Access Control ==========
 
@@ -250,8 +225,9 @@ contract SatoriRegistry is SatoriUUPS {
     ///      do NOT vote on the stream, do NOT control eligibility, do NOT
     ///      earn prediction rewards, do NOT gate games on the stream.
 
-    modifier onlyCore() {
-        if (msg.sender != satoriCore && msg.sender != satoriEngine) revert OnlySatoriCore();
+    /// Streams and adapters are created through the hub's fee and capability checks.
+    modifier onlyHub() {
+        if (msg.sender != satoriCore) revert OnlySatoriCore();
         _;
     }
 
@@ -300,7 +276,7 @@ contract SatoriRegistry is SatoriUUPS {
     // ========== Adapter Registration ==========
 
     /// @notice Bind an adapter implementation to the next free adapter ID.
-    /// @dev `onlyCore` — called via `SatoriHub.registerCommunityAdapter` (fee-paying, community=true) or `SatoriHub.registerAdapter` (admin-gated). The
+    /// @dev `onlyHub` — called via `SatoriHub.registerCommunityAdapter` (fee-paying, community=true) or `SatoriHub.registerAdapter` (admin-gated). The
     ///      core pulls any registration fee from `registrant` before
     ///      forwarding here. IDs are monotonically auto-assigned starting at
     ///      1 (ID 0 = "no adapter" sentinel for Simple streams) and never
@@ -311,11 +287,11 @@ contract SatoriRegistry is SatoriUUPS {
     ///      vs community adapters without parsing event history.
     /// @return id The newly assigned adapter ID.
     function registerAdapter(address impl, string calldata name, address registrant, bool community)
-        external onlyCore returns (uint16 id)
+        external onlyHub returns (uint32 id)
     {
         if (impl == address(0)) revert InvalidAdapter();
         id = nextAdapterId;
-        if (id == 0) revert AdapterIdSpaceExhausted(); // wraparound past 65535
+        if (id == 0) revert AdapterIdSpaceExhausted(); // wraparound past 2^32 - 1
         adapter[id] = impl;
         adapterName[id] = name;
         if (community) isCommunityAdapter[id] = true;
@@ -341,7 +317,7 @@ contract SatoriRegistry is SatoriUUPS {
         string memory name,
         address provider,
         uint24 minCadenceMinutes
-    ) external onlyCore returns (uint32 streamId) {
+    ) external onlyHub returns (uint32 streamId) {
         if (provider == address(0)) revert InvalidProvider();
         // The ring is keyed by HOUR (phase 6): one entry per hour at most, so
         // a cadence finer than the grid could not be represented.
@@ -374,7 +350,7 @@ contract SatoriRegistry is SatoriUUPS {
      *                 every read. For adapter streams this is NOT a
      *                 key-holding address and the stream becomes
      *                 set-and-forget after creation (no rename, no transfer).
-     * @param config Adapter-specific extra bytes (e.g. ChainlinkV3 encodes `uint64 maxFeedAge` here; Uniswap and Custom ignore it)
+     * @param config Adapter-specific extra bytes (e.g. ChainlinkV3 encodes `uint64 maxFeedAge` here; Uniswap its TWAP window in seconds; Custom ignores it)
      * @return streamId The newly created StreamId
      * @dev Core-only. The registered adapter's `validate(provider, config)` is
      *      invoked at creation time and reverts on bad config — meaning create
@@ -384,11 +360,11 @@ contract SatoriRegistry is SatoriUUPS {
     function createAdapterDataStream(
         address creator,
         string memory name,
-        uint16 adapterId,
+        uint32 adapterId,
         address provider,
         bytes memory config,
         uint24 minCadenceMinutes
-    ) external onlyCore returns (uint32 streamId) {
+    ) external onlyHub returns (uint32 streamId) {
         if (provider == address(0)) revert InvalidProvider();
         // The ring is keyed by HOUR (phase 6): one entry per hour at most, so
         // a cadence finer than the grid could not be represented.
@@ -601,46 +577,6 @@ contract SatoriRegistry is SatoriUUPS {
     }
 
     /**
-     * @notice Core-only: write a value to the ring buffer for a specific round
-     * @dev Used by the default stream flush path, and ONLY by it — the hub seeds
-     *      the value at genesis and the engine writes it once per round from
-     *      `flushDefaultStream`. Both pass DEFAULT_STREAM_ID. No cadence checks:
-     *      the core is trusted to write correct round numbers. Advances the ring
-     *      once per call.
-     */
-    function setValueForRound(uint32 streamId, int232 newValue, uint24 round) external onlyCore {
-        if (streamId == 0 || streamId > streams.length) revert InvalidStreamId();
-
-        int232 oldValue;
-        if (ringMeta[streamId].count > 0) {
-            HistoryEntry storage newest = historyData[streamId][_newestSlot(streamId)];
-            oldValue = newest.value;
-            // AUDIT B-4. `getFirstTwoValuesAfter` walks the ring newest-to-oldest
-            // and stops at the FIRST entry with hour <= afterHour, treating it
-            // as the anchor — which is only correct while ring rounds strictly
-            // increase. Every writer maintains that (setValue / updateValue via
-            // the cadence guard; and this
-            // function's caller, SatoriEngine.flushDefaultStream, returns early
-            // unless today > defaultStreamLastFlushedRound). But nothing here
-            // ENFORCED it, and the core is upgradeable: a future hub writing a
-            // round out of order would silently corrupt scoring rather than
-            // revert. The newest entry is already loaded for oldValue, so the
-            // guarantee costs one comparison.
-            // Hour-keyed ring: this round-denominated write lands at the
-            // round's FIRST hour, so monotonicity is checked in hours.
-            if (uint256(round) * 24 <= uint256(newest.round)) revert NonMonotonicRound();
-        }
-
-        _writeNewEntry(streamId, newValue, uint24(uint256(round) * 24), uint64(block.timestamp));
-
-        emit StreamValueUpdated(streamId, int256(oldValue), int256(newValue), uint256(round) * 24);
-
-        // Tell rewards this stream produced. Deduped there to the round's first
-        // update, so the once-per-round flush pays for it once.
-        ISatoriRewards(satoriRewards).onStreamProduced(streamId);
-    }
-
-    /**
      * @notice Pull a fresh value from an external datastream (Custom, Chainlink, Uniswap)
      * @dev Permissionless — anyone can call. Enforces the same two guards
      *      as `setValue`: a round-level cadence guard and a wall-clock
@@ -709,6 +645,21 @@ contract SatoriRegistry is SatoriUUPS {
      *        occurrence simply fails its own cadence guard and is skipped.
      * @return updated Count of streams that actually took a new value.
      */
+    /// @notice `updateValues` that also reports the first stream whose pull was due and
+    ///         whose read failed (0 if none). The engine refuses a prediction on such a
+    ///         stream: the failed pull would leave the prediction anchored on an old
+    ///         value, however the read failed (feed error, outage, out of gas).
+    function updateValuesStrict(uint32[] calldata streamIds) external returns (uint32 failed) {
+        uint256 currentRound = ISatoriCore(satoriCore).getCurrentRound();
+        uint256 updated;
+        for (uint256 i = 0; i < streamIds.length; i++) {
+            (uint8 code, ) = _updateValue(streamIds[i], currentRound);
+            if (code == UPD_OK) updated++;
+            else if (code == UPD_READ_FAILED && failed == 0) failed = streamIds[i];
+        }
+        emit StreamValuesBatchUpdated(msg.sender, streamIds.length, updated);
+    }
+
     function updateValues(uint32[] calldata streamIds) external returns (uint256 updated) {
         // Hoisted out of the loop: the round is a pure function of block.timestamp, so it
         // is constant for the whole transaction. This turns N external calls into one.
@@ -809,12 +760,13 @@ contract SatoriRegistry is SatoriUUPS {
             // advances the cadence clock WITHOUT writing a ring entry —
             // `lastUpdateTimestamp` means "last checked", not "last changed",
             // so there are no futile re-pulls and the ring keeps only real
-            // movement. No event and no onStreamProduced: nothing was
-            // produced. The engine's StaleValue guard reads WRITTEN rounds,
+            // movement. `StreamChecked` says the clock moved; no
+            // onStreamProduced: nothing was produced. The engine's StaleValue guard reads WRITTEN rounds,
             // so a flat stream also accepts no new predictions — outstanding
             // predictions are capped at one and settle on the first real
             // move (design §7.1 and the corrected note in question 2).
             sm.lastUpdateTimestamp = uint64(block.timestamp);
+            emit StreamChecked(streamId, block.timestamp);
             return (UPD_UNCHANGED, "");
         }
 
@@ -952,13 +904,16 @@ contract SatoriRegistry is SatoriUUPS {
     ///      means "last CHECKED" — an unchanged adapter pull advances it
     ///      without writing; `latestRound` is the last WRITTEN round.
     function getLatestUpdateInfo(uint32 streamId) external view returns (
-        uint16 count, uint64 latestHour, uint64 lastUpdateTimestamp, uint24 minCadenceMinutes, bool named
+        uint16 count, uint64 latestHour, uint64 lastUpdateTimestamp, uint24 minCadenceMinutes, bool named,
+        int232 latestValue
     ) {
         RingMeta storage sm = ringMeta[streamId];
         count = sm.count;
         lastUpdateTimestamp = sm.lastUpdateTimestamp;
         if (count > 0) {
-            latestHour = uint64(historyData[streamId][_newestSlot(streamId)].round);
+            HistoryEntry storage newest = historyData[streamId][_newestSlot(streamId)];
+            latestHour = uint64(newest.round);
+            latestValue = newest.value;
         }
         if (streamId > 0 && streamId <= streams.length) {
             SatoriTypes.StreamMeta storage meta = streams[streamId - 1];
@@ -1123,8 +1078,7 @@ contract SatoriRegistry is SatoriUUPS {
     // redesign, docs/issues/rolling-24h-scoring.md section 9.5). ----
     //
     // Ring entries are STRICTLY INCREASING in `round` — every writer
-    // guarantees it (the cadence guards on setValue/updateValue; the
-    // NonMonotonicRound check on setValueForRound) — and a stream writes at
+    // guarantees it (the cadence guards on setValue/updateValue) — and a stream writes at
     // most one entry per round. Those two facts give a computed two-sided
     // bracket for any round query: between two entries, index distance is at
     // most round distance, so the first entry with round > afterRound lies in
@@ -1174,10 +1128,10 @@ contract SatoriRegistry is SatoriUUPS {
      * @notice Anchor and target for MOMENT-ANCHORED scoring (phase 6, design
      *         9.5): `anchor` is the last entry at or before `anchorHour`;
      *         `post` is the first entry STRICTLY AFTER `targetAfterHour`.
-     *         Band 3 (round-length-and-above cadences) passes
-     *         `targetAfterHour == anchorHour` — the next sample; band 1 passes
-     *         `anchorHour + waitHours - 1` so the target is the first sample at
-     *         least the game's target after the prediction's hour.
+     *         The engine passes `anchorHour + waitHours - 1` for every stream, so
+     *         the target is the first sample at least the game's target after
+     *         the prediction's hour. There is no next-sample rule for coarse
+     *         streams; it was shipped and reverted.
      * @dev Same tri-state contract as `getFirstTwoValuesAfter`:
      *      found=false + anchorEvicted=false is recoverable (wait for data);
      *      anchorEvicted=true means the ring rolled past the anchor —
@@ -1262,10 +1216,11 @@ contract SatoriRegistry is SatoriUUPS {
 
     /**
      * @notice Find the first stream update with hour strictly > afterHour.
-     * @dev Companion to `getFirstTwoValuesAfter`, used by the AB scoring path
-     *      for streams that don't update every round (cadence >= 2). Same
-     *      boundary-search semantics — just takes the first post-anchor tick
-     *      instead of waiting for a second one.
+     * @dev Companion to `getFirstTwoValuesAfter`. Scoring does not call it
+     *      (it uses `getFirstTwoValuesAfter` and `getAnchorFirstAfter`); the
+     *      bounty reclaim gate uses it to tell whether a round's anchor has left
+     *      the ring. Same boundary-search semantics — just takes the first
+     *      post-anchor tick instead of waiting for a second one.
      *
      *      The three observable outcomes mirror the ABC variant:
      *      - found=true, anchorEvicted=false: `valueB` is the first
@@ -1394,8 +1349,7 @@ contract SatoriRegistry is SatoriUUPS {
         }
     }
 
-    /// @notice The SatoriEngine, a second authorized caller of onlyCore methods
-    ///         (setValueForRound via flushDefaultStream).
+    /// @notice The SatoriEngine (wired at deploy; the registry's only gate is now the hub's).
     address public satoriEngine;
 
     /// @notice The SatoriToken — upgrade-gate pointer (appended, phase 2).
@@ -1410,7 +1364,7 @@ contract SatoriRegistry is SatoriUUPS {
 
     /// @notice The adapter whose streams are NAMED streams: value = the engine's
     ///         per-game prediction-flow counter, snapshotted on the hour grid.
-    uint16 public namedAdapterId;
+    uint32 public namedAdapterId;
 
     /// @notice Coined id (the named adapter's `nameKey`) of every named stream
     ///         created: names are unique among named streams as Coined terms
@@ -1419,7 +1373,7 @@ contract SatoriRegistry is SatoriUUPS {
 
     /// nextStreamId == 1: a stream created before wiring would silently be an
     /// ordinary adapter stream.
-    function setNamedAdapterId(uint16 id) external {
+    function setNamedAdapterId(uint32 id) external {
         if (msg.sender != deployer) revert OnlyDeployer();
         if (namedAdapterId != 0 || nextStreamId != 1) revert CoreAlreadyInitialized();
         if (id == 0 || adapter[id] == address(0)) revert UnknownAdapter();
@@ -1427,8 +1381,10 @@ contract SatoriRegistry is SatoriUUPS {
         emit NamedAdapterSet(id);
     }
 
-    /// @notice Set once, at creation: a later change of `namedAdapterId` cannot
-    ///         turn an existing named stream into an ordinary one mid-game.
+    /// @notice Set once, at creation, so an existing named stream stays named.
+    ///         `setNamedAdapterId` works once, before the first stream, so
+    ///         replacing the named adapter takes a registry upgrade; streams made
+    ///         before it keep working, because `readValue` reads only the engine.
     function isNamedStream(uint32 streamId) external view returns (bool) {
         return streamId != 0 && streamId <= streams.length && streams[streamId - 1].named;
     }

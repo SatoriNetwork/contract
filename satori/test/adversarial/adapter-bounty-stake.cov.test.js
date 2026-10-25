@@ -41,8 +41,7 @@ const {
   deploySatoriFixture,
   deployAndRegisterYesNoGame,
   createYesNoGame,
-  pack1,
-} = require("../fixtures");
+  pack1, ensureAdapterBountyToken } = require("../fixtures");
 
 const ROUND = 86400;
 const YES = 1;
@@ -71,6 +70,7 @@ async function stakeFor(bounties, user, token, amount) {
 async function fundBounty(bounties, funder, gameId, token, amount, rate) {
   await token.mint(funder.address, amount);
   await token.connect(funder).approve(await bounties.getAddress(), amount);
+  await ensureAdapterBountyToken(bounties, gameId, token);
   await bounties.connect(funder).fundBounty(gameId, await token.getAddress(), amount, rate);
 }
 
@@ -245,26 +245,23 @@ describe("COV adapter-bounty STAKE-weighted (score/total, single active token)",
     expect(y1Earned).to.be.lte(dripped);
   });
 
-  it("(3) QUEUE: round uses token A (first funded); after A drains + cleanup, a later round uses token B", async function () {
-    const usd = await deployToken("USDC"); // token A (funded first)
-    const dai = await deployToken("DAI");  // token B (funded second)
+  it("(3) ONE TOKEN: only the author's chosen token can fund the game; after it drains the author switches and a later round pays the new token", async function () {
+    const usd = await deployToken("USDC"); // the author's choice (fixture helper)
+    const dai = await deployToken("DAI");
     const usdAddr = await usd.getAddress();
     const daiAddr = await dai.getAddress();
 
-    // Fund BOTH tokens on the SAME adapter game. A (USDC) is queued first, so it
-    // is the ACTIVE token for round 1; B (DAI) waits its turn. Each is a FIRST
-    // fund of a distinct (game, token) pair, so each burns one bountyBurn in
-    // SATORI from the funder ⇒ give `funder` two bountyBurn up front.
     await satori.transfer(funder.address, (await satori.bountyBurn()) * 2n);
     await fundBounty(bounties, funder, gameId, usd, POOL, RATE);
-    await fundBounty(bounties, funder, gameId, dai, POOL, RATE);
 
-    // Stake BOTH tokens up front so the only thing selecting the payout token is
-    // the queue (active-token pin), not which token the user happens to hold.
+    await dai.mint(funder.address, POOL);
+    await dai.connect(funder).approve(await bounties.getAddress(), POOL);
+    await expect(bounties.connect(funder).fundBounty(gameId, daiAddr, POOL, RATE))
+      .to.be.revertedWithCustomError(bounties, "NotTheGamesBountyToken");
+
     await stakeFor(bounties, yes1, usd, STAKE_HIGH);
     await stakeFor(bounties, yes1, dai, STAKE_HIGH);
 
-    // ---- Round 1: active token is A (USDC). ----
     const round1 = Number(await satori.getCurrentRound());
     await satori.connect(yes1).predictMultipleWithPayloads([{ gameId, payload: pack1(YES) }]);
     await advanceRound();
@@ -275,28 +272,21 @@ describe("COV adapter-bounty STAKE-weighted (score/total, single active token)",
     const usdEarnR1 = (await bounties.bountyStake(yes1.address, usdAddr)) - STAKE_HIGH;
     const daiEarnR1 = (await bounties.bountyStake(yes1.address, daiAddr)) - STAKE_HIGH;
 
-    // Round 1 paid the ACTIVE token A only — DAI's pot did NOT drip or pay.
     expect(usdEarnR1).to.be.gt(0n);
     expect(daiEarnR1).to.equal(0n);
     const usdDripped = await bounties.roundBountyPot(gameId, round1, usdAddr);
-    const daiDrippedR1 = await bounties.roundBountyPot(gameId, round1, daiAddr);
     expect(usdDripped).to.equal(RATE);
-    expect(daiDrippedR1).to.equal(0n); // B never dripped while A was active
-    // Lone winner takes the whole A pot (no payout fee).
+    expect(await bounties.roundBountyPot(gameId, round1, daiAddr)).to.equal(0n);
     expect(usdEarnR1).to.be.closeTo(usdDripped, TOL);
     expect(usdEarnR1).to.be.lte(usdDripped);
 
-    // A is now fully drained (virgin pool == rate ⇒ one round empties it).
     expect(await bounties.pool(gameId, usdAddr)).to.equal(0n);
     expect(await bounties.ratePerRound(gameId, usdAddr)).to.equal(0n);
 
-    // Pop the drained token A from the queue so the queue advances to B.
-    await bounties.cleanupDrainedBountyToken(gameId, usdAddr);
-    expect(await bounties.gameBountyTokenCount(gameId)).to.equal(1n); // only B left
+    await ensureAdapterBountyToken(bounties, gameId, dai);
+    await satori.transfer(funder.address, await satori.bountyBurn());
+    await bounties.connect(funder).fundBounty(gameId, daiAddr, POOL, RATE);
 
-    // ---- A LATER round: active token is now B (DAI). ----
-    // Re-stake A's earned USDC? No — USDC pool is gone; B (DAI) is the only live
-    // token, and yes1 still has DAI staked. Predict again on a fresh round.
     const round2 = Number(await satori.getCurrentRound());
     expect(round2).to.be.gt(round1);
     await satori.connect(yes1).predictMultipleWithPayloads([{ gameId, payload: pack1(YES) }]);
@@ -308,7 +298,6 @@ describe("COV adapter-bounty STAKE-weighted (score/total, single active token)",
 
     const daiEarnR2 = (await bounties.bountyStake(yes1.address, daiAddr)) - daiStakeBefore;
 
-    // Now B (DAI) is the active token and pays out.
     expect(daiEarnR2).to.be.gt(0n);
     const daiDrippedR2 = await bounties.roundBountyPot(gameId, round2, daiAddr);
     expect(daiDrippedR2).to.equal(RATE);

@@ -65,8 +65,8 @@ describe("SatoriMerkle (Phase 2a) — isolated second-minter cumulative drop", f
     ({ satori, rewards, merkle } = await deployStack(owner, publisher)); // owner = admin+deployer
     // Phase 2b: the Merkle lane mints ONLY against its accrued reserve. Dial
     // budget to the off-chain side and let it accrue so these claim tests have a
-    // lane to draw on. The dial is effective NEXT round, so 3 advances bank 2
-    // full rounds: reserve = 360 × 2 = 720, well past what any small test claims.
+    // lane to draw on. The dial is effective NEXT round, so 3 advances bank 3
+    // rounds (the current round included): reserve = 360 × 3 = 1080, well past what any small test claims.
     await rewards.connect(owner).setOffchainBudget(E(360));
     await advanceRounds(3);
   });
@@ -80,7 +80,7 @@ describe("SatoriMerkle (Phase 2a) — isolated second-minter cumulative drop", f
     expect(await satori.balanceOf(alice.address)).to.equal(E(100));
     expect(await satori.totalRewardsMinted() - mintedBefore).to.equal(E(100)); // shared counter
     expect(await merkle.alreadyMintedTo(alice.address)).to.equal(E(100));
-    expect(await merkle.merkleClaimedTotal()).to.equal(E(100));
+    expect(await satori.merkleMinted()).to.equal(E(100));
   });
 
   it("is cumulative + idempotent: a higher root mints only the delta; re-claim reverts", async function () {
@@ -245,9 +245,9 @@ describe("SatoriMerkle (Phase 2a) — isolated second-minter cumulative drop", f
   // ================================================================
   describe("partial pay against the accrued reserve", function () {
     it("an over-sized claim drains the reserve, then the same proof collects the rest over time", async function () {
-      // beforeEach: rate 360, effective next round, 2 full rounds banked -> 720.
+      // beforeEach: rate 360, effective next round, 3 rounds banked -> 1080.
       const reserve0 = await satori.merkleReserveCeiling();
-      expect(reserve0).to.equal(E(720));
+      expect(reserve0).to.equal(E(1080));
       await merkle.connect(publisher).setMerkleRoot(leafOf(alice.address, E(5000)));
 
       // First claim: pays exactly the accrued reserve; the event reports the
@@ -256,15 +256,15 @@ describe("SatoriMerkle (Phase 2a) — isolated second-minter cumulative drop", f
         .to.emit(merkle, "MerkleClaimed").withArgs(alice.address, E(5000), reserve0);
       expect(await satori.balanceOf(alice.address)).to.equal(reserve0);
       expect(await merkle.alreadyMintedTo(alice.address)).to.equal(reserve0);
-      expect(await merkle.merkleClaimedTotal()).to.equal(reserve0);
+      expect(await satori.merkleMinted()).to.equal(reserve0);
 
       // Two more rounds accrue 720 — the SAME root and proof pay it out.
       await advanceRounds(2);
       await merkle.connect(alice).claimMerkle(E(5000), []);
-      expect(await merkle.alreadyMintedTo(alice.address)).to.equal(E(1440));
+      expect(await merkle.alreadyMintedTo(alice.address)).to.equal(E(1800));
 
       // Enough accrual to cover the remainder: the clamp yields to the smaller
-      // entitlement remainder (3560 < the 3600 newly affordable) — never
+      // entitlement remainder (3200 < the 3600 newly affordable) — never
       // over-pays past the proved lifetime total.
       await advanceRounds(10);
       await merkle.connect(alice).claimMerkle(E(5000), []);
@@ -277,20 +277,20 @@ describe("SatoriMerkle (Phase 2a) — isolated second-minter cumulative drop", f
     });
 
     it("small claimants can no longer starve a large one: it takes what is left, then the remainder", async function () {
-      // Two-leaf tree: alice 1000, bob 200 (reserve is 720 — see beforeEach).
+      // Two-leaf tree: alice 1000, bob 200 (reserve is 1080 — see beforeEach).
       const la = leafOf(alice.address, E(1000));
       const lb = leafOf(bob.address, E(200));
       await merkle.connect(publisher).setMerkleRoot(hashPair(la, lb));
 
-      // Bob (small) drains first — 520 left.
+      // Bob (small) drains first — 880 left.
       await merkle.connect(bob).claimMerkle(E(200), [la]);
-      // Alice's 1000 exceeds the remaining 520. Before partial pay this
-      // reverted outright; now she takes the 520 immediately...
+      // Alice's 1000 exceeds the remaining 880. Before partial pay this
+      // reverted outright; now she takes the 880 immediately...
       await merkle.connect(alice).claimMerkle(E(1000), [lb]);
-      expect(await satori.balanceOf(alice.address)).to.equal(E(520));
-      expect(await merkle.alreadyMintedTo(alice.address)).to.equal(E(520));
-      // ...and the remaining 480 as soon as the reserve accrues it (2 rounds
-      // at 360 more than cover it; the clamp stops at her entitlement).
+      expect(await satori.balanceOf(alice.address)).to.equal(E(880));
+      expect(await merkle.alreadyMintedTo(alice.address)).to.equal(E(880));
+      // ...and the remaining 120 as soon as the reserve accrues it (a round
+      // at 360 more than covers it; the clamp stops at her entitlement).
       await advanceRounds(2);
       await merkle.connect(alice).claimMerkle(E(1000), [lb]);
       expect(await satori.balanceOf(alice.address)).to.equal(E(1000));

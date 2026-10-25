@@ -45,6 +45,9 @@ export const engineIface = iface('SatoriEngine', [
   // StreakThresholdSet.
   'StreakThresholdSet',
   'CurveConfigSet',
+  // A Sentiment game's running counter after each prediction: the value the
+  // game's stream reports.
+  'NamedCounterMoved',
 ]);
 
 export const bountiesIface = iface('SatoriBounties', [
@@ -70,6 +73,8 @@ export const rewardsIface = iface('SatoriRewards', [
   'PredictionDelegated',
   'PredictionUndelegated',
   'DelegatePowerSynced',
+  // The game-round's up/down weight totals, the pari-mutuel denominators.
+  'GameRoundWeight',
   // Who designated whom. ReferralPaid alone cannot answer "who have I
   // referred": it only fires when a referee EARNS, so anyone who registered
   // and has not yet been paid is invisible, and the contract's `referral`
@@ -149,6 +154,7 @@ export const TOPICS = {
   predictionDisplaced: engineIface.getEvent('PredictionDisplaced')!.topicHash,
   streakThresholdSet: engineIface.getEvent('StreakThresholdSet')!.topicHash,
   curveConfigSet: engineIface.getEvent('CurveConfigSet')!.topicHash,
+  namedCounterMoved: engineIface.getEvent('NamedCounterMoved')!.topicHash,
   bountyFunded: bountiesIface.getEvent('BountyFunded')!.topicHash,
   bountyDripped: bountiesIface.getEvent('BountyDripped')!.topicHash,
   strandedPotReclaimed: bountiesIface.getEvent('StrandedPotReclaimed')!.topicHash,
@@ -163,6 +169,7 @@ export const TOPICS = {
   predictionDelegated: rewardsIface.getEvent('PredictionDelegated')!.topicHash,
   predictionUndelegated: rewardsIface.getEvent('PredictionUndelegated')!.topicHash,
   delegatePowerSynced: rewardsIface.getEvent('DelegatePowerSynced')!.topicHash,
+  gameRoundWeight: rewardsIface.getEvent('GameRoundWeight')!.topicHash,
   dataStreamCreated: registryIface.getEvent('DataStreamCreated')!.topicHash,
   namedAdapterSet: registryIface.getEvent('NamedAdapterSet')!.topicHash,
   namedStreamCreated: registryIface.getEvent('NamedStreamCreated')!.topicHash,

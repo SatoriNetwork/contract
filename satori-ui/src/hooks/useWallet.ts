@@ -20,8 +20,8 @@ import {
 //
 // This used to be four hardcoded private keys, which meant the switcher could
 // only ever reach signers 0-3. The seeder casts fourteen — eight predictors and
-// six delegators — so most of a seeded chain, including every delegator and
-// therefore everything about loyalty, was unreachable from the UI entirely.
+// six delegators — so most of a seeded chain, including every delegator, was
+// unreachable from the UI entirely.
 //
 // Derived from the standard Hardhat mnemonic so the list cannot drift from the
 // node's accounts, and so adding an actor to the seed needs no change here.

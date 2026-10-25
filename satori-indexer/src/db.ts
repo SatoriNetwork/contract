@@ -45,9 +45,9 @@ export function openDb(dbPath: string): Database.Database {
     "SELECT COUNT(*) AS n FROM pragma_table_info('bounty_funded') WHERE name = 'new_pool'"
   ).get() as { n: number };
   if (staleFunded.n === 0) db.exec('DROP TABLE IF EXISTS bounty_funded');
-  // And for prediction_made gaining hour (v13).
+  // And for prediction_made gaining multiplier and weight (v14).
   const staleMade = db.prepare(
-    "SELECT COUNT(*) AS n FROM pragma_table_info('prediction_made') WHERE name = 'hour'"
+    "SELECT COUNT(*) AS n FROM pragma_table_info('prediction_made') WHERE name = 'weight'"
   ).get() as { n: number };
   if (staleMade.n === 0) db.exec('DROP TABLE IF EXISTS prediction_made');
 
@@ -84,6 +84,8 @@ export function openDb(dbPath: string): Database.Database {
       power_wei TEXT NOT NULL,
       power_eth REAL NOT NULL,
       hour      INTEGER NOT NULL,
+      multiplier TEXT NOT NULL,
+      weight    TEXT NOT NULL,
       PRIMARY KEY (block, log_index)
     );
     CREATE INDEX IF NOT EXISTS idx_made_game_round ON prediction_made (game_id, round);
@@ -308,6 +310,32 @@ export function openDb(dbPath: string): Database.Database {
     );
     CREATE INDEX IF NOT EXISTS idx_streak_threshold_id ON streak_threshold (game_id, block DESC, log_index DESC);
 
+    -- A Sentiment game's counter after each prediction (NamedCounterMoved). The
+    -- value is signed and unbounded in practice, so it is stored as text.
+    CREATE TABLE IF NOT EXISTS named_counter_moved (
+      block     INTEGER NOT NULL,
+      log_index INTEGER NOT NULL,
+      tx        TEXT NOT NULL,
+      game_id   INTEGER NOT NULL,
+      value     TEXT NOT NULL,
+      PRIMARY KEY (block, log_index)
+    );
+    CREATE INDEX IF NOT EXISTS idx_named_counter_game ON named_counter_moved (game_id, block DESC, log_index DESC);
+
+    -- The up/down weight totals of one game-round (GameRoundWeight), re-emitted
+    -- as predictions arrive; a pair's latest row is its current total.
+    CREATE TABLE IF NOT EXISTS game_round_weight (
+      block     INTEGER NOT NULL,
+      log_index INTEGER NOT NULL,
+      tx        TEXT NOT NULL,
+      game_id   INTEGER NOT NULL,
+      round     INTEGER NOT NULL,
+      up        TEXT NOT NULL,
+      down      TEXT NOT NULL,
+      PRIMARY KEY (block, log_index)
+    );
+    CREATE INDEX IF NOT EXISTS idx_game_round_weight ON game_round_weight (game_id, round, block DESC, log_index DESC);
+
     CREATE TABLE IF NOT EXISTS curve_config (
       block     INTEGER NOT NULL,
       log_index INTEGER NOT NULL,
@@ -481,6 +509,8 @@ export const EVENT_TABLES = [
   'game_authority_transferred',
   'streak_threshold',
   'curve_config',
+  'named_counter_moved',
+  'game_round_weight',
   'named_adapter_set',
   'named_stream_created',
   'stream_value',

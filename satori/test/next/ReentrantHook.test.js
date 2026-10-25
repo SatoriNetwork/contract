@@ -51,24 +51,32 @@ describe("SatoriToken — transfer hook: runs AFTER the move + reentrancy-safe",
     expect(await token.totalRewardsMinted()).to.equal(mintedBefore);
   });
 
-  it("a reentrant mintDevFee is bounded by devFeeCeiling — no over-mint, cap holds", async function () {
-    // The fee is a ratio of what was MINTED now, not of elapsed time, so the
-    // clock alone owes nothing — a general mint is what creates the debt.
+  it("a reentrant mintDevFee is bounded by devFeeAccrued — no over-mint, cap holds", async function () {
+    // The fee is booked on what was REPORTED as earned, not on elapsed time,
+    // so the clock alone owes nothing — a report is what creates the debt.
     await time.increase(ROUND);
-    const ceilingBefore = await token.devFeeCeiling();
-    const owed = ceilingBefore > (await token.devFeeMinted())
-      ? ceilingBefore - (await token.devFeeMinted())
-      : 0n;
+    await token.connect(controller).accrueRewards(E(100));
+    const owed = (await token.devFeeAccrued()) - (await token.devFeeMinted());
+    expect(owed).to.be.gt(0n);
     await hook.setMode(2);
     const recipient = await token.PLATFORM_FEE_RECIPIENT();
     const devBefore = await token.balanceOf(recipient);
     await token.connect(alice).transfer(bob.address, E(10)); // hook pulls the dev fee mid-transfer
-    // Saturating, not equal: the genesis split can leave devFeeMinted a wei
-    // AHEAD of its ceiling, and the pull then correctly pays nothing.
-    expect(await token.devFeeMinted()).to.be.gte(await token.devFeeCeiling());
+    expect(await token.devFeeMinted()).to.equal(await token.devFeeAccrued());
     expect(await token.balanceOf(recipient)).to.equal(devBefore + owed);
     expect(await token.totalRewardsMinted()).to.be.lte(await token.rewardCeiling()); // ONE cap holds
     expect(await token.mintDevFee.staticCall()).to.equal(0n);         // second pull same round = 0
+  });
+
+  it("a reentrant accrueRewards cannot book earnings — not the controller, reverts, is swallowed", async function () {
+    await hook.setMode(4);
+    const accrued = await token.generalAccrued();
+    const fee = await token.devFeeAccrued();
+    await expect(token.connect(alice).transfer(bob.address, E(10)))
+      .to.emit(token, "TransferHookFailed");                         // the re-entry reverted inside the hook
+    expect(await token.generalAccrued()).to.equal(accrued);
+    expect(await token.devFeeAccrued()).to.equal(fee);
+    expect(await token.balanceOf(bob.address)).to.equal(E(10));      // the outer transfer settled
   });
 
   it("a reentrant transfer stays consistent — pure moves, no value created", async function () {

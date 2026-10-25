@@ -98,10 +98,12 @@ describe("Gap: onTokenTransfer child-sync try/catch resilience (ChildSyncFailed)
     // A reverting child IMPLEMENTATION: upgradeTo installs it on a child's proxy
     // so that child's sync hooks revert (ChildBroken). It used to need the live
     // MARKETING_FEE_RECIPIENT to pass the rewards proxy's upgrade pin; that pin
-    // is gone now the recipient lives in proxy storage, so it takes no args.
-    const revVoting = await (await ethers.getContractFactory("RevertingVotingImpl")).deploy();
+    // is gone now the recipient lives in proxy storage. It takes the governor
+    // because upgradeTo asks the new code who may upgrade (G05).
+    const governor = owner.address; // the fixture's root governor
+    const revVoting = await (await ethers.getContractFactory("RevertingVotingImpl")).deploy(governor);
     await revVoting.waitForDeployment();
-    const revRewards = await (await ethers.getContractFactory("RevertingRewardsImpl")).deploy();
+    const revRewards = await (await ethers.getContractFactory("RevertingRewardsImpl")).deploy(governor);
     await revRewards.waitForDeployment();
     const revVotingAddr = await revVoting.getAddress();
     const revRewardsAddr = await revRewards.getAddress();

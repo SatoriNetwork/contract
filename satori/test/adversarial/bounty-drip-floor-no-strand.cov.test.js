@@ -119,15 +119,16 @@ describe("[adversarial][low] LOW#6 bounties — drip floors, never strands, supp
     return Number(pred.roundMade);
   }
 
-  // Drive `n` predicted rounds (+1 trailing so the last gets scored), then
-  // force-settle to flush drips. Returns { cumulativeDrip, firedRounds }.
+  // Drive `n` predicted rounds (+1 trailing so the last gets scored). The pot is
+  // reserved at each round's prediction, so all n+1 rounds drip. Returns
+  // { cumulativeDrip, firedRounds }.
   async function driveAndMeasure(n) {
     const poolBefore = await bounties.pool(stream, usdAddr);
     const roundsMade = [];
     let val = 100;
     for (let i = 0; i < n + 1; i++) {
       const r = await predictThisRound(val);
-      if (i < n) roundsMade.push(r);
+      roundsMade.push(r);
       val += 1;
     }
     for (let i = 0; i < 3; i++) {

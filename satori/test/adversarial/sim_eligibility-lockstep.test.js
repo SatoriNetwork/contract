@@ -268,7 +268,6 @@ describe("SIM eligibility-lockstep — round numerators/denominator agree and st
           await registry.setValue(streams[i], 1000 + r * (i + 1));
         } catch (e) { /* cadence edge — non-fatal for the invariants under test */ }
       }
-      try { await satori.flushDefaultStream(); } catch (e) {}
 
       // ---- PRE-PARTICIPATION churn: mutate live weight before any game in
       // this round has been frozen. ----

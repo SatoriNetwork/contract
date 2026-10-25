@@ -67,9 +67,6 @@ async function advanceRound(world) {
 // default stream. Called at the top of each round so predictions made last round become
 // resolvable and this round's predictions have a fresh anchor.
 async function tickValues(world, rng) {
-  // Default stream advances via flush (its value is the prediction count for yesterday).
-  await world.fix.satori.connect(world.owner).flushDefaultStream();
-
   for (const m of world.markets) {
     if (m.isDefault) continue;
     const move = world.pendingMove[m.gameId] ?? (rng.bool() ? 1 : -1);

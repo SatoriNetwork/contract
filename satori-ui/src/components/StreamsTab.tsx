@@ -30,7 +30,6 @@ import {
 } from '../lib/streamAdapterUI';
 import { multicallRead } from '../utils/multicall';
 import { formatCompact, trimZeros, formatWeight } from '../utils/format';
-import { streamValueDisplayFor, DEFAULT_STREAM_ID } from '../lib/defaultStreamSeries';
 import { leanSignLabel } from '../lib/leanFormat';
 import { getNamedAdapterId, NAMED_ADAPTER_ID_KEY } from '../lib/chainValues';
 import NameSuggest, { submitNameOf, nameBlocker, useNamedNameTaken, type NamedNameRegistry } from './NameSuggest';
@@ -45,6 +44,7 @@ import { planBountyFunding } from '../lib/bountyAllowances';
 import { makeAllowanceReaders, fundBountyOneConfirmation } from '../lib/bountyAllowanceReaders';
 import { chainCache } from '../hooks/useChainRead';
 import { noteStreamWrite, indexerBountyPairs } from '../utils/indexerClient';
+import { MAX_BATCH_STREAMS } from '../lib/txGasBudget';
 
 function shortAddress(addr: string): string {
   if (!addr || addr.length < 10) return addr;
@@ -1102,8 +1102,12 @@ export function StreamsTab({
     .filter((s) => s.streamType === 1 && tickableNow(s))
     .map((s) => s.id);
 
-  const handleUpdateValues = useCallback(async (ids: number[]) => {
-    if (!contracts || ids.length === 0) return;
+  const handleUpdateValues = useCallback(async (allIds: number[]) => {
+    if (!contracts || allIds.length === 0) return;
+    // One transaction can carry only so many pulls under Base's per-transaction gas
+    // cap; the rest stay due and the button is pressed again.
+    const ids = allIds.slice(0, MAX_BATCH_STREAMS);
+    const left = allIds.length - ids.length;
     setBatchUpdateAction({ status: 'pending' });
     try {
       // Simulate first: it surfaces a revert as its reason rather than as an encoding
@@ -1116,8 +1120,8 @@ export function StreamsTab({
       setBatchUpdateAction({
         status: 'success',
         message: willUpdate === ids.length
-          ? `Updated ${willUpdate} stream${willUpdate === 1 ? '' : 's'} in one transaction.`
-          : `Updated ${willUpdate} of ${ids.length}. The rest were not due yet or their source did not answer.`,
+          ? `Updated ${willUpdate} stream${willUpdate === 1 ? '' : 's'} in one transaction.${left > 0 ? ` ${left} more are due: press again.` : ''}`
+          : `Updated ${willUpdate} of ${ids.length}. The rest were not due yet or their source did not answer.${left > 0 ? ` ${left} more are due: press again.` : ''}`,
       });
     } catch (e: any) {
       setBatchUpdateAction({ status: 'error', message: explainError(e) });
@@ -1228,7 +1232,7 @@ export function StreamsTab({
     if (!contracts) return;
     const ids: number[] = [];
     const values: bigint[] = [];
-    for (const s of pushDue) {
+    for (const s of pushDue.slice(0, MAX_BATCH_STREAMS)) {
       const raw = (pushInputs[s.id] ?? '').trim();
       let parsed: bigint;
       try {
@@ -1254,8 +1258,8 @@ export function StreamsTab({
       setBatchSetAction({
         status: 'success',
         message: willWrite === ids.length
-          ? `Wrote ${willWrite} value${willWrite === 1 ? '' : 's'} in one transaction.`
-          : `Wrote ${willWrite} of ${ids.length}. The rest were not due yet, so those values were NOT stored.`,
+          ? `Wrote ${willWrite} value${willWrite === 1 ? '' : 's'} in one transaction.${pushDue.length > ids.length ? ` ${pushDue.length - ids.length} more are still entered: send again.` : ''}`
+          : `Wrote ${willWrite} of ${ids.length}. The rest were not due yet, so those values were NOT stored.${pushDue.length > ids.length ? ` ${pushDue.length - ids.length} more are still entered: send again.` : ''}`,
       });
       setPushInputs((prev) => {
         const next = { ...prev };
@@ -1671,7 +1675,9 @@ export function StreamsTab({
           >
             {batchUpdateAction?.status === 'pending'
               ? 'Refreshing…'
-              : `Refresh ${dueAdapterStreamIds.length} due stream${dueAdapterStreamIds.length === 1 ? '' : 's'}`}
+              : dueAdapterStreamIds.length > MAX_BATCH_STREAMS
+                ? `Refresh ${MAX_BATCH_STREAMS} of ${dueAdapterStreamIds.length} due streams`
+                : `Refresh ${dueAdapterStreamIds.length} due stream${dueAdapterStreamIds.length === 1 ? '' : 's'}`}
           </button>
           <span className="text-[11px] text-gray-500 dark:text-gray-400">
             One transaction, about half the gas per stream. No reward for doing it: you pay
@@ -1757,7 +1763,7 @@ export function StreamsTab({
                     : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'}`}
                 data-testid={`create-kind-${k}`}
               >
-                {k}
+                {k === 'named' ? 'sentiment' : k}
               </button>
             ))}
             {/* Extra adapter tabs (registry IDs > 3). Selecting one switches the
@@ -1812,7 +1818,7 @@ export function StreamsTab({
                 The minimum time between updates, recorded in minutes. Hourly (60 minutes) is the
                 floor — nothing may update faster. Daily is 1440 minutes, Weekly 10080, Monthly
                 43200. Custom lets you set the floor in days. This is the stream&apos;s own update
-                pace; predictions are scored on the game&apos;s target duration, whatever the cadence.
+                pace. On a stream that updates at least daily, a game whose target is under 24 update periods resolves on the next two values after the prediction, so its real horizon is about 1&ndash;2 update periods.
               </InfoTip>
             </label>
             <div className="flex gap-1 flex-wrap" role="tablist" aria-label="Update cadence">
@@ -1866,10 +1872,10 @@ export function StreamsTab({
             })()}
             <p className="text-[11px] text-gray-500 dark:text-gray-400">
               {cadenceMode === 'hourly' && 'Updates allowed at most once an hour — the floor. More updates means predictions can settle sooner (a prediction settles on the first value at least the game\u2019s target duration after it).'}
-              {cadenceMode === 'daily' && 'Updates allowed at most once per day. A prediction settles on the first value published at least the game\u2019s target duration after it was made.'}
+              {cadenceMode === 'daily' && 'Updates allowed at most once per day. A game with a target under 24 days settles on the next two values after the prediction (about 1\u20132 days), so a weekly game on a daily stream resolves in a day or two; longer targets settle on the first value at least the target later.'}
               {cadenceMode === 'weekly' && 'Updates allowed at most once per week. Predictions settle on the first value at least the game\u2019s target duration later — a slow cadence makes them wait for it.'}
               {cadenceMode === 'monthly' && 'Updates allowed at most once per month. Predictions settle on the first value at least the game\u2019s target duration later — a slow cadence makes them wait for it.'}
-              {cadenceMode === 'custom' && 'Minimum days between updates (60 minutes is the floor). Predictions settle on the first value at least the game\u2019s target duration later.'}
+              {cadenceMode === 'custom' && 'Minimum days between updates (60 minutes is the floor). On a stream that updates at least daily, a game with a target under 24 update periods settles on the next two values; otherwise on the first value at least the target later.'}
             </p>
           </div>
           )}
@@ -2121,14 +2127,13 @@ export function StreamsTab({
           // streamValueDisplayFor supplies stream 1's percentage display: it is
           // a Simple stream, so the probe returns null and the raw 1e18-scaled
           // ratio would print as "420000000000000000".
-          const valueDisplay = streamValueDisplayFor(s.id, streamUI?.valueDisplay ?? null);
+          const valueDisplay = streamUI?.valueDisplay ?? null;
           // A stream that has never had a value stamped (valueHour 0) has no
           // reading to show — and MUST NOT be run through the tick->price
           // conversion, which turns the sentinel 0 into 1.0001^0 * decimals =
           // ~1e12 ("a billion USDC per WETH"). Adapter streams are created empty
-          // and stay so until someone pulls the first value. Stream 1 (the
-          // default) is always freshly flushed, so it is never in this state.
-          const hasValue = s.valueHour > 0 || s.id === DEFAULT_STREAM_ID;
+          // and stay so until someone pulls the first value.
+          const hasValue = s.valueHour > 0;
           // A named stream's value is the network's signed prediction flow:
           // only its sign is shown here, never the number. The chart carries
           // the change against the previous hour; this row has no previous
@@ -2180,7 +2185,7 @@ export function StreamsTab({
                         title="A stream that is just a name: its value is the network's own prediction flow, shown as a shape, never a number."
                         data-testid={`stream-named-${s.id}`}
                       >
-                        named
+                        sentiment
                       </span>
                     ) : (
                       <span

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {BlockHeaderProof} from "./libraries/BlockHeaderProof.sol";
+import {BlockHeaderProof} from "../governance/libraries/BlockHeaderProof.sol";
 
 /// Phase 2 prototype: raw header -> verified state root. Stateless and `pure`,
 /// so a test can hand it mutated bytes and watch them fail with no setup.

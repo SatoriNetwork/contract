@@ -11,20 +11,17 @@
 //        scorer onto ONE denominator ⇒ Σ payouts + fee ≤ one dripped pot.
 //
 //   M3 — active-token FREEZE (snapshotAdapterStake reads the frozen
-//        _adapterActiveToken pin instead of recomputing _firstFundedToken every
-//        call): two predictors in the SAME round must resolve the SAME active
-//        token, even if a permissionless cleanupDrainedBountyToken REORDERS
-//        gameBountyTokens (swap-pop) between their two predicts. WITHOUT the freeze
-//        the second predictor would snapshot a DIFFERENT token, stranding one
-//        staker's snapshot. The freeze guarantees predict-time token == score-time
-//        token for the whole round.
+//        _adapterActiveToken pin): two predictors in the SAME round must resolve
+//        the SAME active token even if the author switches the game's bounty
+//        token (allowed once the old pool is empty) between their two predicts.
+//        The pin keeps predict-time token == score-time token for the whole round.
 //
 // Both guards are already correct; these tests LOCK them on the immutable contract.
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { loadFixture, time, impersonateAccount, setBalance } =
   require("@nomicfoundation/hardhat-network-helpers");
-const { deploySatoriFixture, pack1 } = require("../fixtures");
+const { deploySatoriFixture, pack1, ensureAdapterBountyToken } = require("../fixtures");
 
 const ROUND = 86400;
 const TOL = ethers.parseEther("0.01");
@@ -71,6 +68,7 @@ async function fundBountyOn(satori, bounties, funder, token, gameId, poolEth = "
   await token.connect(funder).approve(await bounties.getAddress(), ethers.MaxUint256);
   const POOL = ethers.parseEther(poolEth);
   const RATE = ethers.parseEther(rateEth);
+  await ensureAdapterBountyToken(bounties, gameId, token);
   await bounties.connect(funder).fundBounty(gameId, await token.getAddress(), POOL, RATE);
   return RATE;
 }
@@ -205,91 +203,40 @@ describe("adapter-bounty mutation-killing — bountyTotal PIN (M1) + active-toke
     expect(earn1).to.be.gt(0n);
   });
 
-  it("M3: a mid-round cleanup that REORDERS gameBountyTokens does not change the round's active token — both same-round predictors resolve the FROZEN pinned token A", async function () {
-    // Queue construction: fund D first and DRAIN it (predict+settle one round so its
-    // virgin pool fully drips ⇒ pool==0 && rate==0), but do NOT clean it up. Then
-    // fund A and B ⇒ gameBountyTokens == [D, A, B] (D drained, A & B live).
-    //
-    // P1 predicts round R: _firstFundedToken skips drained D and pins A as the
-    // round's active token (FROZEN). Then a permissionless cleanupDrainedBountyToken(D)
-    // swap-pops [D,A,B] -> [B,A]. P2 (staked in BOTH A and B) predicts the SAME
-    // round R: the FREEZE makes P2 reuse the pinned A; a per-call recompute would
-    // pick B (now first-live in [B,A]) and strand P1 (A) vs P2 (B) on different
-    // tokens. Both settle and BOTH receive a bounty from A ⇒ the round resolves to
-    // ONE consistent (pinned) token. The 3-token reorder is fully constructed here.
+  it("M3: the author switching the bounty token mid-round does not change the round's active token — both same-round predictors resolve the FROZEN pinned token A", async function () {
     const YES = 1;
     const fix = await loadFixture(deploySatoriFixture);
-    const { satori, registry, rewards, bounties, owner, signers } = fix;
+    const { satori, registry, bounties, owner, signers } = fix;
     const funder = signers[5];
 
-    // YesNoGame (not the constant-bountyTotal mock): bountyTotal == Σ stake over the
-    // winning side, so the two same-round YES stakers GENUINELY SPLIT the active
-    // token's pot by stake — both must visibly earn from the pinned token, which is
-    // exactly the property the freeze guarantees.
     const { gameId, streamId } = await setupYesNoGame(fix, 150);
 
-    const D = await deployToken("DDD");
     const A = await deployToken("AAA");
     const B = await deployToken("BBB");
-    const Daddr = await D.getAddress(), Aaddr = await A.getAddress(), Baddr = await B.getAddress();
+    const Aaddr = await A.getAddress(), Baddr = await B.getAddress();
 
-    // ---- Phase 1: fund D first and DRAIN it (do NOT clean up). ----
-    await fundBountyOn(satori, bounties, funder, D, gameId); // virgin: rate == pool
-
-    const drainer = signers[3];
-    await satori.transfer(drainer.address, ethers.parseEther("10"));
-    await stakeFor(bounties, drainer, D, ethers.parseEther("100"));
-    await satori.connect(drainer).predictMultipleWithPayloads([{ gameId, payload: pack1(YES) }]);
-    await advanceRound();
-    await registry.connect(owner).setValue(streamId, 200);
-    await satori.settlePrediction(drainer.address, gameId); // drips D fully
-
-    expect(await bounties.pool(gameId, Daddr)).to.equal(0n);
-    expect(await bounties.ratePerRound(gameId, Daddr)).to.equal(0n);
-    // D is drained but still queued (not cleaned). Queue head is D.
-    expect(await bounties.gameBountyTokens(gameId, 0)).to.equal(Daddr);
-
-    // ---- Phase 2: fund A then B ⇒ queue == [D, A, B]. ----
+    // Virgin pool with rate == pool: the round's first stake reserves all of A,
+    // leaving its pool empty so the author may switch to B before the round ends.
     await fundBountyOn(satori, bounties, funder, A, gameId);
-    await fundBountyOn(satori, bounties, funder, B, gameId);
-    expect(await bounties.gameBountyTokenCount(gameId)).to.equal(3n);
-    expect(await bounties.gameBountyTokens(gameId, 0)).to.equal(Daddr);
-    expect(await bounties.gameBountyTokens(gameId, 1)).to.equal(Aaddr);
-    expect(await bounties.gameBountyTokens(gameId, 2)).to.equal(Baddr);
 
-    // ---- Phase 3: P1 predicts round R (pins active token A: D drained → skipped,
-    //      A is first LIVE). P1 staked ONLY A. ----
     const p1 = signers[1], p2 = signers[2];
     for (const p of [p1, p2]) await satori.transfer(p.address, ethers.parseEther("10"));
     await stakeFor(bounties, p1, A, ethers.parseEther("100"));
-    // P2 stakes BOTH A and B (so the only thing selecting its payout token is the
-    // round pin, not which token it happens to hold).
     await stakeFor(bounties, p2, A, ethers.parseEther("100"));
     await stakeFor(bounties, p2, B, ethers.parseEther("100"));
 
     const roundR = Number(await satori.getCurrentRound());
     await satori.connect(p1).predictMultipleWithPayloads([{ gameId, payload: pack1(YES) }]);
-    // The round's active token is now pinned to A (D drained → skipped, A first
-    // LIVE). _adapterActiveToken is internal, so we prove the pin via the OBSERVABLE
-    // payout below (P1 earns from A) rather than reading the slot directly.
+    expect(await bounties.pool(gameId, Aaddr)).to.equal(0n);
 
-    // ---- Phase 4: permissionless mid-round cleanup of drained D REORDERS the queue
-    //      via swap-pop: [D, A, B] -> [B, A]. Now _firstFundedToken would return B. ----
-    await bounties.cleanupDrainedBountyToken(gameId, Daddr);
-    expect(await bounties.gameBountyTokenCount(gameId)).to.equal(2n);
-    expect(await bounties.gameBountyTokens(gameId, 0)).to.equal(Baddr); // B swapped into head
-    expect(await bounties.gameBountyTokens(gameId, 1)).to.equal(Aaddr);
+    await fundBountyOn(satori, bounties, funder, B, gameId);
+    expect(await bounties.adapterBountyToken(gameId)).to.equal(Baddr);
 
-    // ---- Phase 5: P2 predicts the SAME round R. The FREEZE reuses the pinned A; a
-    //      per-call recompute would instead pick B (new head) and strand P1/P2 on
-    //      different tokens. ----
     await satori.connect(p2).predictMultipleWithPayloads([{ gameId, payload: pack1(YES) }]);
-    // The freeze means P2 reused the pinned A (proven by P2 earning from A, NOT B,
-    // in the settle below).
+    expect(await bounties.adapterActiveToken(gameId, roundR)).to.equal(Aaddr);
 
-    // ---- Phase 6: settle both. BOTH must receive a bounty from token A. ----
     await advanceRound();
-    await registry.connect(owner).setValue(streamId, 250); // win again
+    await registry.connect(owner).setValue(streamId, 250);
 
     const a1Before = await bounties.bountyStake(p1.address, Aaddr);
     const a2Before = await bounties.bountyStake(p2.address, Aaddr);
@@ -302,19 +249,13 @@ describe("adapter-bounty mutation-killing — bountyTotal PIN (M1) + active-toke
     const earnA2 = (await bounties.bountyStake(p2.address, Aaddr)) - a2Before;
     const earnB2 = (await bounties.bountyStake(p2.address, Baddr)) - b2Before;
 
-    // BOTH same-round predictors got paid from the FROZEN pinned token A — the round
-    // resolved to ONE consistent token despite the intervening reorder.
     expect(earnA1).to.be.gt(0n);
     expect(earnA2).to.be.gt(0n);
-    // P2's B stake earns NOTHING: B was never the round's active token (the freeze
-    // never let the recompute swap to it).
     expect(earnB2).to.equal(0n);
 
-    // Conservation on A: both predictors' A earnings ≤ the dripped A pot.
     const drippedA = await bounties.roundBountyPot(gameId, roundR, Aaddr);
     expect(drippedA).to.be.gt(0n);
     expect(earnA1 + earnA2).to.be.lte(drippedA + TOL);
-    // B never dripped for this round (never active).
     expect(await bounties.roundBountyPot(gameId, roundR, Baddr)).to.equal(0n);
   });
 });

@@ -26,7 +26,7 @@
  */
 
 const { expect } = require("chai");
-const { deploySatoriFixture, pack1, voteFor, warmUpLoyalty } = require("./fixtures");
+const { deploySatoriFixture, pack1, voteFor } = require("./fixtures");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
 
@@ -137,9 +137,7 @@ describe("Pending-round claim cursor guards", function () {
         await voteFor(satori, dave, sid);
 
         await satori.connect(carol).delegatePredictionPower(bob.address);
-        // Delegator weight is capital x loyalty and a fresh delegation starts at
-        // L = 0, so the share measured below reads zero without a warm-up.
-        await warmUpLoyalty(satori, registry, null, bob, [carol], platform, sid);
+        await time.increase(86400);
         await registry.setValue(sid, 100);
 
         // Bob predicts on round D

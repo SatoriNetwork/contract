@@ -175,40 +175,29 @@ const CHAINS: Record<number, ChainConfig> = {
     blockExplorerUrls: [],
   },
 
-  // Base Sepolia — the rehearsal chain. These are REAL deployed addresses, taken
-  // from satori/deployments/baseSepolia.json (2026-09-19 redeploy — cap moved to the hub) rather than typed
-  // by hand; every one is checked against that book by the dapp's own test.
-  //
-  // D4 is a FRESH stack, not an upgrade of D3. The rolling-scoring redesign
-  // broke storage lineage (and `gameApproved`'s booleans keep their bytes while
-  // inverting meaning, so an in-place upgrade would silently mark every enabled
-  // game unapproved). Rounds are now 24h rather than 12h, which is why
-  // deploymentRound roughly halves against the D3 value that used to sit here.
-  //
-  // This is a REHEARSAL deployment: governance is intended to end at a 3-of-5
-  // Safe whose owner keys live in the repo's plaintext .wallets.env, so nothing
-  // here is secured in any meaningful sense. It exists to exercise the flow.
-  // Until scripts/handoff.js runs and the Safe accepts, the governor and rewards
-  // admin are still the deployer EOA.
+  // Base Sepolia — the rehearsal chain. Every address here is checked against
+  // satori/deployments/baseSepolia.json by chainConfig.test.ts; copy, never type.
+  // Governance is a 3-of-5 Safe whose owner keys sit in the repo's plaintext
+  // .wallets.env, so nothing here is secured; it exists to exercise the flow.
   [TESTNET_CHAIN_ID]: {
     chainName: 'Base Sepolia',
-    deploymentRound: 20740, // pinned to satori/deployments/baseSepolia.json (2026-10-14 redeploy from humble, block 48094944)
+    deploymentRound: 20749, // pinned to satori/deployments/baseSepolia.json (2026-10-23 D7 redeploy from humble, block 49048034)
     // Rehearsal holder-voting governor: 256-block activation window. The
     // VOTING_PERIOD is 604800s (7 days), read off chain; the 2026-09-25 governor
-    // was 7 days too, despite an older note here saying 30 minutes. Redeployed 2026-10-14.
-    holderGovernor: '0x931105bFe293d46298F5bC91A8D863a3d816e408',
-    token: '0x4dee947383d5C9c8E421F55Fe3518a29324aE469',
-    // SatoriAirdrop ships with the 2026-10-14 stack; nonzero shows the airdrop panel.
-    airdrop: '0xF15CEAec0e29A0B6551180F8617850bc5356938C',
-    engine: '0xE8fA688ea29850305216121C0bddfFb9096A1093',
-    hub: '0x1eec7E1443C1065ab78180A14326e5Ac8284f143',
-    registry: '0x1ED75AB0a66Ba7d23C3E5c84798e90205E76743a',
-    voting: '0x5A56279215684A8088234799FfD56f806AcFBb6e',
-    rewards: '0xde5d2B4b92c1231EC19cd3877D7C3eb6b44982Ac',
-    games: '0xB06e419D24cCbA967c6193e9e374117171B400C3',
-    bounties: '0x7FEaA67a4d4D8c9462A0d8d643984227C7710dCF',
-    lens: '0x9BF5266F60092F1bFbd5F16d21d0bE9673c0F91F',
-    // The 2026-10-14 stack DOES deploy a merkle proxy (0x78C83AE275e9659Bc8490fa33943e22ec7c5A7e7),
+    // was 7 days too, despite an older note here saying 30 minutes. Redeployed 2026-10-23 (D7).
+    holderGovernor: '0xaCfd8a5622A9314F790C3dB871334843bF300148',
+    token: '0x7Dd4F6EF7FE534e4962f975cffe93D19d9B891E1',
+    // SatoriAirdrop ships with the D7 stack; nonzero shows the airdrop panel.
+    airdrop: '0xf8482f9640A7A2bb4Ab372DE677E8a82eBEC04A4',
+    engine: '0x90C5Bc6f0322900ebAA12bb382Db44be7bc2e240',
+    hub: '0x17719B7B1A630dECBc5B7FFDdEd14ffb24120183',
+    registry: '0x95989fc59B0Ed1c323Af14d9139cD05F0379F556',
+    voting: '0xD6cB62d0f07EF38642f096D9B48b5421B4d3Cc44',
+    rewards: '0xF353eb4843E3B8822dd3fE88e638B02C456749BE',
+    games: '0x05096F2caB4D6E806604caDc2F78A8563be74783',
+    bounties: '0xd6C17bCD81F78cb133E2C86770B1ee07F52A00a7',
+    lens: '0x877DD8bD95E1301E283CACF31F0ec60401dB746a',
+    // The D7 stack DOES deploy a merkle proxy (0x20d398d45A3cC6D6A73a2381294E801736E120aB),
     // but the merkle lane has never been wired or exercised on a rehearsal
     // stack. Left at the ZERO address deliberately, exactly as before: a dapp
     // that reverts is better than one silently reading a root nobody published.
@@ -228,12 +217,12 @@ const CHAINS: Record<number, ChainConfig> = {
     // one: `indexerUrl` was unset on every chain, so all five history consumers
     // silently took the browser-side event-scan path. The scan path remains the
     // fallback on any failure, so a bad URL degrades rather than breaks.
-    indexerUrl: 'https://app.satorinet.io/api',
+    indexerUrl: 'https://games.satorinet.io/api',
     // Gasless relayer, same-origin at /relayer (nginx strips the prefix, so the
     // service keeps its own /gasless/* routes). Present = the pay-in-SATORI
     // surface is live on this chain; unset = it's absent. See ../../relayer and
     // docs/design/gasless-relay.md.
-    relayerUrl: 'https://app.satorinet.io/relayer',
+    relayerUrl: 'https://games.satorinet.io/relayer',
     // Coined's indexer (coined/indexer) for the named-stream name box: its own
     // host, under /idx (nginx strips the prefix; the service keeps /names,
     // /search, /lookalike). It answers with Access-Control-Allow-Origin: *,
@@ -241,9 +230,9 @@ const CHAINS: Record<number, ChainConfig> = {
     coinedIndexerUrl: 'https://coined.satorinet.io/idx',
     // A (top, = the token's immutable platformFeeRecipient), then C and B.
     splitters: [
-      '0xcfB35ff791Ab9D7fFB70eD0e934F8298B9b94464',
-      '0xb0d5c95C5557BF45409C37429e5275987446D3f3',
-      '0x06963bB2c7e17de638AE5262740831f5EC7E1f65',
+      '0x6C5722C65041341C16D892235ea6076F05Cf4238',
+      '0x52b7ee858379509F7bDBc239da0F1ff36bEAd2ed',
+      '0xc082CCc8D827b58bC848d5918Ca92eEe5C06F5f7',
     ],
   },
 

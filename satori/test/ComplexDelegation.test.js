@@ -23,7 +23,7 @@
  */
 
 const { expect } = require("chai");
-const { deploySatoriFixture, RAW_TOLERANCE, pack1, VOTE, voteFor, warmUpLoyalty } = require("./fixtures");
+const { deploySatoriFixture, RAW_TOLERANCE, pack1, VOTE, voteFor } = require("./fixtures");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
 
@@ -99,11 +99,7 @@ describe("Complex Delegation Interactions", function () {
       // delegation any more: vote weight is BOUGHT WITH A BURN, so it belongs to
       // the game, not to a delegable balance.
       await satori.connect(alice).delegatePredictionPower(bob.address);
-      // Delegator weight is capital x loyalty and a fresh delegation starts at
-      // L = 0, so any share measured below reads zero without a warm-up. The
-      // helper drains predictor and delegators to `owner`, so prediction power
-      // and delegated capital are exactly as the delegations left them.
-      await warmUpLoyalty(satori, registry, null, bob, [alice], owner, stream1);
+      await time.increase(86400);
       await satori.connect(alice).delegateClaimAbility(dave.address);
 
       // Verify delegations
@@ -234,11 +230,7 @@ describe("Complex Delegation Interactions", function () {
     it("Should allow delegating prediction while retaining claim ability", async function () {
       // Alice delegates prediction to Bob
       await satori.connect(alice).delegatePredictionPower(bob.address);
-      // Delegator weight is capital x loyalty and a fresh delegation starts at
-      // L = 0, so any share measured below reads zero without a warm-up. The
-      // helper drains predictor and delegators to `owner`, so prediction power
-      // and delegated capital are exactly as the delegations left them.
-      await warmUpLoyalty(satori, registry, null, bob, [alice], owner, stream1);
+      await time.increase(86400);
 
       // Bob predicts with Alice's power in round 2
       await registry.setValue(stream1, 1000);
@@ -300,11 +292,7 @@ describe("Complex Delegation Interactions", function () {
       await satori.connect(carol).delegatePredictionPower(alice.address);
       await satori.connect(dave).delegatePredictionPower(alice.address);
       await satori.connect(eve).delegatePredictionPower(alice.address);
-      // Delegator weight is capital x loyalty and a fresh delegation starts at
-      // L = 0, so any share measured below reads zero without a warm-up. The
-      // helper drains predictor and delegators to `owner`, so prediction power
-      // and delegated capital are exactly as the delegations left them.
-      await warmUpLoyalty(satori, registry, null, alice, [bob, carol, dave, eve], owner, stream1);
+      await time.increase(86400);
 
       // Alice should have massive prediction power
       const alicePower = await rewards.getPredictionPower(alice.address);

@@ -439,7 +439,7 @@ export function useVoting(active: boolean = true) {
         : 0;
       if (kind === 'named') requireNamedAdapterId(namedAdapterId);
       if (kind === 'adapter' && namedAdapterId && args.adapterId === namedAdapterId) {
-        throw new Error('Use the Named stream type for this adapter.');
+        throw new Error('Use the Sentiment stream type for this adapter.');
       }
       const engine = kind === 'named' ? await contracts.engine.getAddress() : '';
 
@@ -526,11 +526,11 @@ export function useVoting(active: boolean = true) {
             name, adapterId, provider, config, cadence, permitArg,
           );
         } else if (explicit) {
-          const SIG = 'createAdapterDataStream(string,uint16,address,bytes,uint24)';
+          const SIG = 'createAdapterDataStream(string,uint32,address,bytes,uint24)';
           await preflight((contracts.reads.satori as any)[SIG], address, name, adapterId, provider, config, cadence);
           tx = await (contracts.satori as any)[SIG](name, adapterId, provider, config, cadence);
         } else {
-          const SIG = 'createAdapterDataStream(string,uint16,address,bytes)';
+          const SIG = 'createAdapterDataStream(string,uint32,address,bytes)';
           await preflight((contracts.reads.satori as any)[SIG], address, name, adapterId, provider, config);
           tx = await (contracts.satori as any)[SIG](name, adapterId, provider, config);
         }

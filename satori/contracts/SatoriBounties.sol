@@ -12,15 +12,7 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
 import "./next/SatoriUUPS.sol";
-
-/// @dev `anchorEvicted` is true only once the round's anchor entry has been
-///      pushed out of the hour-keyed history ring — after which no binary
-///      prediction from that round can ever score a win again (design 9.5).
-interface IRegistryForBounties {
-    function getFirstValueAfter(uint32 streamId, uint256 afterHour)
-        external view returns (int232 valueB, bool found, bool anchorEvicted);
-    function isNamedStream(uint32 streamId) external view returns (bool);
-}
+import "./interfaces/IRegistryForBounties.sol";
 
 /// @dev SATORI's ERC-1271 permit overload (arbitrary-length signature), distinct
 ///      from `IERC20Permit` which an arbitrary bounty-funding token implements.
@@ -178,6 +170,23 @@ contract SatoriBounties is ISatoriBounties, ReentrancyGuard, SatoriUUPS {
     event BountyTokenUnstaked(
         address indexed user, address indexed token, address indexed recipient, uint256 amount, uint256 newStake
     );
+    /// @notice A prediction took a boost snapshot of `token`'s stake (stake x
+    ///         multiplier) and locked that stake until `lockedUntil`.
+    event BountyBoosted(
+        address indexed user, uint32 indexed gameId, address indexed token,
+        uint32 round, uint256 weightedStake, uint64 lockedUntil
+    );
+    /// @notice An adapter game's active bounty token for a round was pinned at
+    ///         the round's first prediction. `token` is zero when it has none.
+    event AdapterBountyTokenPinned(uint32 indexed gameId, uint32 indexed round, address indexed token);
+    /// @notice The author of an adapter game chose the token it pays bounties in.
+    event AdapterBountyTokenSet(uint32 indexed gameId, address indexed token);
+    /// @notice A prediction on an adapter game took a snapshot of its stake in the
+    ///         round's active token and locked it until `lockedUntil`.
+    event AdapterStakeSnapshotted(
+        address indexed user, uint32 indexed gameId, address indexed token,
+        uint32 round, uint256 stake, uint64 lockedUntil
+    );
 
     // ========== Custom Errors ==========
 
@@ -195,6 +204,14 @@ contract SatoriBounties is ISatoriBounties, ReentrancyGuard, SatoriUUPS {
     error RoundNotEvicted();
     error StakeLocked();
     error NamedGame();
+    /// @dev An adapter game pays in the one token its author chose; fund that token.
+    error NotTheGamesBountyToken();
+    /// @dev Only the game's authority may choose its bounty token.
+    error NotGameAuthority();
+    /// @dev The author's current token still has funds, so it cannot be swapped out from under them.
+    error BountyTokenInUse();
+    /// @dev Bounty tokens are an adapter-game choice; binary games take any token.
+    error NotAnAdapterGame();
 
     // ========== Modifiers ==========
 
@@ -224,8 +241,8 @@ contract SatoriBounties is ISatoriBounties, ReentrancyGuard, SatoriUUPS {
     /// @dev `applyBoost` / `snapshotAdapterStake` are predict-time snapshots
     ///      called by SatoriEngine directly. The modifier still admits
     ///      satoriRewards for the historical adapter path.
-    modifier onlyCoreOrRewards() {
-        if (msg.sender != satoriCore && msg.sender != satoriRewards && msg.sender != satoriEngine) revert Unauthorized();
+    modifier onlyEngine() {
+        if (msg.sender != satoriEngine) revert Unauthorized();
         _;
     }
 
@@ -352,6 +369,12 @@ contract SatoriBounties is ISatoriBounties, ReentrancyGuard, SatoriUUPS {
             revert NamedGame();
         }
 
+        // An adapter game pays one token, the one its author chose (M25): funding
+        // any other would lock the sponsor's money behind a token that never pays.
+        if (ISatoriGames(games).gameTypeIdOf(gameId) != 0 && adapterBountyToken[gameId] != token) {
+            revert NotTheGamesBountyToken();
+        }
+
         bool isFirstFundForToken = !_gameTokenSeen[gameId][token];
 
         // POSTING (first fund of a pair) in a NON-SATORI token costs a heavy
@@ -463,11 +486,18 @@ contract SatoriBounties is ISatoriBounties, ReentrancyGuard, SatoriUUPS {
         if (!anchorEvicted) revert RoundNotEvicted();
 
         roundBountyPotClaimed[gameId][round][token] = pot; // residue -> 0, no re-reclaim
-        uint256 newPool = pool[gameId][token] + residue;
+        _returnToPool(gameId, round, token, residue);
+    }
+
+    /// @dev Put `amount` of a round's unclaimed pot back into the pool, reviving a
+    ///      drained pool's rate (see `reclaimStrandedPot`). The caller has already
+    ///      counted `amount` in `roundBountyPotClaimed`, so it cannot be paid twice.
+    function _returnToPool(uint32 gameId, uint32 round, address token, uint256 amount) private {
+        uint256 newPool = pool[gameId][token] + amount;
         pool[gameId][token] = newPool;
         uint256 rate = ratePerRound[gameId][token];
         if (rate == 0) {
-            rate = residue * RATE_SCALE;
+            rate = amount * RATE_SCALE;
             ratePerRound[gameId][token] = rate;
             _fundingEpochStartRound[gameId][token] = uint32(_currentRound());
             if (!_gameTokenSeen[gameId][token]) {
@@ -475,7 +505,33 @@ contract SatoriBounties is ISatoriBounties, ReentrancyGuard, SatoriUUPS {
                 gameBountyTokens[gameId].push(token);
             }
         }
-        emit StrandedPotReclaimed(gameId, round, token, residue, newPool, rate);
+        emit StrandedPotReclaimed(gameId, round, token, amount, newPool, rate);
+    }
+
+    /// @inheritdoc ISatoriBounties
+    /// @dev Exact because a prediction only finalizes after its round ends (B3), so
+    ///      the round's boost total and its pot, reserved at the first boost, are
+    ///      final. The share is counted in `claimed` before it returns to the pool.
+    function releaseForfeit(address user, uint32 gameId, uint32 round) external override onlyEngine {
+        address[] storage toks = boostedTokensInRound[user][round];
+        uint256 n = toks.length;
+        for (uint256 i = 0; i < n; i++) {
+            address tk = toks[i];
+            uint256 userBoost = boostStakeForPrediction[user][gameId][round][tk];
+            if (userBoost == 0) continue;
+            boostStakeForPrediction[user][gameId][round][tk] = 0;
+            uint256 pot = roundBountyPot[gameId][round][tk];
+            uint256 totalBoost = _totalBoostStakeByKey[gameId][round][1][tk]
+                + _totalBoostStakeByKey[gameId][round][2][tk];
+            if (pot == 0 || totalBoost == 0) continue;
+            uint256 claimed = roundBountyPotClaimed[gameId][round][tk];
+            if (claimed >= pot) continue;
+            uint256 share = Math.mulDiv(pot, userBoost, totalBoost);
+            if (share > pot - claimed) share = pot - claimed;
+            if (share == 0) continue;
+            roundBountyPotClaimed[gameId][round][tk] = claimed + share;
+            _returnToPool(gameId, round, tk, share);
+        }
     }
 
     /// @dev Payout is independent of eviction (per-prediction "boosted" bit +
@@ -522,10 +578,9 @@ contract SatoriBounties is ISatoriBounties, ReentrancyGuard, SatoriUUPS {
             // that round's predictors regardless of later eviction, and gating on
             // it would let a permissionless cleanup between two same-round settlers
             // strand the later one. The real gates are downstream:
-            // `_dripTokenForRound` no-ops on rate 0, and `_accrueBountyForWinToken`
-            // returns when this game's snapshot is zero (so a token snapshotted
-            // for a DIFFERENT game this round is skipped there).
-            _dripTokenForRound(gameId, round, tk);
+            // `_accrueBountyForWinToken` returns when this game's snapshot is zero
+            // (so a token snapshotted for a DIFFERENT game this round is skipped
+            // there). The pot was reserved at the round's first boost (`applyBoost`).
             _accrueBountyForWinToken(user, gameId, round, tk);
         }
     }
@@ -698,7 +753,7 @@ contract SatoriBounties is ISatoriBounties, ReentrancyGuard, SatoriUUPS {
         uint256 round,
         uint96 key,
         uint256 multiplier
-    ) external override onlyCoreOrRewards returns (bool boosted) {
+    ) external override onlyEngine returns (bool boosted) {
         if (gameBountyTokens[gameId].length == 0) return false;
         if (multiplier == 0) return false;
 
@@ -710,8 +765,11 @@ contract SatoriBounties is ISatoriBounties, ReentrancyGuard, SatoriUUPS {
             if (!_gameTokenSeen[gameId][tk]) continue;
             uint256 boost = bountyStake[user][tk];
             if (boost == 0) continue;
-            if (pool[gameId][tk] == 0 || ratePerRound[gameId][tk] == 0) continue;
+            if (!_dripFiredForRound[gameId][r][tk] && (pool[gameId][tk] == 0 || ratePerRound[gameId][tk] == 0)) continue;
             uint256 weightedBoost = boost * multiplier;
+            // Reserve this round's pot now, at the round's first boost, so a later
+            // round or a later top-up cannot change what this round's winners split (M27).
+            _dripTokenForRound(gameId, r, tk);
             _totalBoostStakeByKey[gameId][r][key][tk] += weightedBoost;
             boostStakeForPrediction[user][gameId][round][tk] = weightedBoost;
             boosted = true;
@@ -730,6 +788,7 @@ contract SatoriBounties is ISatoriBounties, ReentrancyGuard, SatoriUUPS {
             if (stakeLockedUntil[user][tk] < nextRound) {
                 stakeLockedUntil[user][tk] = nextRound;
             }
+            emit BountyBoosted(user, gameId, tk, r, weightedBoost, stakeLockedUntil[user][tk]);
         }
     }
 
@@ -751,30 +810,54 @@ contract SatoriBounties is ISatoriBounties, ReentrancyGuard, SatoriUUPS {
     ///         the core can fold it into the adapter's bountyTotal. 0 ⇒ no live
     ///         bounty or no stake.
     function snapshotAdapterStake(address user, uint32 gameId, uint256 round)
-        external override onlyCoreOrRewards returns (uint256 stake)
+        external override onlyEngine returns (uint256 stake)
     {
         address T = _adapterActiveToken[gameId][round];
         if (T == address(0)) {
-            T = _firstFundedToken(gameId);
+            T = _liveAdapterToken(gameId);
             _adapterActiveToken[gameId][round] = (T == address(0)) ? SENTINEL_NONE : T;
+            emit AdapterBountyTokenPinned(gameId, uint32(round), T);
         }
         if (T == SENTINEL_NONE) return 0;
         uint256 s = bountyStake[user][T];
         if (s == 0) return 0;
+        // Reserve the round's pot at its first stake snapshot, as `applyBoost` does (M27).
+        _dripTokenForRound(gameId, uint32(round), T);
         boostStakeForPrediction[user][gameId][round][T] = s;
         uint64 nextRound = uint64(round + 1);
         if (stakeLockedUntil[user][T] < nextRound) stakeLockedUntil[user][T] = nextRound;
+        emit AdapterStakeSnapshotted(user, gameId, T, uint32(round), s, stakeLockedUntil[user][T]);
         return s;
     }
 
-    function _firstFundedToken(uint32 gameId) internal view returns (address) {
-        address[] storage list = gameBountyTokens[gameId];
-        uint256 n = list.length;
-        for (uint256 i = 0; i < n; i++) {
-            address tk = list[i];
-            if (pool[gameId][tk] != 0 && ratePerRound[gameId][tk] != 0) return tk;
-        }
+    /// @notice The bounty token an adapter game pays in for `round`, once the round's
+    ///         first prediction has pinned it; zero when none or not yet pinned.
+    function adapterActiveToken(uint32 gameId, uint256 round) external view returns (address t) {
+        t = _adapterActiveToken[gameId][round];
+        if (t == SENTINEL_NONE) t = address(0);
+    }
+
+    /// @dev The adapter game's bounty token if it still has live funding, else none.
+    function _liveAdapterToken(uint32 gameId) internal view returns (address) {
+        address tk = adapterBountyToken[gameId];
+        if (tk != address(0) && pool[gameId][tk] != 0 && ratePerRound[gameId][tk] != 0) return tk;
         return address(0);
+    }
+
+    /// @notice The author of an adapter game chooses the one token it pays bounties
+    ///         in (M25). Sponsors can fund only that token, so nobody can queue a
+    ///         junk token ahead of the real one. It can be changed once the
+    ///         current token's pool is empty.
+    function setAdapterBountyToken(uint32 gameId, address token) external {
+        address games = ISatoriCore(satoriCore).satoriGames();
+        if (!ISatoriGames(games).gameExists(gameId)) revert UnknownStream();
+        if (ISatoriGames(games).gameTypeIdOf(gameId) == 0) revert NotAnAdapterGame();
+        if (msg.sender != ISatoriGames(games).gameAuthority(gameId)) revert NotGameAuthority();
+        if (token == address(0)) revert BadInput();
+        address current = adapterBountyToken[gameId];
+        if (current != address(0) && pool[gameId][current] != 0) revert BountyTokenInUse();
+        adapterBountyToken[gameId] = token;
+        emit AdapterBountyTokenSet(gameId, token);
     }
 
     /// @notice Adapter score-time bounty credit (score/total, single token).
@@ -813,7 +896,6 @@ contract SatoriBounties is ISatoriBounties, ReentrancyGuard, SatoriUUPS {
         else { uint256 prod = userScore * stake; bountyNum = prod > room ? room : prod; }
         _adapterBountyPaid[gameId][round] = paid + bountyNum;
 
-        _dripTokenForRound(gameId, uint32(round), T);
         _accrueAdapterBounty(user, gameId, round, T, bountyNum, bt);
     }
 
@@ -845,7 +927,7 @@ contract SatoriBounties is ISatoriBounties, ReentrancyGuard, SatoriUUPS {
     }
 
     // ---- Restructure-era additions. ----
-    /// @notice The SatoriEngine, a second authorized caller of onlyCoreOrRewards.
+    /// @notice The SatoriEngine, the only caller of `applyBoost` and `snapshotAdapterStake`.
     address public satoriEngine;
     /// @notice The SATORI token (falls back to satoriCore when address(0)).
     address public satoriToken;
@@ -853,6 +935,10 @@ contract SatoriBounties is ISatoriBounties, ReentrancyGuard, SatoriUUPS {
     // ========== Phase-2 proxy plumbing (appended — append-only layout) ==========
 
     bool private _initialized;
+
+    /// @notice The token an adapter game pays bounties in, chosen by its author.
+    ///         Appended: this layout is append-only.
+    mapping(uint32 => address) public adapterBountyToken;
 
     /// @dev Pinned by SatoriUUPS.upgradeTo so only another SatoriBounties
     ///      implementation can ever be installed here.

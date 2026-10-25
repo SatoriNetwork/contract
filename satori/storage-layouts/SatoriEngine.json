@@ -3,162 +3,175 @@
     "label": "_initialized",
     "slot": "0",
     "offset": 0,
-    "type": "t_bool"
+    "type": "t_bool",
+    "shape": "bool/1"
   },
   {
     "label": "_reentrancyGuard",
     "slot": "1",
     "offset": 0,
-    "type": "t_uint256"
+    "type": "t_uint256",
+    "shape": "uint256/32"
   },
   {
     "label": "token",
     "slot": "2",
     "offset": 0,
-    "type": "t_contract(IEngineToken)"
+    "type": "t_contract(IEngineToken)",
+    "shape": "contract IEngineToken/20"
   },
   {
     "label": "hub",
     "slot": "3",
     "offset": 0,
-    "type": "t_contract(IEngineGateway)"
+    "type": "t_contract(IEngineGateway)",
+    "shape": "contract IEngineGateway/20"
   },
   {
     "label": "satoriVoting",
     "slot": "4",
     "offset": 0,
-    "type": "t_contract(ISatoriVoting)"
+    "type": "t_contract(ISatoriVoting)",
+    "shape": "contract ISatoriVoting/20"
   },
   {
     "label": "satoriRewards",
     "slot": "5",
     "offset": 0,
-    "type": "t_contract(ISatoriRewards)"
+    "type": "t_contract(ISatoriRewards)",
+    "shape": "contract ISatoriRewards/20"
   },
   {
     "label": "satoriRegistry",
     "slot": "6",
     "offset": 0,
-    "type": "t_contract(ISatoriRegistry)"
+    "type": "t_contract(ISatoriRegistry)",
+    "shape": "contract ISatoriRegistry/20"
   },
   {
     "label": "satoriGames",
     "slot": "7",
     "offset": 0,
-    "type": "t_contract(ISatoriGames)"
+    "type": "t_contract(ISatoriGames)",
+    "shape": "contract ISatoriGames/20"
   },
   {
     "label": "satoriBounties",
     "slot": "8",
     "offset": 0,
-    "type": "t_contract(ISatoriBounties)"
+    "type": "t_contract(ISatoriBounties)",
+    "shape": "contract ISatoriBounties/20"
   },
   {
     "label": "deploymentRound",
     "slot": "9",
     "offset": 0,
-    "type": "t_uint256"
-  },
-  {
-    "label": "__retiredRenounceFlag",
-    "slot": "10",
-    "offset": 0,
-    "type": "t_bool"
+    "type": "t_uint256",
+    "shape": "uint256/32"
   },
   {
     "label": "_roundState",
-    "slot": "11",
+    "slot": "10",
     "offset": 0,
-    "type": "t_mapping(t_uint256,t_struct(RoundState)_storage)"
+    "type": "t_mapping(t_uint256,t_struct(RoundState)_storage)",
+    "shape": "mapping(uint256/32=>struct SatoriEngine.RoundState{predictionCount@0.0:uint64/8})"
   },
   {
     "label": "userPredictions",
-    "slot": "12",
+    "slot": "11",
     "offset": 0,
-    "type": "t_mapping(t_address,t_mapping(t_uint32,t_uint256))"
+    "type": "t_mapping(t_address,t_mapping(t_uint32,t_uint256))",
+    "shape": "mapping(address/20=>mapping(uint32/4=>uint256/32))"
   },
   {
     "label": "predictedStreamsCount",
+    "slot": "12",
+    "offset": 0,
+    "type": "t_mapping(t_address,t_mapping(t_uint256,t_uint256))",
+    "shape": "mapping(address/20=>mapping(uint256/32=>uint256/32))"
+  },
+  {
+    "label": "_flowBefore",
     "slot": "13",
     "offset": 0,
-    "type": "t_mapping(t_address,t_mapping(t_uint256,t_uint256))"
-  },
-  {
-    "label": "defaultStreamInitialized",
-    "slot": "14",
-    "offset": 0,
-    "type": "t_bool"
-  },
-  {
-    "label": "defaultStreamLastFlushedRound",
-    "slot": "15",
-    "offset": 0,
-    "type": "t_uint256"
+    "type": "t_mapping(t_address,t_mapping(t_uint32,t_mapping(t_uint256,t_int232)))",
+    "shape": "mapping(address/20=>mapping(uint32/4=>mapping(uint256/32=>int232/29)))"
   },
   {
     "label": "gameStreakState",
-    "slot": "16",
+    "slot": "14",
     "offset": 0,
-    "type": "t_mapping(t_uint32,t_struct(GameStreakState)_storage)"
+    "type": "t_mapping(t_uint32,t_struct(GameStreakState)_storage)",
+    "shape": "mapping(uint32/4=>struct SatoriEngine.GameStreakState{threshold@0.0:uint16/2,round@0.2:uint40/5})"
   },
   {
     "label": "_dustSignal",
-    "slot": "17",
+    "slot": "15",
     "offset": 0,
-    "type": "t_mapping(t_uint32,t_mapping(t_uint256,t_int256))"
+    "type": "t_mapping(t_uint32,t_mapping(t_uint256,t_int256))",
+    "shape": "mapping(uint32/4=>mapping(uint256/32=>int256/32))"
   },
   {
     "label": "dustFloor",
-    "slot": "18",
+    "slot": "16",
     "offset": 0,
-    "type": "t_uint16"
+    "type": "t_uint16",
+    "shape": "uint16/2"
   },
   {
     "label": "topGradient",
-    "slot": "18",
+    "slot": "16",
     "offset": 2,
-    "type": "t_uint16"
+    "type": "t_uint16",
+    "shape": "uint16/2"
   },
   {
     "label": "bottomGradient",
-    "slot": "18",
+    "slot": "16",
     "offset": 4,
-    "type": "t_uint16"
+    "type": "t_uint16",
+    "shape": "uint16/2"
   },
   {
     "label": "topShift",
-    "slot": "18",
+    "slot": "16",
     "offset": 6,
-    "type": "t_uint16"
+    "type": "t_uint16",
+    "shape": "uint16/2"
   },
   {
     "label": "dustTarget",
-    "slot": "18",
+    "slot": "16",
     "offset": 8,
-    "type": "t_uint16"
+    "type": "t_uint16",
+    "shape": "uint16/2"
   },
   {
     "label": "dustTargetSet",
-    "slot": "18",
+    "slot": "16",
     "offset": 10,
-    "type": "t_bool"
+    "type": "t_bool",
+    "shape": "bool/1"
   },
   {
     "label": "offchainReporter",
-    "slot": "18",
+    "slot": "16",
     "offset": 11,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "curveOperator",
-    "slot": "19",
+    "slot": "17",
     "offset": 0,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "namedCounter",
-    "slot": "20",
+    "slot": "18",
     "offset": 0,
-    "type": "t_mapping(t_uint32,t_int232)"
+    "type": "t_mapping(t_uint32,t_int232)",
+    "shape": "mapping(uint32/4=>int232/29)"
   }
 ]

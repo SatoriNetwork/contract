@@ -3,252 +3,217 @@
     "label": "_status",
     "slot": "0",
     "offset": 0,
-    "type": "t_uint256"
+    "type": "t_uint256",
+    "shape": "uint256/32"
   },
   {
     "label": "deployer",
     "slot": "1",
     "offset": 0,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "satoriCore",
     "slot": "2",
     "offset": 0,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "satoriVoting",
     "slot": "3",
     "offset": 0,
-    "type": "t_address"
-  },
-  {
-    "label": "satoriGames",
-    "slot": "4",
-    "offset": 0,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "satoriRegistry",
-    "slot": "5",
+    "slot": "4",
     "offset": 0,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "satoriBounties",
-    "slot": "6",
+    "slot": "5",
     "offset": 0,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "satoriEngine",
-    "slot": "7",
+    "slot": "6",
     "offset": 0,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "satoriToken",
-    "slot": "8",
+    "slot": "7",
     "offset": 0,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "_initialized",
-    "slot": "8",
+    "slot": "7",
     "offset": 20,
-    "type": "t_bool"
+    "type": "t_bool",
+    "shape": "bool/1"
   },
   {
     "label": "admin",
-    "slot": "9",
+    "slot": "8",
     "offset": 0,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "predictorFeeStored",
-    "slot": "10",
+    "slot": "9",
     "offset": 0,
-    "type": "t_mapping(t_address,t_uint16)"
+    "type": "t_mapping(t_address,t_uint16)",
+    "shape": "mapping(address/20=>uint16/2)"
   },
   {
     "label": "_roundBudget",
-    "slot": "11",
+    "slot": "10",
     "offset": 0,
-    "type": "t_mapping(t_uint256,t_uint256)"
+    "type": "t_mapping(t_uint256,t_uint256)",
+    "shape": "mapping(uint256/32=>uint256/32)"
   },
   {
     "label": "offchainBudget",
-    "slot": "12",
+    "slot": "11",
     "offset": 0,
-    "type": "t_uint256"
-  },
-  {
-    "label": "_roundGross",
-    "slot": "13",
-    "offset": 0,
-    "type": "t_mapping(t_uint256,t_uint256)"
+    "type": "t_uint256",
+    "shape": "uint256/32"
   },
   {
     "label": "totalWeightPacked",
-    "slot": "14",
+    "slot": "12",
     "offset": 0,
-    "type": "t_mapping(t_uint32,t_mapping(t_uint256,t_uint256))"
+    "type": "t_mapping(t_uint32,t_mapping(t_uint256,t_uint256))",
+    "shape": "mapping(uint32/4=>mapping(uint256/32=>uint256/32))"
   },
   {
     "label": "unclaimedRewards",
-    "slot": "15",
+    "slot": "13",
     "offset": 0,
-    "type": "t_mapping(t_address,t_uint256)"
+    "type": "t_mapping(t_address,t_uint256)",
+    "shape": "mapping(address/20=>uint256/32)"
   },
   {
     "label": "_unsettledPredictionCount",
-    "slot": "16",
+    "slot": "14",
     "offset": 0,
-    "type": "t_mapping(t_address,t_mapping(t_uint32,t_uint256))"
+    "type": "t_mapping(t_address,t_mapping(t_uint32,t_uint256))",
+    "shape": "mapping(address/20=>mapping(uint32/4=>uint256/32))"
   },
   {
     "label": "predictionDelegateInfo",
-    "slot": "17",
+    "slot": "15",
     "offset": 0,
-    "type": "t_mapping(t_address,t_struct(PredictionDelegate)_storage)"
+    "type": "t_mapping(t_address,t_struct(PredictionDelegate)_storage)",
+    "shape": "mapping(address/20=>struct SatoriRewards.PredictionDelegate{delegate@0.0:address/20,power@0.20:uint96/12})"
   },
   {
     "label": "predictionDelegationInfo",
-    "slot": "18",
+    "slot": "16",
     "offset": 0,
-    "type": "t_mapping(t_address,t_mapping(t_uint32,t_mapping(t_uint256,t_struct(PredictionDelegationInfo)_storage)))"
+    "type": "t_mapping(t_address,t_mapping(t_uint32,t_mapping(t_uint256,t_struct(PredictionDelegationInfo)_storage)))",
+    "shape": "mapping(address/20=>mapping(uint32/4=>mapping(uint256/32=>struct SatoriTypes.PredictionDelegationInfo{ownPower@0.0:uint128/16,delegatedPower@0.16:uint128/16})))"
   },
   {
     "label": "_adapterPending",
-    "slot": "19",
+    "slot": "17",
     "offset": 0,
-    "type": "t_mapping(t_address,t_mapping(t_uint32,t_mapping(t_uint256,t_uint8)))"
+    "type": "t_mapping(t_address,t_mapping(t_uint32,t_mapping(t_uint256,t_uint8)))",
+    "shape": "mapping(address/20=>mapping(uint32/4=>mapping(uint256/32=>uint8/1)))"
   },
   {
     "label": "_delegationPeriods",
-    "slot": "20",
+    "slot": "18",
     "offset": 0,
-    "type": "t_mapping(t_address,t_array(t_struct(DelegationPeriod)_storage)dyn_storage)"
+    "type": "t_mapping(t_address,t_array(t_struct(DelegationPeriod)_storage)dyn_storage)",
+    "shape": "mapping(address/20=>struct SatoriRewards.DelegationPeriod[][struct SatoriRewards.DelegationPeriod{delegate@0.0:address/20,startRound@0.20:uint24/3,endRound@0.23:uint24/3,nextClaimRound@0.26:uint24/3,replayCursor@0.29:uint24/3,startBalance@1.0:uint256/32,checkpoints@2.0:struct SatoriRewards.Checkpoint[][struct SatoriRewards.Checkpoint{round@0.0:uint24/3,value@0.3:uint224/28}],openRounds@3.0:struct SatoriRewards.OpenRound[][struct SatoriRewards.OpenRound{round@0.0:uint24/3,banked@0.3:uint224/28}]}])"
   },
   {
     "label": "_firstActiveDelegationPeriod",
-    "slot": "21",
+    "slot": "19",
     "offset": 0,
-    "type": "t_mapping(t_address,t_uint256)"
+    "type": "t_mapping(t_address,t_uint256)",
+    "shape": "mapping(address/20=>uint256/32)"
   },
   {
     "label": "_delegatePowerForRate",
-    "slot": "22",
+    "slot": "20",
     "offset": 0,
-    "type": "t_mapping(t_address,t_uint256)"
+    "type": "t_mapping(t_address,t_uint256)",
+    "shape": "mapping(address/20=>uint256/32)"
   },
   {
     "label": "_delegatePoolPending",
-    "slot": "23",
+    "slot": "21",
     "offset": 0,
-    "type": "t_mapping(t_address,t_struct(Pending)_storage)"
+    "type": "t_mapping(t_address,t_struct(Pending)_storage)",
+    "shape": "mapping(address/20=>struct SatoriRewards.Pending{amount@0.0:uint224/28,activationRound@0.28:uint24/3})"
   },
   {
     "label": "_delegatorRewardRatePerRound",
-    "slot": "24",
+    "slot": "22",
     "offset": 0,
-    "type": "t_mapping(t_address,t_mapping(t_uint256,t_uint256))"
+    "type": "t_mapping(t_address,t_mapping(t_uint256,t_uint256))",
+    "shape": "mapping(address/20=>mapping(uint256/32=>uint256/32))"
   },
   {
     "label": "claimDelegateInfo",
-    "slot": "25",
+    "slot": "23",
     "offset": 0,
-    "type": "t_mapping(t_address,t_address)"
+    "type": "t_mapping(t_address,t_address)",
+    "shape": "mapping(address/20=>address/20)"
   },
   {
     "label": "referral",
-    "slot": "26",
+    "slot": "24",
     "offset": 0,
-    "type": "t_mapping(t_address,t_address)"
+    "type": "t_mapping(t_address,t_address)",
+    "shape": "mapping(address/20=>address/20)"
   },
   {
     "label": "marketingFeeRecipient",
-    "slot": "27",
+    "slot": "25",
     "offset": 0,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "pendingMarketingFeeRecipient",
-    "slot": "28",
+    "slot": "26",
     "offset": 0,
-    "type": "t_address"
-  },
-  {
-    "label": "_frozenQ",
-    "slot": "29",
-    "offset": 0,
-    "type": "t_mapping(t_address,t_mapping(t_uint256,t_uint256))"
-  },
-  {
-    "label": "_roundPredictions",
-    "slot": "30",
-    "offset": 0,
-    "type": "t_mapping(t_address,t_mapping(t_uint256,t_uint256))"
-  },
-  {
-    "label": "_roundWins",
-    "slot": "31",
-    "offset": 0,
-    "type": "t_mapping(t_address,t_mapping(t_uint256,t_uint256))"
-  },
-  {
-    "label": "_accumA",
-    "slot": "32",
-    "offset": 0,
-    "type": "t_mapping(t_address,t_uint256)"
-  },
-  {
-    "label": "_accumB",
-    "slot": "33",
-    "offset": 0,
-    "type": "t_mapping(t_address,t_uint256)"
-  },
-  {
-    "label": "_accumK",
-    "slot": "34",
-    "offset": 0,
-    "type": "t_mapping(t_address,t_uint256)"
-  },
-  {
-    "label": "_accumRound",
-    "slot": "35",
-    "offset": 0,
-    "type": "t_mapping(t_address,t_uint256)"
-  },
-  {
-    "label": "_accumEpoch",
-    "slot": "36",
-    "offset": 0,
-    "type": "t_mapping(t_address,t_uint32)"
-  },
-  {
-    "label": "_lastPredictedRound",
-    "slot": "37",
-    "offset": 0,
-    "type": "t_mapping(t_address,t_uint256)"
-  },
-  {
-    "label": "_delegatePoolPendingK",
-    "slot": "38",
-    "offset": 0,
-    "type": "t_mapping(t_address,t_uint256)"
-  },
-  {
-    "label": "_roundWeightSnapshot",
-    "slot": "39",
-    "offset": 0,
-    "type": "t_mapping(t_address,t_mapping(t_uint256,t_uint256))"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "emissionSplitAuthority",
-    "slot": "40",
+    "slot": "27",
     "offset": 0,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
+  },
+  {
+    "label": "_batchOwnPower",
+    "slot": "28",
+    "offset": 0,
+    "type": "t_mapping(t_address,t_struct(BatchOwnPower)_storage)",
+    "shape": "mapping(address/20=>struct SatoriRewards.BatchOwnPower{round@0.0:uint64/8,power@0.8:uint128/16})"
+  },
+  {
+    "label": "_registrationFee",
+    "slot": "29",
+    "offset": 0,
+    "type": "t_uint256",
+    "shape": "uint256/32"
   }
 ]

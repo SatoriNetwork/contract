@@ -59,7 +59,7 @@ async function main() {
   const namedId = Number(await registry.namedAdapterId());
   if (namedId !== 0) {
     const sid = await registry.nextStreamId();
-    await (await hub["createAdapterDataStream(string,uint16,address,bytes,uint24)"](
+    await (await hub["createAdapterDataStream(string,uint32,address,bytes,uint24)"](
       "Bitcoin", namedId, book.engine, "0x", 60)).wait();
     console.log("created named stream", Number(sid));
   }

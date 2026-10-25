@@ -47,7 +47,7 @@ describe("SatoriRewardsLens.emissionStatus", function () {
     expect((await lens.emissionStatus()).rateNow).to.equal(rows[0].rate);
   });
 
-  it("ratio 1.0 reports no step pending; 2.0 clamps at 1440; dust steps to zero", async function () {
+  it("ratio 1.0 reports no step pending; 2.0 clamps at 1440; the floor ratio steps to zero", async function () {
     await hub.connect(owner).setEmissionRatio(ONE);
     let st = await lens.emissionStatus();
     expect(st.stepsActive).to.equal(false);
@@ -58,13 +58,16 @@ describe("SatoriRewardsLens.emissionStatus", function () {
     expect(st.stepsActive).to.equal(true);
     expect(st.rateAfterStep).to.equal(2n * BASE > RATE_CAP ? RATE_CAP : 2n * BASE);
 
-    await hub.connect(owner).setEmissionRatio(1n); // dust: 0 itself reverts
+    const MIN_RATIO = 10n ** 15n; // SatoriHub.MIN_EMISSION_RATIO: 0 and dust revert
+    await hub.connect(owner).setEmissionRatio(MIN_RATIO);
     st = await lens.emissionStatus();
     expect(st.stepsActive).to.equal(true);
-    expect(st.rateAfterStep).to.equal(BASE / ONE);
+    expect(st.rateAfterStep).to.equal(BASE * MIN_RATIO / ONE);
 
-    await issueTo(hub, token, rw, st.nextStepAt + ONE);
-    st = await lens.emissionStatus();
+    for (let i = 0; i < 12 && st.stepsActive; i++) {
+      await issueTo(hub, token, rw, st.nextStepAt + ONE);
+      st = await lens.emissionStatus();
+    }
     expect(st.rateNext).to.equal(0n);
     expect(st.nextStepAt).to.equal(NO_STEP);
     expect(st.stepsActive).to.equal(false);

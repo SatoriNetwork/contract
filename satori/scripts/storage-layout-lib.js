@@ -36,8 +36,27 @@ const BASELINE_DIR = path.join(__dirname, "..", "storage-layouts");
 // that shift with unrelated edits — strip them so only real type changes trip.
 const normType = (t) => t.replace(/\)\d+/g, ")");
 
-// Extract the normalized storage layout (label/slot/offset/type per entry, in
-// declaration order) for a fully-qualified contract name from the build info.
+// The full shape of a type as a canonical string, so a change INSIDE a struct
+// (a field added, reordered or retyped) is as visible as a change to a top-level
+// variable. Solc's `types` table describes structs, mappings and arrays by id;
+// ids carry AST node numbers, so they are replaced by their labels. A struct that
+// reaches itself through a mapping is cut at the second visit.
+function shapeOf(types, id, seen = new Set()) {
+  const t = types[id];
+  if (!t) return normType(id);
+  if (seen.has(id)) return `ref(${t.label})`;
+  const next = new Set(seen).add(id);
+  if (t.members) {
+    const members = t.members.map((m) => `${m.label}@${m.slot}.${m.offset}:${shapeOf(types, m.type, next)}`);
+    return `${t.label}{${members.join(",")}}`;
+  }
+  if (t.key && t.value) return `mapping(${shapeOf(types, t.key, next)}=>${shapeOf(types, t.value, next)})`;
+  if (t.base) return `${normType(t.label)}[${shapeOf(types, t.base, next)}]`;
+  return `${normType(t.label)}/${t.numberOfBytes}`;
+}
+
+// Extract the normalized storage layout (label/slot/offset/type/shape per entry,
+// in declaration order) for a fully-qualified contract name from the build info.
 async function layoutOf(fqName) {
   const buildInfo = await hre.artifacts.getBuildInfo(fqName);
   if (!buildInfo) throw new Error(`no build info for ${fqName} — compile first`);
@@ -49,6 +68,7 @@ async function layoutOf(fqName) {
     slot: s.slot,
     offset: s.offset,
     type: normType(s.type),
+    shape: shapeOf(layout.types, s.type),
   }));
 }
 
@@ -61,11 +81,13 @@ function diffLayout(baseline, current) {
   for (let i = 0; i < baseline.length; i++) {
     const b = baseline[i];
     const c = current[i];
-    if (!c || c.label !== b.label || c.slot !== b.slot || c.offset !== b.offset || c.type !== b.type) {
+    // `shape` is compared when the baseline records it (older baselines do not).
+    if (!c || c.label !== b.label || c.slot !== b.slot || c.offset !== b.offset || c.type !== b.type
+        || (b.shape !== undefined && c.shape !== b.shape)) {
       violations.push({ index: i, baseline: b, current: c ?? null });
     }
   }
   return violations;
 }
 
-module.exports = { TRACKED, BASELINE_DIR, normType, layoutOf, diffLayout };
+module.exports = { TRACKED, BASELINE_DIR, normType, shapeOf, layoutOf, diffLayout };

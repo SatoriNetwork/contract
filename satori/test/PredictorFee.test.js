@@ -16,7 +16,7 @@
  */
 
 const { expect } = require("chai");
-const { deploySatoriFixtureNoFee, RAW_TOLERANCE, pack1, voteFor, warmUpLoyalty } = require("./fixtures");
+const { deploySatoriFixtureNoFee, RAW_TOLERANCE, pack1, voteFor } = require("./fixtures");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
 
@@ -148,19 +148,10 @@ describe("Per-predictor fee rate (item 3)", function () {
     await voteFor(satori, dave, sid);
 
     await satori.connect(carol).delegatePredictionPower(bob.address);
-    // Delegator weight is capital x loyalty and a fresh delegation starts at
-    // L = 0, so the split measured here reads zero without a warm-up. The fee
-    // arithmetic itself is untouched by loyalty: it decides how the DELEGATED
-    // HALF is split predictor-vs-delegators, while loyalty only divides the
-    // delegator side — and with one delegator there is nothing to divide, so
-    // every pinned figure below still holds. Drains to `platform` so bob's
-    // ownPower and carol's capital stay at the 100e18 the comments assume.
-    await warmUpLoyalty(satori, registry, null, bob, [carol], platform, sid);
+    await time.increase(86400);
     await registry.setValue(sid, 100);
     const marketing = await rewards.marketingFeeRecipient();
-    // DELTA from HERE, not the absolute bucket: the loyalty warm-up above is itself a
-    // scored round and skims into the same bucket, so an absolute read would
-    // carry that in and break the conservation sum.
+    // DELTA from HERE, not the absolute bucket.
     const mktBefore = await rewards.unclaimedRewards(marketing);
     await satori.connect(bob).predictMultipleWithPayloads([{ gameId: sid, payload: pack1(UP) }]);
 

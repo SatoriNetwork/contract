@@ -9,6 +9,11 @@ pragma solidity ^0.8.20;
  *         built-in binary game and runs inline in `SatoriEngine.sol` — it does
  *         NOT implement this interface and never receives external calls.
  *
+ *         Adapter games mint no SATORI: they carry no vote weight and draw no
+ *         emission (docs/issues/adapter-games-cannot-earn.md). Their only payout
+ *         is a bounty on boosted bets. `multiplier` and `total` below are still
+ *         part of the return shape, but the protocol decodes past them.
+ *
  * @dev    See `docs/narratives/A_game_adapters.md` for the full
  *         architectural contract — the rules in that document are
  *         load-bearing.
@@ -17,19 +22,15 @@ pragma solidity ^0.8.20;
  *         enforces conservation; the adapter owns ALL scoring semantics. At
  *         predict time the adapter just remembers the bet (returns nothing).
  *         At score time the adapter answers, for the user's pending round, a
- *         `userScore` (raw ACCURACY numerator), a `multiplier` (the SATORI-weight
- *         effect, split out of the accuracy; 0 ⇒ this user won nothing), and a
- *         `total` (the sum of
- *         all winners' `score × multiplier` for that game/round — the shared
- *         denominator, with the multiplier ALREADY folded in). The protocol pays
- *         `pool × (userScore × multiplier) / total`, PINS the first scorer's
- *         `total` for the whole (game, round), and caps the running sum of paid
- *         numerators at that total — so the most the game can ever mint is exactly
- *         one `pool`, regardless of what the adapter returns. Splitting accuracy
- *         from the weight lets a bounty be paid by accuracy, not by SATORI weight.
+ *         `userScore` (raw ACCURACY numerator) and a `bountyTotal` (the sum over
+ *         winners of accuracy × bounty stake). The protocol pays the round's
+ *         bounty pot `pot × (userScore × stake) / bountyTotal`, PINS the first
+ *         scorer's `bountyTotal` for the whole (game, round), and caps the running
+ *         sum paid at the pot — so the most a game can ever pay is exactly one
+ *         pot, regardless of what the adapter returns.
  *         The adapter is free to compute scores any way it likes
  *         (buckets, partial credit, multi-outcome, ranges, anything); it can
- *         decide WHO wins and how much, but can never multiply the pool.
+ *         decide WHO wins and how much, but can never multiply the pot.
  */
 interface IPredictionGame {
     /**
@@ -82,11 +83,8 @@ interface IPredictionGame {
 
     /**
      * @notice Score the user's oldest unscored prediction on this game.
-     *         Returns the user's SATORI share numerator + shared denominator
-     *         (score/total — the adapter may compute these however it wants;
-     *         the protocol pins `total` first-scorer-wins and caps the round's
-     *         paid numerators at it), PLUS the bounty denominator `bountyTotal`
-     *         (Σ over winners of accuracy × stake; the protocol pays
+     *         Returns the user's accuracy numerator and the bounty denominator
+     *         `bountyTotal` (Σ over winners of accuracy × stake; the protocol pays
      *         pot × (userScore × stake) / bountyTotal for the round's single
      *         active bounty token, first-scorer pinned + capped).
      *
@@ -96,15 +94,8 @@ interface IPredictionGame {
      *                       state. False means still pending (return zeros).
      * @return userScore     This user's raw ACCURACY numerator (0 = won nothing),
      *                       WITHOUT the SATORI-weight multiplier applied.
-     * @return multiplier    The SATORI-weight effect for this user (own+delegated
-     *                       power). The protocol pays on `userScore × multiplier`.
-     *                       0 means this user won NOTHING (numerator 0), exactly
-     *                       like the binary path — it is NOT floored to 1 (audit
-     *                       F51). An adapter that has already folded the weight
-     *                       into `userScore` MUST return multiplier = 1 explicitly.
-     * @return total         The (game, round) shared SATORI denominator: the sum of
-     *                       `score × multiplier` over ALL winners (the adapter MUST
-     *                       fold the multiplier into `total`). 0 = no-payout finalize.
+     * @return multiplier    Ignored: the protocol mints no SATORI for adapter games.
+     * @return total         Ignored, for the same reason.
      * @return bountyTotal   The bounty denominator: Σ over winners of
      *                       (accuracy × bountyStake) for the round's single
      *                       active bounty token. Only the FIRST scorer's value is

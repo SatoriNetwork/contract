@@ -13,9 +13,11 @@ const TEST_MARKETING_FEE_RECIPIENT = "0x000000000000000000000000000000000000FEE2
 // upgrade-with-state everywhere except the token), wired together.
 // Mirrors the monolith fixture's children/adapters so the same scenarios run
 // against both for differential parity testing.
-// opts (optional): { rewardsAdmin, skipDefaultStream } — a rewards admin
-// distinct from the deployer/governor (default the deployer), and an escape
-// hatch for tests that need the pre-initializeDefaultStream state. The old
+// opts (optional): { rewardsAdmin, skipDefaultStream, skipNamedAdapter } — a
+// rewards admin distinct from the deployer/governor (default the deployer), and
+// escape hatches for tests that need the pre-initializeDefaultStream state or a
+// stack whose Coined adapter is not wired (skipNamedAdapter implies
+// skipDefaultStream). The old
 // `votingCap` knob is gone: burn voting has no top-N cap, every game with
 // weight earns in proportion to it.
 // Deploy `name` behind a SatoriProxy: implementation (ctorArgs bakes any
@@ -180,9 +182,9 @@ async function deploySplitFixture(feeBps = 2000, opts = {}) {
   }
 
   // --- adapters at canonical ids 1,2,3 (via the hub) ---
-  const chainlinkAdapter = await (await ethers.getContractFactory("ChainlinkV3Adapter")).deploy();
+  const chainlinkAdapter = await (await ethers.getContractFactory("ChainlinkV3Adapter")).deploy(ethers.ZeroAddress);
   await chainlinkAdapter.waitForDeployment();
-  const uniswapAdapter = await (await ethers.getContractFactory("UniswapV3Adapter")).deploy();
+  const uniswapAdapter = await (await ethers.getContractFactory("UniswapV3Adapter")).deploy(ethers.ZeroAddress);
   await uniswapAdapter.waitForDeployment();
   const customAdapter = await (await ethers.getContractFactory("CustomAdapter")).deploy();
   await customAdapter.waitForDeployment();
@@ -198,15 +200,15 @@ async function deploySplitFixture(feeBps = 2000, opts = {}) {
     .deploy(engineAddr, await registry.getAddress(), await coined.getAddress());
   await namedAdapter.waitForDeployment();
   const namedAdapterId = await registry.nextAdapterId();
-  await hub.connect(adminSigner).registerAdapter(await namedAdapter.getAddress(), "Named");
+  await hub.connect(adminSigner).registerAdapter(await namedAdapter.getAddress(), "Sentiment");
   // Must precede initializeDefaultStream: setNamedAdapterId requires nextStreamId == 1.
-  await registry.connect(owner).setNamedAdapterId(namedAdapterId);
+  if (!opts.skipNamedAdapter) await registry.connect(owner).setNamedAdapterId(namedAdapterId);
 
   // --- the DEFAULT stream/game at id 1, exactly as production deploys it ---
   // scripts/deploy.js calls this and asserts the default lands at id 1
   // (`DefaultStreamNotFirst`). Tests used to skip it, which left game id 1 as an
   // ordinary test-created game — harmless before, but NOT under burn voting:
-  // SatoriVoting treats id 1 as the default, gives it a DERIVED 20% weight it
+  // SatoriVoting treats id 1 as the default, gives it a DERIVED 1% weight it
   // never earned, and rejects `vote()` on it (`CannotVoteDefault`). Initializing
   // here keeps the suite on the only configuration that can exist in production.
   //
@@ -215,7 +217,7 @@ async function deploySplitFixture(feeBps = 2000, opts = {}) {
   // opts.skipDefaultStream leaves it uninitialized, for the handful of tests
   // that exercise the PRE-init state itself (e.g. the default-stream squat
   // guard, which must prove init reverts if someone grabbed id 1 first).
-  if (!opts.skipDefaultStream) {
+  if (!opts.skipDefaultStream && !opts.skipNamedAdapter) {
     await hub.connect(owner).initializeDefaultStream();
   }
 
@@ -311,7 +313,13 @@ function makeSatoriShim(token, engine, hub, mergedIface, lens) {
       for (const c of routeOrder(prop, token, engine, hub, lens)) {
         if (!c) continue;
         const v = c[prop];
-        if (v !== undefined) return typeof v === "function" ? v.bind(c) : v;
+        if (v === undefined) continue;
+        // An ethers contract method is already bound and carries staticCall /
+        // estimateGas / populateTransaction; `bind` would strip them, so a
+        // `satori.x.staticCall(...)` would be undefined and a try/catch around
+        // it would silently skip the call.
+        if (typeof v === "function") return "staticCall" in v ? v : v.bind(c);
+        return v;
       }
       return undefined;
     },

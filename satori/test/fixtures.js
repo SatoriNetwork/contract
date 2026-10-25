@@ -146,11 +146,11 @@ const encodeCustomConfig    = () => "0x";
 async function createCustomStream(satoriContract, name, provider, _authority, cadence) {
   const config = encodeCustomConfig();
   if (cadence === undefined) {
-    return satoriContract["createAdapterDataStream(string,uint16,address,bytes)"](
+    return satoriContract["createAdapterDataStream(string,uint32,address,bytes)"](
       name, ADAPTER_ID_CUSTOM, provider, config
     );
   }
-  return satoriContract["createAdapterDataStream(string,uint16,address,bytes,uint24)"](
+  return satoriContract["createAdapterDataStream(string,uint32,address,bytes,uint24)"](
     name, ADAPTER_ID_CUSTOM, provider, config, cadence
   );
 }
@@ -158,11 +158,11 @@ async function createCustomStream(satoriContract, name, provider, _authority, ca
 async function createChainlinkStream(satoriContract, name, provider, _authority, cadence, maxFeedAge = 3600) {
   const config = encodeChainlinkConfig(maxFeedAge);
   if (cadence === undefined) {
-    return satoriContract["createAdapterDataStream(string,uint16,address,bytes)"](
+    return satoriContract["createAdapterDataStream(string,uint32,address,bytes)"](
       name, ADAPTER_ID_CHAINLINK, provider, config
     );
   }
-  return satoriContract["createAdapterDataStream(string,uint16,address,bytes,uint24)"](
+  return satoriContract["createAdapterDataStream(string,uint32,address,bytes,uint24)"](
     name, ADAPTER_ID_CHAINLINK, provider, config, cadence
   );
 }
@@ -170,11 +170,11 @@ async function createChainlinkStream(satoriContract, name, provider, _authority,
 async function createUniswapStream(satoriContract, name, pool, _authority, cadence) {
   const config = encodeUniswapConfig();
   if (cadence === undefined) {
-    return satoriContract["createAdapterDataStream(string,uint16,address,bytes)"](
+    return satoriContract["createAdapterDataStream(string,uint32,address,bytes)"](
       name, ADAPTER_ID_UNISWAP, pool, config
     );
   }
-  return satoriContract["createAdapterDataStream(string,uint16,address,bytes,uint24)"](
+  return satoriContract["createAdapterDataStream(string,uint32,address,bytes,uint24)"](
     name, ADAPTER_ID_UNISWAP, pool, config, cadence
   );
 }
@@ -183,7 +183,7 @@ async function createUniswapStream(satoriContract, name, pool, _authority, caden
 // the stream's own id), cadence is fixed at 60. Goes through `fix.satori` so the
 // auto-created game is approved.
 async function createNamedStream(fix, name, signer = fix.owner) {
-  return fix.satori.connect(signer)["createAdapterDataStream(string,uint16,address,bytes,uint24)"](
+  return fix.satori.connect(signer)["createAdapterDataStream(string,uint32,address,bytes,uint24)"](
     name, fix.namedAdapterId, await fix.engine.getAddress(), "0x", 60
   );
 }
@@ -272,6 +272,21 @@ async function deployAndRegisterYesNoGame(fix) {
 // is not wrapped by the Proxy, so it passes through normally. `threshold` is
 // abi-encoded as int128 (YesNoGame's frozen gameConfig). Parses the GameCreated
 // event off the SatoriGames interface to recover the new gameId.
+/// An adapter game pays bounties in the one token its author names (M25); a binary
+/// game takes any token. Names `token` as `gameId`'s bounty token when it is an adapter
+/// game that has not got it yet, signing as the game's authority. Call it before funding.
+async function ensureAdapterBountyToken(bounties, gameId, token) {
+  const hub = await ethers.getContractAt("SatoriHub", await bounties.satoriCore());
+  const games = await ethers.getContractAt("SatoriGames", await hub.games());
+  if ((await games.gameTypeIdOf(gameId)) === 0n) return;
+  const tokenAddr = typeof token === "string" ? token : await token.getAddress();
+  if ((await bounties.adapterBountyToken(gameId)).toLowerCase() === tokenAddr.toLowerCase()) return;
+  const authority = await games.gameAuthority(gameId);
+  const signer = (await ethers.getSigners()).find((s) => s.address.toLowerCase() === authority.toLowerCase());
+  if (!signer) throw new Error(`no signer for game ${gameId}'s authority ${authority}`);
+  await bounties.connect(signer).setAdapterBountyToken(gameId, tokenAddr);
+}
+
 async function createYesNoGame(satoriConnected, gameTypeId, streamId, threshold, name) {
   const cfg = AbiCoder.defaultAbiCoder().encode(["int128"], [threshold]);
   const tx = await satoriConnected.createGame(streamId, gameTypeId, cfg, name);
@@ -330,45 +345,6 @@ async function warmUpStreak(satori, registry, authority, user, gameId, base = 10
   await time.increase(step);
 }
 
-/// Put loyalty on the books for a delegate's CURRENT delegators.
-///
-/// Delegator payout weight is capital × loyalty
-/// (docs/design/delegation-loyalty-weighting.md). A fresh delegation starts at
-/// L = 0 and the fold point is lagged by LOY_LAG (4) rounds, so a delegator's
-/// first PAYING round is `startRound + LOY_LAG + 1`. Any test that measures a
-/// delegator's share must warm the relationship up first, or it measures zero.
-///
-/// Runs one winning round on `gameId`, clears the fold lag, then drains
-/// `predictor` and every `delegator` to `sink`. The drain is not optional: a
-/// predictor's unclaimed counts toward `ownPower` and would shift the
-/// predictor/delegator split ratio, and a delegator's balance IS their
-/// delegated capital.
-///
-/// Pinned wei generally survive this unchanged — when a predictor's delegators
-/// share one `L`, `c·L·share/(L·C)` collapses back to `c·share/C`.
-///
-/// `authority` is the stream's value writer; `cadence` is its minCadenceRounds.
-async function warmUpLoyalty(
-  satori, registry, authority, predictor, delegators, sink, gameId, base = 40, cadence = 1
-) {
-  const step = 86400 * Math.ceil(cadence / 2);
-  const reg = authority ? registry.connect(authority) : registry;
-  // The caller has usually written this stream already this round, and setValue
-  // is cadence-gated — start from a clean one.
-  await time.increase(step);
-  await reg.setValue(gameId, base);
-  await satori.connect(predictor).predictMultipleWithPayloads([{ gameId, payload: pack1(1) }]);
-  await time.increase(step);
-  await reg.setValue(gameId, base + 10);
-  await time.increase(step);
-  await reg.setValue(gameId, base + 20);
-  await satori.settlePrediction(predictor.address, gameId);
-  for (let i = 0; i < 6; i++) await time.increase(step);
-  for (const p of [predictor, ...delegators]) {
-    await satori.connect(p)["claim(address)"](sink.address);
-  }
-}
-
 // ============================================================================
 // BURN VOTING — migration helpers
 // ============================================================================
@@ -378,7 +354,7 @@ async function warmUpLoyalty(
 //   2. Voting SPENDS. Prediction power is balance + unclaimed, so tokens burnt
 //      voting are no longer available to predict with. A test that used to vote
 //      its whole balance and then predict must burn a little and keep the rest.
-//   3. Game id 1 is the DEFAULT game. Its weight is DERIVED (20% of all other
+//   3. Game id 1 is the DEFAULT game. Its weight is DERIVED (1% of the round, from the other
 //      burn, floored at 1e18) and it CANNOT be voted on — `vote(1, ...)` reverts
 //      `CannotVoteDefault`. The fixture now calls `initializeDefaultStream()`, so
 //      the first stream a test creates is id 2.
@@ -431,17 +407,8 @@ async function onChainGrossNow(satori) {
   return (await satori.emissionRateNow()) - (await satori.devRateNow());
 }
 
-// token.freezeAirdrop takes the door and the table total it was checked at.
-// For tests that are not about that check: freeze the standing door at its
-// standing total.
-async function freezeStandingAirdrop(token, signer) {
-  const door = await token.airdrop();
-  const table = await ethers.getContractAt("SatoriAirdrop", door);
-  return token.connect(signer).freezeAirdrop(door, await table.airdropLoadedTotal());
-}
-
 module.exports = {
-  freezeStandingAirdrop,
+  ensureAdapterBountyToken,
   onChainGrossNow,
   deploySatoriFixture,
   deploySatoriFixtureNoFee,
@@ -464,7 +431,6 @@ module.exports = {
   SCALED_WEIGHT_TOLERANCE,
   pack1,
   warmUpStreak,
-  warmUpLoyalty,
   VOTE,
   voteFor,
   makeEligible,

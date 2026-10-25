@@ -26,7 +26,7 @@
  */
 
 const { expect } = require("chai");
-const { deploySatoriFixture, pack1, voteFor, warmUpLoyalty } = require("./fixtures");
+const { deploySatoriFixture, pack1, voteFor } = require("./fixtures");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
 
@@ -248,11 +248,7 @@ describe("Reward Manipulation Tests", function () {
     it("Should prevent delegator from claiming predictor's share", async function () {
       // Alice delegates to Bob
       await satori.connect(alice).delegatePredictionPower(bob.address);
-      // Delegator weight is capital x loyalty and a fresh delegation starts at
-      // L = 0, so the delegator share measured below reads zero without a
-      // warm-up. Drains to `platform`, so alice's capital and bob's ownPower
-      // are exactly as the delegation left them.
-      await warmUpLoyalty(satori, registry, null, bob, [alice], platform, stream1);
+      await time.increase(86400);
 
       // Bob predicts using Alice's power
       await registry.setValue(stream1, 1000);
@@ -291,11 +287,7 @@ describe("Reward Manipulation Tests", function () {
     it("Should distribute rewards correctly with delegation (80/10/10 split)", async function () {
       // Alice (1000) delegates to Bob (1000)
       await satori.connect(alice).delegatePredictionPower(bob.address);
-      // Delegator weight is capital x loyalty and a fresh delegation starts at
-      // L = 0, so the delegator share measured below reads zero without a
-      // warm-up. Drains to `platform`, so alice's capital and bob's ownPower
-      // are exactly as the delegation left them.
-      await warmUpLoyalty(satori, registry, null, bob, [alice], platform, stream1);
+      await time.increase(86400);
 
       // Bob predicts with combined power (2000)
       await registry.setValue(stream1, 1000);
@@ -344,11 +336,7 @@ describe("Reward Manipulation Tests", function () {
     it("Should split delegated rewards exactly as 80/10/10", async function () {
       // Alice delegates to Bob
       await satori.connect(alice).delegatePredictionPower(bob.address);
-      // Delegator weight is capital x loyalty and a fresh delegation starts at
-      // L = 0, so the delegator share measured below reads zero without a
-      // warm-up. Drains to `platform`, so alice's capital and bob's ownPower
-      // are exactly as the delegation left them.
-      await warmUpLoyalty(satori, registry, null, bob, [alice], platform, stream1);
+      await time.increase(86400);
 
       // Bob predicts
       await registry.setValue(stream1, 1000);

@@ -4,7 +4,7 @@
 # Run ON Central (it execs into central-lite, which holds the DB session and
 # the relay_watcher package):
 #
-#   sh register-relay.sh [wss://app.satorinet.io/relay]
+#   sh register-relay.sh [wss://nostr.satorinet.io]
 #
 # WHY THIS IS A MANUAL STEP AT ALL
 # --------------------------------
@@ -43,12 +43,12 @@
 # real neurons do list it.
 set -eu
 
-RELAY_URL="${1:-wss://app.satorinet.io/relay}"
+RELAY_URL="${1:-wss://nostr.satorinet.io}"
 
 # NIP-11 is fetched over the INTERNAL docker network, not the public name.
 # Central cannot reach its own public hostname — the box hairpins and the
 # connection is refused. This bites the watcher too: its NIP-11 probe of
-# app.satorinet.io will fail for the same reason. That is survivable because
+# nostr.satorinet.io will fail for the same reason. That is survivable because
 # upsert_discovered_relay COALESCEs, so a failed probe preserves the identity
 # fields written here rather than clobbering them.
 NIP11_URL="${NIP11_URL:-http://satori-relay-nginx/}"

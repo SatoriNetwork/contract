@@ -6,8 +6,8 @@ import { InfoTip } from './InfoTip';
 import { explainError } from '../utils/errors';
 import { afterTx } from '../lib/afterTx';
 
-/// Claim an airdrop allocation: the whole of it, from the moment the table is
-/// finalized (docs/issues/airdrop-claim-at-finalize.md).
+/// Claim an airdrop allocation: the whole of it, from the moment it is loaded
+/// (docs/issues/airdrop-claim-at-finalize.md).
 ///
 /// Here rather than on the dashboard, and separate from the ordinary Claim
 /// button, for the same reason MerkleClaimPanel is: `claimAirdrop` lives on
@@ -63,15 +63,12 @@ export function AirdropClaimPanel() {
 
   useEffect(() => { readOnce.current = false; load(); }, [load]);
 
-  // Claims open on the loader's finalize transaction, which this page does not
-  // see, so re-read while waiting; otherwise the button stays shut until a reload.
-  // A failed read is retried on the same clock.
-  const waiting = alloc !== null && alloc > ZERO && claimed < alloc && claimable === ZERO;
+  // A failed read is retried, so the panel does not wait for a reload.
   useEffect(() => {
-    if (!waiting && !failed) return;
+    if (!failed) return;
     const id = setInterval(load, 30000);
     return () => clearInterval(id);
-  }, [waiting, failed, load]);
+  }, [failed, load]);
 
   const claim = async () => {
     if (!contracts) return;
@@ -93,8 +90,8 @@ export function AirdropClaimPanel() {
     minimumFractionDigits: 2, maximumFractionDigits: 6,
   });
   const done = claimed >= alloc;
-  // `claimableAirdrop` is zero until finalize, so a zero while something is
-  // still owed means claims are not open.
+  // Zero while something is still owed: the token's airdrop pointer is not
+  // this contract, so it cannot mint.
   const notOpen = !done && claimable === ZERO;
 
   return (
@@ -102,8 +99,8 @@ export function AirdropClaimPanel() {
       <h3 className="font-semibold flex items-center justify-between gap-1.5">
         <span>Airdrop</span>
         <InfoTip>
-          Your whole allocation becomes claimable the moment the airdrop list is
-          finalized. Claim it in one go, any time after that. Nothing expires.
+          Your whole allocation is claimable as soon as it is on the airdrop
+          list. Claim it in one go, any time. Nothing expires.
         </InfoTip>
       </h3>
 
@@ -121,7 +118,7 @@ export function AirdropClaimPanel() {
       <div className="text-xs text-gray-500" data-testid="airdrop-status">
         {done ? 'Your airdrop is claimed.'
           : !notOpen ? 'Ready to claim.'
-          : 'Claims open when the airdrop is finalized.'}
+          : 'Not claimable from this airdrop contract.'}
       </div>
 
       {msg && (
@@ -141,7 +138,7 @@ export function AirdropClaimPanel() {
           data-testid="btn-claim-airdrop"
         >
           {busy ? 'Claiming…'
-            : notOpen ? 'Not open yet'
+            : notOpen ? 'Not claimable'
             : `Claim ${fmt(claimable)} SATORI`}
         </button>
       )}

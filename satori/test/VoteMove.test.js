@@ -68,7 +68,7 @@ describe("Moving weight off an unapproved game", function () {
     const round = await satori.getCurrentRound();
     await expect(voting.connect(alice).moveVotes(gameA, gameB, E("6")))
       .to.emit(voting, "VotesMoved")
-      .withArgs(alice.address, gameA, gameB, round, E("6"), E("8"), E("6"));
+      .withArgs(alice.address, gameA, gameB, round, E("6"), E("8"), E("6"), totalBefore - E("8"));
 
     // Raw ledgers on both sides.
     expect(await voting.gameWeight(gameA)).to.equal(E("8"));

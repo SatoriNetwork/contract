@@ -69,7 +69,7 @@ describe("Named streams (prediction-flow counter, hourly snapshot, daily game)",
   // Straight through the hub (no fixture auto-approval), with one argument of
   // the canonical creation varied.
   async function rawCreate({ name = "X", provider, config = "0x", cadence = 60, signer = alice } = {}) {
-    return hub.connect(signer)["createAdapterDataStream(string,uint16,address,bytes,uint24)"](
+    return hub.connect(signer)["createAdapterDataStream(string,uint32,address,bytes,uint24)"](
       name, fix.namedAdapterId, provider ?? (await engine.getAddress()), config, cadence);
   }
 
@@ -210,20 +210,19 @@ describe("Named streams (prediction-flow counter, hourly snapshot, daily game)",
 
   // ---- 4. own next prediction --------------------------------------------
 
-  it("predicting again < 24h later (even in a new round) reverts DuplicatePrediction", async function () {
+  it("predicting again in a new round is allowed even < 24h later", async function () {
     const sid = await namedStream();
     const gid = await games.binaryGameByStream(sid);
     await satori.connect(alice).vote(gid, VOTE);
 
-    // Pin to 23:00:05 so the second prediction at 00:30 is a NEW round yet
-    // inside the first prediction's 24h window (the next day's, if the suite's
-    // clock is already past today's).
+    // Pin to 23:00:05 so the second prediction at 00:30 is a NEW round (the
+    // next day's, if the suite's clock is already past today's).
     const now = await time.latest();
     const pin = Math.floor(now / DAY) * DAY + DAY - HOUR + 5;
     await time.increaseTo(pin > now ? pin : pin + DAY);
     await predict(alice, gid, UP);
     await time.increase(90 * 60);
-    await expect(predict(alice, gid, UP)).to.be.revertedWithCustomError(engine, "DuplicatePrediction");
+    await expect(predict(alice, gid, UP)).to.not.be.reverted;
   });
 
   it("predicting at >= 24h pulls a post sample that excludes the new contribution (always-write)", async function () {
@@ -373,7 +372,7 @@ describe("Named streams (prediction-flow counter, hourly snapshot, daily game)",
 
     it("a second game on a named stream is rejected", async function () {
       const sid = await namedStream();
-      await expect(satori.connect(alice)["createGame(uint32,uint16,bytes,string,uint24)"](sid, 0, "0x", "weekly", 10080))
+      await expect(satori.connect(alice)["createGame(uint32,uint32,bytes,string,uint24)"](sid, 0, "0x", "weekly", 10080))
         .to.be.revertedWithCustomError(games, "NamedStreamSingleGame");
     });
 
@@ -430,7 +429,7 @@ describe("Named streams (prediction-flow counter, hourly snapshot, daily game)",
     it("isNamedStream distinguishes named from ordinary streams", async function () {
       const sid = await namedStream();
       expect(await registry.isNamedStream(sid)).to.equal(true);
-      expect(await registry.isNamedStream(1)).to.equal(false);
+      expect(await registry.isNamedStream(1)).to.equal(true); // the default stream is the Sentiment stream satori
       const [cad, named] = await registry.streamScoringInfo(sid);
       expect(cad).to.equal(60);
       expect(named).to.equal(true);
@@ -446,9 +445,11 @@ describe("Named streams (prediction-flow counter, hourly snapshot, daily game)",
     it("the stream record and getLatestUpdateInfo carry the named flag", async function () {
       const sid = await namedStream();
       expect((await registry.streams(sid - 1n)).named).to.equal(true);
-      expect((await registry.streams(0)).named).to.equal(false);
+      expect((await registry.streams(0)).named).to.equal(true); // stream 1 is the default Sentiment stream
+      await satori["createSimpleDataStream(string,address,uint24)"]("Plain", owner.address, 1440);
+      expect((await registry.streams(Number(await registry.getDataStreamCount()) - 1)).named).to.equal(false);
       expect((await registry.getLatestUpdateInfo(sid))[4]).to.equal(true);
-      expect((await registry.getLatestUpdateInfo(1))[4]).to.equal(false);
+      expect((await registry.getLatestUpdateInfo(1))[4]).to.equal(true); // the default stream is Coined too
       expect((await registry.getLatestUpdateInfo(9999))[4]).to.equal(false);
     });
 
@@ -764,10 +765,10 @@ describe("Named streams (prediction-flow counter, hourly snapshot, daily game)",
       await token.connect(alice).approve(hubAddr, fee);
       const aliceBefore = await token.balanceOf(alice.address);
       const hubBefore = await token.balanceOf(hubAddr);
-      await hub.connect(alice)["createAdapterDataStream(string,uint16,address,bytes,uint24)"](
+      await hub.connect(alice)["createAdapterDataStream(string,uint32,address,bytes,uint24)"](
         "Feed", 3, bob.address, "0x", 1440);
       expect(await token.balanceOf(alice.address)).to.equal(aliceBefore - fee);
-      expect(await token.balanceOf(hubAddr)).to.equal(hubBefore + fee);
+      expect(await token.balanceOf(hubAddr)).to.equal(hubBefore);
     });
 
     it("the permit variant with the dapp's empty permit creates a named stream for free", async function () {

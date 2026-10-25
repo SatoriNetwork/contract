@@ -15,19 +15,18 @@ import "../next/SatoriUUPS.sol";
 abstract contract RevertingUUPSChild is SatoriUUPS {
     error ChildBroken();
 
-    // This used to carry a MARKETING_FEE_RECIPIENT immutable purely so the impl
-    // would pass SatoriRewards._validateNewImplementation, which pinned that
-    // value. The recipient is proxy storage now, that pin is gone, and so is the
-    // constructor arg — an upgrade cannot re-point the recipient by carrying a
-    // different bytecode value, so there is nothing left to satisfy.
+    /// `upgradeTo` asks the NEW code who may upgrade (G05), so the candidate has
+    /// to name the real governor; baked in as an immutable because a bare
+    /// implementation has no token pointer in the proxy's storage layout.
+    address private immutable GOVERNOR;
 
-    /// Never consulted at install time (the OUTGOING implementation's
-    /// `_upgradeGovernor` gates `upgradeTo`); present only to satisfy the base.
-
-    function _upgradeGovernor() internal pure override returns (address) {
-        return address(0);
+    constructor(address governor_) {
+        GOVERNOR = governor_;
     }
 
+    function _upgradeGovernor() internal view override returns (address) {
+        return GOVERNOR;
+    }
 
     function syncPredictionDelegation(address, address, uint256) external pure {
         revert ChildBroken();
@@ -40,12 +39,16 @@ abstract contract RevertingUUPSChild is SatoriUUPS {
 /// so the mock is specialised per target rather than being universally
 /// installable, which is exactly the property that is no longer allowed.
 contract RevertingVotingImpl is RevertingUUPSChild {
+    constructor(address governor_) RevertingUUPSChild(governor_) {}
+
     function _contractId() internal pure override returns (bytes32) {
         return keccak256("satori.impl.SatoriVoting");
     }
 }
 
 contract RevertingRewardsImpl is RevertingUUPSChild {
+    constructor(address governor_) RevertingUUPSChild(governor_) {}
+
     function _contractId() internal pure override returns (bytes32) {
         return keccak256("satori.impl.SatoriRewards");
     }

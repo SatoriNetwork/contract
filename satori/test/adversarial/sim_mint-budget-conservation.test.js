@@ -277,7 +277,6 @@ describe("SIM: mint-budget-conservation", function () {
 
       // tick the default stream / fee schedule explicitly (also happens on
       // first predict, but call it to be safe even on no-predict rounds)
-      try { await satori.flushDefaultStream(); } catch {}
 
       // ---------------------------------------------------------------------
       // PER-ROUND CONSERVATION SAMPLE (invariant d).

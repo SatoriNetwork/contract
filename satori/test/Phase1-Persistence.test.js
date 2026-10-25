@@ -77,7 +77,7 @@ describe("Phase 1: Multi-Round Persistence", function () {
     // Setup: BURN for the streams so each carries permanent weight and earns a
     // proportional share. Every voter burns the same VOTE (10), so eth, btc and
     // dummy each end up with 2 x VOTE — an even three-way split, on top of the
-    // default game's derived 20%. Burnt tokens are destroyed, so each wallet
+    // default game's derived 1%. Burnt tokens are destroyed, so each wallet
     // keeps initialBalance - VOTE to predict with.
     await voteFor(satori, alice, ethId);
     await voteFor(satori, bob, ethId);

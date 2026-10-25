@@ -1,5 +1,5 @@
 const { expect } = require("chai");
-const { deploySatoriFixture, pack1, VOTE, warmUpLoyalty } = require("./fixtures");
+const { deploySatoriFixture, pack1, VOTE } = require("./fixtures");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
 
@@ -60,11 +60,7 @@ describe("Per-period delegation checkpoints", function () {
   it("delegator can claim earlier-period rewards after undelegating", async function () {
     // Alice delegates to Bob and Bob makes a correct prediction.
     await satori.connect(alice).delegatePredictionPower(bob.address);
-    // Delegator weight is capital x loyalty and a fresh delegation starts at
-    // L = 0, so without a warm-up every "alice receives a share" assertion
-    // below reads zero. Drains to `dave`, who is otherwise unused here, so
-    // alice's balance (her delegated capital) and bob's ownPower are unmoved.
-    await warmUpLoyalty(satori, registry, owner, bob, [alice], dave, stream1);
+    await time.increase(86400);
 
     await registry.setValue(stream1, 100);
     await satori.connect(bob).predictMultipleWithPayloads([{ gameId: stream1, payload: pack1(UP) }]);
@@ -93,20 +89,12 @@ describe("Per-period delegation checkpoints", function () {
 
   it("same-delegate re-delegation is a no-op (no duplicate period)", async function () {
     await satori.connect(alice).delegatePredictionPower(bob.address);
-    // Delegator weight is capital x loyalty and a fresh delegation starts at
-    // L = 0, so without a warm-up every "alice receives a share" assertion
-    // below reads zero. Drains to `dave`, who is otherwise unused here, so
-    // alice's balance (her delegated capital) and bob's ownPower are unmoved.
-    await warmUpLoyalty(satori, registry, owner, bob, [alice], dave, stream1);
+    await time.increase(86400);
 
     // Re-delegate to the same delegate — should early-return without pool accounting change.
     const bobPoolBefore = (await rewards.predictionDelegateInfo(bob.address)).power;
     await satori.connect(alice).delegatePredictionPower(bob.address);
-    // Delegator weight is capital x loyalty and a fresh delegation starts at
-    // L = 0, so without a warm-up every "alice receives a share" assertion
-    // below reads zero. Drains to `dave`, who is otherwise unused here, so
-    // alice's balance (her delegated capital) and bob's ownPower are unmoved.
-    await warmUpLoyalty(satori, registry, owner, bob, [alice], dave, stream1);
+    await time.increase(86400);
     const bobPoolAfter = (await rewards.predictionDelegateInfo(bob.address)).power;
 
     expect(bobPoolAfter).to.equal(bobPoolBefore, "Pool must not double-count");
@@ -133,11 +121,7 @@ describe("Per-period delegation checkpoints", function () {
 
   it("delegator claiming before delegate still receives share (lazy settle)", async function () {
     await satori.connect(alice).delegatePredictionPower(bob.address);
-    // Delegator weight is capital x loyalty and a fresh delegation starts at
-    // L = 0, so without a warm-up every "alice receives a share" assertion
-    // below reads zero. Drains to `dave`, who is otherwise unused here, so
-    // alice's balance (her delegated capital) and bob's ownPower are unmoved.
-    await warmUpLoyalty(satori, registry, owner, bob, [alice], dave, stream1);
+    await time.increase(86400);
 
     await registry.setValue(stream1, 100);
     await satori.connect(bob).predictMultipleWithPayloads([{ gameId: stream1, payload: pack1(UP) }]);
@@ -162,11 +146,7 @@ describe("Per-period delegation checkpoints", function () {
   it("delegator balance change between periods credits share against correct balance", async function () {
     // Period 1: Alice (400) delegates to Bob.
     await satori.connect(alice).delegatePredictionPower(bob.address);
-    // Delegator weight is capital x loyalty and a fresh delegation starts at
-    // L = 0, so without a warm-up every "alice receives a share" assertion
-    // below reads zero. Drains to `dave`, who is otherwise unused here, so
-    // alice's balance (her delegated capital) and bob's ownPower are unmoved.
-    await warmUpLoyalty(satori, registry, owner, bob, [alice], dave, stream1);
+    await time.increase(86400);
 
     await registry.setValue(stream1, 100);
     await satori.connect(bob).predictMultipleWithPayloads([{ gameId: stream1, payload: pack1(UP) }]);
@@ -188,11 +168,7 @@ describe("Per-period delegation checkpoints", function () {
     await satori.connect(alice).delegatePredictionPower(ethers.ZeroAddress);
     await advanceRound();
     await satori.connect(alice).delegatePredictionPower(bob.address);
-    // Delegator weight is capital x loyalty and a fresh delegation starts at
-    // L = 0, so without a warm-up every "alice receives a share" assertion
-    // below reads zero. Drains to `dave`, who is otherwise unused here, so
-    // alice's balance (her delegated capital) and bob's ownPower are unmoved.
-    await warmUpLoyalty(satori, registry, owner, bob, [alice], dave, stream1);
+    await time.increase(86400);
 
     // Period 2: Bob keeps predicting correctly.
     await registry.setValue(stream1, 250);
@@ -217,11 +193,7 @@ describe("Per-period delegation checkpoints", function () {
   it("predictions settled after undelegation still credit the old delegator", async function () {
     // Alice delegates to Bob on R0.
     await satori.connect(alice).delegatePredictionPower(bob.address);
-    // Delegator weight is capital x loyalty and a fresh delegation starts at
-    // L = 0, so without a warm-up every "alice receives a share" assertion
-    // below reads zero. Drains to `dave`, who is otherwise unused here, so
-    // alice's balance (her delegated capital) and bob's ownPower are unmoved.
-    await warmUpLoyalty(satori, registry, owner, bob, [alice], dave, stream1);
+    await time.increase(86400);
 
     // Bob predicts on R1.
     await registry.setValue(stream1, 100);
@@ -254,11 +226,7 @@ describe("Per-period delegation checkpoints", function () {
 
   it("repeat claim is idempotent for delegator", async function () {
     await satori.connect(alice).delegatePredictionPower(bob.address);
-    // Delegator weight is capital x loyalty and a fresh delegation starts at
-    // L = 0, so without a warm-up every "alice receives a share" assertion
-    // below reads zero. Drains to `dave`, who is otherwise unused here, so
-    // alice's balance (her delegated capital) and bob's ownPower are unmoved.
-    await warmUpLoyalty(satori, registry, owner, bob, [alice], dave, stream1);
+    await time.increase(86400);
 
     await registry.setValue(stream1, 100);
     await satori.connect(bob).predictMultipleWithPayloads([{ gameId: stream1, payload: pack1(UP) }]);

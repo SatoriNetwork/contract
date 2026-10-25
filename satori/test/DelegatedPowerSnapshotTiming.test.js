@@ -20,7 +20,7 @@
  */
 
 const { expect } = require("chai");
-const { deploySatoriFixtureNoFee, RAW_TOLERANCE, pack1, VOTE, warmUpLoyalty } = require("./fixtures");
+const { deploySatoriFixtureNoFee, RAW_TOLERANCE, pack1, VOTE } = require("./fixtures");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
 
@@ -86,13 +86,7 @@ describe("Delegated-power snapshot timing", function () {
         await satori.connect(dave).vote(sid, VOTE);
 
         await satori.connect(carol).delegatePredictionPower(bob.address);
-        // Delegator weight is capital x loyalty and a fresh delegation starts
-        // at L = 0, so the share measured below reads zero without a warm-up.
-        // Drains predictor and delegators to `platform`, leaving every balance
-        // (and therefore every delegated capital) exactly as set up.
-        await warmUpLoyalty(satori, registry, null, bob, [carol], platform, sid);
-        // The warm-up consumed several rounds, so the stream needs a fresh
-        // value in THIS round or the predict below reverts PredictExpired.
+        await time.increase(86400);
         await registry.setValue(sid, 100);
 
         // Mid-day: Carol receives 50 more tokens. delegatedPredictionPower
@@ -150,13 +144,7 @@ describe("Delegated-power snapshot timing", function () {
 
         await satori.connect(dave).delegatePredictionPower(bob.address);
         await satori.connect(eve).delegatePredictionPower(bob.address);
-        // Delegator weight is capital x loyalty and a fresh delegation starts
-        // at L = 0, so the share measured below reads zero without a warm-up.
-        // Drains predictor and delegators to `platform`, leaving every balance
-        // (and therefore every delegated capital) exactly as set up.
-        await warmUpLoyalty(satori, registry, null, bob, [dave, eve], platform, sid);
-        // The warm-up consumed several rounds, so the stream needs a fresh
-        // value in THIS round or the predict below reverts PredictExpired.
+        await time.increase(86400);
         await registry.setValue(sid, 100);
 
         // _delegatePowerForRate[bob] = 200 after both delegations.
@@ -224,13 +212,7 @@ describe("Delegated-power snapshot timing", function () {
         // Bob predicts on his own first so we can confirm his rate-pool
         // path stays consistent.
         await satori.connect(carol).delegatePredictionPower(bob.address);
-        // Delegator weight is capital x loyalty and a fresh delegation starts
-        // at L = 0, so the share measured below reads zero without a warm-up.
-        // Drains predictor and delegators to `platform`, leaving every balance
-        // (and therefore every delegated capital) exactly as set up.
-        await warmUpLoyalty(satori, registry, null, bob, [carol], platform, sid);
-        // The warm-up consumed several rounds, so the stream needs a fresh
-        // value in THIS round or the predict below reverts PredictExpired.
+        await time.increase(86400);
         await registry.setValue(sid, 100);
         await satori.transfer(carol.address, ethers.parseEther("50"));
 
@@ -247,7 +229,7 @@ describe("Delegated-power snapshot timing", function () {
         expect(p2start).to.equal(ethers.parseEther("150"));
 
         // Warm Carol's NEW relationship so her share against Eve is measurable.
-        await warmUpLoyalty(satori, registry, null, eve, [carol], platform, sid);
+        await time.increase(86400);
         await registry.setValue(sid, 100);
 
         // Eve predicts (on Carol's 150 of live delegated power, but

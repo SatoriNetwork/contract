@@ -3,90 +3,105 @@
     "label": "deployer",
     "slot": "0",
     "offset": 0,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "satoriCore",
     "slot": "1",
     "offset": 0,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "satoriGames",
     "slot": "2",
     "offset": 0,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "satoriEngine",
     "slot": "3",
     "offset": 0,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "satoriToken",
     "slot": "4",
     "offset": 0,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "_initialized",
     "slot": "4",
     "offset": 20,
-    "type": "t_bool"
+    "type": "t_bool",
+    "shape": "bool/1"
   },
   {
     "label": "gameWeight",
     "slot": "5",
     "offset": 0,
-    "type": "t_mapping(t_uint32,t_uint256)"
+    "type": "t_mapping(t_uint32,t_uint256)",
+    "shape": "mapping(uint32/4=>uint256/32)"
   },
   {
     "label": "totalBurnedWeight",
     "slot": "6",
     "offset": 0,
-    "type": "t_uint256"
+    "type": "t_uint256",
+    "shape": "uint256/32"
   },
   {
     "label": "gameApproved",
     "slot": "7",
     "offset": 0,
-    "type": "t_mapping(t_uint32,t_bool)"
+    "type": "t_mapping(t_uint32,t_bool)",
+    "shape": "mapping(uint32/4=>bool/1)"
   },
   {
     "label": "gameBurnAtRound",
     "slot": "8",
     "offset": 0,
-    "type": "t_mapping(t_uint32,t_mapping(t_uint256,t_uint256))"
+    "type": "t_mapping(t_uint32,t_mapping(t_uint256,t_uint256))",
+    "shape": "mapping(uint32/4=>mapping(uint256/32=>uint256/32))"
   },
   {
     "label": "totalBurnAtRound",
     "slot": "9",
     "offset": 0,
-    "type": "t_mapping(t_uint256,t_uint256)"
+    "type": "t_mapping(t_uint256,t_uint256)",
+    "shape": "mapping(uint256/32=>uint256/32)"
   },
   {
     "label": "gameVotesAtRound",
     "slot": "10",
     "offset": 0,
-    "type": "t_mapping(t_uint32,t_mapping(t_uint256,t_uint256))"
+    "type": "t_mapping(t_uint32,t_mapping(t_uint256,t_uint256))",
+    "shape": "mapping(uint32/4=>mapping(uint256/32=>uint256/32))"
   },
   {
     "label": "roundVoteTotal",
     "slot": "11",
     "offset": 0,
-    "type": "t_mapping(t_uint256,t_uint256)"
+    "type": "t_mapping(t_uint256,t_uint256)",
+    "shape": "mapping(uint256/32=>uint256/32)"
   },
   {
     "label": "_eligibleGamesAtRound",
     "slot": "12",
     "offset": 0,
-    "type": "t_mapping(t_uint256,t_array(t_uint32)dyn_storage)"
+    "type": "t_mapping(t_uint256,t_array(t_uint32)dyn_storage)",
+    "shape": "mapping(uint256/32=>uint32[][uint32/4])"
   },
   {
     "label": "voterGameWeight",
     "slot": "13",
     "offset": 0,
-    "type": "t_mapping(t_address,t_mapping(t_uint32,t_uint256))"
+    "type": "t_mapping(t_address,t_mapping(t_uint32,t_uint256))",
+    "shape": "mapping(address/20=>mapping(uint32/4=>uint256/32))"
   }
 ]

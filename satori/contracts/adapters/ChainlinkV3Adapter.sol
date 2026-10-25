@@ -32,15 +32,31 @@ contract ChainlinkV3Adapter is IStreamAdapter, IStreamAdapterUIDescriptor {
     uint64 public constant MIN_FEED_AGE = 60;
     uint64 public constant MAX_FEED_AGE = 26 hours;
 
+    /// Chainlink's L2 sequencer-uptime feed (zero where there is no sequencer).
+    /// Immutable: a different feed means a new adapter id.
+    address public immutable SEQUENCER_UPTIME_FEED;
+    uint256 public constant SEQUENCER_GRACE_PERIOD = 1 hours;
+
     error InvalidFeed();
+    error SequencerDown();
+    error SequencerGracePeriod();
     error MaxFeedAgeOutOfRange();
     error RoundNotComplete();
     error Stale();
     error ValueOverflow();
 
+    constructor(address sequencerUptimeFeed) {
+        SEQUENCER_UPTIME_FEED = sequencerUptimeFeed;
+    }
+
     function readValue(address target, bytes calldata config)
         external view override returns (int232)
     {
+        if (SEQUENCER_UPTIME_FEED != address(0)) {
+            (, int256 down, uint256 startedAt, , ) = AggregatorV3Interface(SEQUENCER_UPTIME_FEED).latestRoundData();
+            if (down != 0) revert SequencerDown();
+            if (startedAt == 0 || block.timestamp - startedAt <= SEQUENCER_GRACE_PERIOD) revert SequencerGracePeriod();
+        }
         uint64 maxFeedAge = abi.decode(config, (uint64));
         // answeredInRound / roundId intentionally ignored (audit F49): Chainlink
         // deprecated answeredInRound (many feeds return 0), so gating on it would

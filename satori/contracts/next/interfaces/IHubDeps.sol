@@ -19,12 +19,10 @@ interface ISatoriTokenFull {
     ) external;
     function getCurrentRound() external view returns (uint256);
     function deploymentRound() external view returns (uint256);
-    function totalRewardsMinted() external view returns (uint256);
-    function devFeeCeiling() external view returns (uint256);
     function devFeeBps() external view returns (uint256);
-    function generalCeilingFor(uint256 ceiling) external view returns (uint256);
+    function generalAccrued() external view returns (uint256);
+    function devFeeAccrued() external view returns (uint256);
     function generalMinted() external view returns (uint256);
-    function devFeeMinted() external view returns (uint256);
     /// The governor was split into one slot per job (dao-governance.md v2). The
     /// hub's `setSatoriMerkle` is a pointer binding, so it reads `wiring`.
     function wiringAuthority() external view returns (address);
@@ -32,6 +30,7 @@ interface ISatoriTokenFull {
     function hasParticipated(address) external view returns (bool);
     function lockUntil(address user, uint8 lane) external view returns (uint24);
     // controller ops
+    function accrueRewards(uint256 general) external returns (uint256 generalTotal, uint256 fee);
     function rewardMint(address to, uint256 amount) external;
     function setLock(address user, uint8 lane, uint24 untilRound) external;
     function markParticipated(address user) external;
@@ -48,7 +47,6 @@ interface ISatoriEngineView {
         external view returns (SatoriTypes.Prediction memory);
     function getLatestPrediction(address user, uint32 gameId)
         external view returns (SatoriTypes.Prediction memory);
-    function markDefaultStreamInitialized() external;
     function predictMultipleFor(
         address user, address referrer, SatoriTypes.PredictionRequestWithPayload[] calldata requests
     ) external;

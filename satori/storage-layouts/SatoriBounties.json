@@ -3,144 +3,175 @@
     "label": "_status",
     "slot": "0",
     "offset": 0,
-    "type": "t_uint256"
+    "type": "t_uint256",
+    "shape": "uint256/32"
   },
   {
     "label": "deployer",
     "slot": "1",
     "offset": 0,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "satoriCore",
     "slot": "2",
     "offset": 0,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "satoriRewards",
     "slot": "3",
     "offset": 0,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "pool",
     "slot": "4",
     "offset": 0,
-    "type": "t_mapping(t_uint32,t_mapping(t_address,t_uint256))"
+    "type": "t_mapping(t_uint32,t_mapping(t_address,t_uint256))",
+    "shape": "mapping(uint32/4=>mapping(address/20=>uint256/32))"
   },
   {
     "label": "ratePerRound",
     "slot": "5",
     "offset": 0,
-    "type": "t_mapping(t_uint32,t_mapping(t_address,t_uint256))"
+    "type": "t_mapping(t_uint32,t_mapping(t_address,t_uint256))",
+    "shape": "mapping(uint32/4=>mapping(address/20=>uint256/32))"
   },
   {
     "label": "gameBountyTokens",
     "slot": "6",
     "offset": 0,
-    "type": "t_mapping(t_uint32,t_array(t_address)dyn_storage)"
+    "type": "t_mapping(t_uint32,t_array(t_address)dyn_storage)",
+    "shape": "mapping(uint32/4=>address[][address/20])"
   },
   {
     "label": "_gameTokenSeen",
     "slot": "7",
     "offset": 0,
-    "type": "t_mapping(t_uint32,t_mapping(t_address,t_bool))"
+    "type": "t_mapping(t_uint32,t_mapping(t_address,t_bool))",
+    "shape": "mapping(uint32/4=>mapping(address/20=>bool/1))"
   },
   {
     "label": "_dripFiredForRound",
     "slot": "8",
     "offset": 0,
-    "type": "t_mapping(t_uint32,t_mapping(t_uint32,t_mapping(t_address,t_bool)))"
+    "type": "t_mapping(t_uint32,t_mapping(t_uint32,t_mapping(t_address,t_bool)))",
+    "shape": "mapping(uint32/4=>mapping(uint32/4=>mapping(address/20=>bool/1)))"
   },
   {
     "label": "roundBountyPot",
     "slot": "9",
     "offset": 0,
-    "type": "t_mapping(t_uint32,t_mapping(t_uint32,t_mapping(t_address,t_uint256)))"
+    "type": "t_mapping(t_uint32,t_mapping(t_uint32,t_mapping(t_address,t_uint256)))",
+    "shape": "mapping(uint32/4=>mapping(uint32/4=>mapping(address/20=>uint256/32)))"
   },
   {
     "label": "roundBountyPotClaimed",
     "slot": "10",
     "offset": 0,
-    "type": "t_mapping(t_uint32,t_mapping(t_uint32,t_mapping(t_address,t_uint256)))"
+    "type": "t_mapping(t_uint32,t_mapping(t_uint32,t_mapping(t_address,t_uint256)))",
+    "shape": "mapping(uint32/4=>mapping(uint32/4=>mapping(address/20=>uint256/32)))"
   },
   {
     "label": "_fundingEpochStartRound",
     "slot": "11",
     "offset": 0,
-    "type": "t_mapping(t_uint32,t_mapping(t_address,t_uint32))"
+    "type": "t_mapping(t_uint32,t_mapping(t_address,t_uint32))",
+    "shape": "mapping(uint32/4=>mapping(address/20=>uint32/4))"
   },
   {
     "label": "bountyStake",
     "slot": "12",
     "offset": 0,
-    "type": "t_mapping(t_address,t_mapping(t_address,t_uint256))"
+    "type": "t_mapping(t_address,t_mapping(t_address,t_uint256))",
+    "shape": "mapping(address/20=>mapping(address/20=>uint256/32))"
   },
   {
     "label": "userStakedTokens",
     "slot": "13",
     "offset": 0,
-    "type": "t_mapping(t_address,t_array(t_address)dyn_storage)"
+    "type": "t_mapping(t_address,t_array(t_address)dyn_storage)",
+    "shape": "mapping(address/20=>address[][address/20])"
   },
   {
     "label": "_totalBoostStakeByKey",
     "slot": "14",
     "offset": 0,
-    "type": "t_mapping(t_uint32,t_mapping(t_uint32,t_mapping(t_uint96,t_mapping(t_address,t_uint256))))"
+    "type": "t_mapping(t_uint32,t_mapping(t_uint32,t_mapping(t_uint96,t_mapping(t_address,t_uint256))))",
+    "shape": "mapping(uint32/4=>mapping(uint32/4=>mapping(uint96/12=>mapping(address/20=>uint256/32))))"
   },
   {
     "label": "boostStakeForPrediction",
     "slot": "15",
     "offset": 0,
-    "type": "t_mapping(t_address,t_mapping(t_uint32,t_mapping(t_uint256,t_mapping(t_address,t_uint256))))"
+    "type": "t_mapping(t_address,t_mapping(t_uint32,t_mapping(t_uint256,t_mapping(t_address,t_uint256))))",
+    "shape": "mapping(address/20=>mapping(uint32/4=>mapping(uint256/32=>mapping(address/20=>uint256/32))))"
   },
   {
     "label": "_adapterActiveToken",
     "slot": "16",
     "offset": 0,
-    "type": "t_mapping(t_uint32,t_mapping(t_uint256,t_address))"
+    "type": "t_mapping(t_uint32,t_mapping(t_uint256,t_address))",
+    "shape": "mapping(uint32/4=>mapping(uint256/32=>address/20))"
   },
   {
     "label": "_adapterBountyTotal",
     "slot": "17",
     "offset": 0,
-    "type": "t_mapping(t_uint32,t_mapping(t_uint256,t_uint256))"
+    "type": "t_mapping(t_uint32,t_mapping(t_uint256,t_uint256))",
+    "shape": "mapping(uint32/4=>mapping(uint256/32=>uint256/32))"
   },
   {
     "label": "_adapterBountyPaid",
     "slot": "18",
     "offset": 0,
-    "type": "t_mapping(t_uint32,t_mapping(t_uint256,t_uint256))"
+    "type": "t_mapping(t_uint32,t_mapping(t_uint256,t_uint256))",
+    "shape": "mapping(uint32/4=>mapping(uint256/32=>uint256/32))"
   },
   {
     "label": "boostedTokensInRound",
     "slot": "19",
     "offset": 0,
-    "type": "t_mapping(t_address,t_mapping(t_uint256,t_array(t_address)dyn_storage))"
+    "type": "t_mapping(t_address,t_mapping(t_uint256,t_array(t_address)dyn_storage))",
+    "shape": "mapping(address/20=>mapping(uint256/32=>address[][address/20]))"
   },
   {
     "label": "stakeLockedUntil",
     "slot": "20",
     "offset": 0,
-    "type": "t_mapping(t_address,t_mapping(t_address,t_uint64))"
+    "type": "t_mapping(t_address,t_mapping(t_address,t_uint64))",
+    "shape": "mapping(address/20=>mapping(address/20=>uint64/8))"
   },
   {
     "label": "satoriEngine",
     "slot": "21",
     "offset": 0,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "satoriToken",
     "slot": "22",
     "offset": 0,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "_initialized",
     "slot": "22",
     "offset": 20,
-    "type": "t_bool"
+    "type": "t_bool",
+    "shape": "bool/1"
+  },
+  {
+    "label": "adapterBountyToken",
+    "slot": "23",
+    "offset": 0,
+    "type": "t_mapping(t_uint32,t_address)",
+    "shape": "mapping(uint32/4=>address/20)"
   }
 ]

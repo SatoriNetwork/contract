@@ -93,7 +93,7 @@ async function main() {
   console.log("\n[3] Creating a Custom adapter stream (adapterId %d)...", CUSTOM_ADAPTER_ID);
   try {
     const target = owner.address; // any non-zero address; descriptor ignores it
-    const sTx = await hub["createAdapterDataStream(string,uint16,address,bytes,uint24)"](
+    const sTx = await hub["createAdapterDataStream(string,uint32,address,bytes,uint24)"](
       "Custom feed (e2e)", CUSTOM_ADAPTER_ID, target, "0x", 2880
     );
     await sTx.wait();

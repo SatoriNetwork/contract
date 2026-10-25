@@ -34,7 +34,7 @@ const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { loadFixture, time, impersonateAccount, setBalance } =
   require("@nomicfoundation/hardhat-network-helpers");
-const { deploySatoriFixture, pack1, voteFor, VOTE, warmUpLoyalty } = require("../fixtures");
+const { deploySatoriFixture, pack1, voteFor, VOTE } = require("../fixtures");
 
 const ROUND = 86400;
 const YES = 1;
@@ -153,14 +153,7 @@ describe("game-adapters.cov2 — adversarial coverage (round 2, med-priority gap
       await voteFor(satori, voters[2], binGameB);
       // (binGameA intentionally unused — it carries no weight and earns nothing.)
 
-      // Delegator weight is capital x loyalty and a fresh delegation starts at
-      // L = 0, so dBoth's pull would be zero and the "strictly more than dOne"
-      // comparison vacuous. Warm on binGameB — the only mint-eligible game
-      // here, which is the asymmetry under test. dOne stays cold on purpose:
-      // its predictor only ever wins the unpaid adapter game.
-      await warmUpLoyalty(satori, registry, owner, pBoth, [dBoth], voters[3], binGameB, 40, 4);
-      // Both host streams need a fresh anchor in THIS round: the warm-up
-      // spans several cadence periods and both predictors act below.
+      await time.increase(86400 * 4); // clears the host stream's 4-round cadence
       await registry.connect(owner).setValue(streamA, 100);
       await registry.connect(owner).setValue(streamB, 100);
 

@@ -27,8 +27,8 @@
 // THE ESCAPE HATCH, AND THE ROLES THAT GOVERN IT
 // Immutable shares mean the only way to ever change a split is to deploy a NEW
 // splitter and have the old one tell its PARENT to rotate the slot to it
-// (`rotateAt` -> parent's `rotateRecipient`). That redirects future income only;
-// funds already banked stay claimable under the old shares. Two doors open it:
+// (`rotateAt` -> parent's `rotateRecipient`). That redirects future income and the
+// slot's unpulled balance; other slots keep what they are owed. Two doors open it:
 //
 //   * the AUTHORITY, unilaterally; or
 //   * consent from slots holding >= the node's rotation threshold.
@@ -52,10 +52,11 @@
 // governed by a different party. Passing the same address to both is allowed and
 // simply reproduces the older single-authority tree. Note that the authority is
 // the only role here that is NOT frozen — each node's holder can hand it on with
-// `transferAuthority` or close the door for good with `renounceAuthority`.
+// `transferAuthority` or give it up with `renounceAuthority`, which leaves
+// rotation to the node's own threshold (below).
 //
 // Note the consequence of a threshold at or below 50%: a holder of a minority of
-// the branch can redirect all of that branch's future income. That is chosen
+// the branch can redirect all of that branch's income, alone and for good. That is chosen
 // here, not overlooked — see rotationThresholdBps in the contract.
 const { ethers, network } = require("hardhat");
 // On a live network every read that follows a write is eventually consistent — a
@@ -97,7 +98,7 @@ async function main() {
   if (chainId === 8453) {
     console.log(`\n  !! BASE MAINNET. A's address becomes PLATFORM_FEE_RECIPIENT, an`);
     console.log(`     immutable on a token with no upgrade path. It can never be changed,`);
-    console.log(`     and A's shares can never be changed either. Confirm below.\n`);
+    console.log(`     and A's shares can never be changed either. Check the table below.\n`);
   }
 
   const payees = [1, 2, 3, 4].map((i) => requireAddr(`PAYEE_${i}`));
@@ -191,6 +192,12 @@ async function main() {
   // not leave the operator with A's address only on screen. deploy.js checks the
   // tree on chain against this file before the token exists, whatever it says.
   const out = path.join(__dirname, "..", "deployments", `splitters-${network.name}.json`);
+  // A rerun must not destroy the record of an earlier tree: keep it beside the new one.
+  if (fs.existsSync(out)) {
+    const kept = out.replace(/\.json$/, `.${Date.now()}.previous.json`);
+    fs.renameSync(out, kept);
+    console.log(`  kept the previous record as ${path.basename(kept)}`);
+  }
   const writeFile = (verified, rejected) => {
     fs.mkdirSync(path.dirname(out), { recursive: true });
     fs.writeFileSync(out, JSON.stringify({

@@ -194,7 +194,7 @@
           "type": "address"
         },
         {
-          "indexed": false,
+          "indexed": true,
           "internalType": "address",
           "name": "to",
           "type": "address"
@@ -340,25 +340,6 @@
         {
           "indexed": false,
           "internalType": "uint256",
-          "name": "cumulative",
-          "type": "uint256"
-        },
-        {
-          "indexed": false,
-          "internalType": "uint256",
-          "name": "atRound",
-          "type": "uint256"
-        }
-      ],
-      "name": "MerkleReserveClamped",
-      "type": "event"
-    },
-    {
-      "anonymous": false,
-      "inputs": [
-        {
-          "indexed": false,
-          "internalType": "uint256",
           "name": "newRate",
           "type": "uint256"
         },
@@ -445,6 +426,12 @@
       "anonymous": false,
       "inputs": [],
       "name": "UpgradesRenounced",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [],
+      "name": "VoteLockGovernorFrozen",
       "type": "event"
     },
     {
@@ -737,9 +724,9 @@
           "type": "string"
         },
         {
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "adapterId",
-          "type": "uint16"
+          "type": "uint32"
         },
         {
           "internalType": "address",
@@ -776,9 +763,9 @@
           "type": "string"
         },
         {
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "adapterId",
-          "type": "uint16"
+          "type": "uint32"
         },
         {
           "internalType": "address",
@@ -810,9 +797,9 @@
           "type": "string"
         },
         {
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "adapterId",
-          "type": "uint16"
+          "type": "uint32"
         },
         {
           "internalType": "address",
@@ -871,9 +858,9 @@
           "type": "uint32"
         },
         {
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "gameTypeId",
-          "type": "uint16"
+          "type": "uint32"
         },
         {
           "internalType": "bytes",
@@ -905,9 +892,9 @@
           "type": "uint32"
         },
         {
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "gameTypeId",
-          "type": "uint16"
+          "type": "uint32"
         },
         {
           "internalType": "bytes",
@@ -1282,6 +1269,32 @@
       "type": "function"
     },
     {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "round",
+          "type": "uint256"
+        }
+      ],
+      "name": "freezeRoundGross",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "gross",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "freezeVoteLockGovernor",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
       "inputs": [],
       "name": "games",
       "outputs": [
@@ -1490,12 +1503,51 @@
     },
     {
       "inputs": [],
+      "name": "onChainAllowance",
+      "outputs": [
+        {
+          "internalType": "uint192",
+          "name": "",
+          "type": "uint192"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "onChainGrossNow",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
       "name": "onChainMinted",
       "outputs": [
         {
           "internalType": "uint256",
           "name": "",
           "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "onChainPricedRound",
+      "outputs": [
+        {
+          "internalType": "uint64",
+          "name": "",
+          "type": "uint64"
         }
       ],
       "stateMutability": "view",
@@ -1627,9 +1679,9 @@
       "name": "registerAdapter",
       "outputs": [
         {
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "id",
-          "type": "uint16"
+          "type": "uint32"
         }
       ],
       "stateMutability": "nonpayable",
@@ -1651,9 +1703,9 @@
       "name": "registerCommunityAdapter",
       "outputs": [
         {
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "id",
-          "type": "uint16"
+          "type": "uint32"
         }
       ],
       "stateMutability": "nonpayable",
@@ -1675,9 +1727,9 @@
       "name": "registerCommunityGameAdapter",
       "outputs": [
         {
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "gameTypeId",
-          "type": "uint16"
+          "type": "uint32"
         }
       ],
       "stateMutability": "nonpayable",
@@ -1699,9 +1751,9 @@
       "name": "registerGameAdapter",
       "outputs": [
         {
-          "internalType": "uint16",
+          "internalType": "uint32",
           "name": "gameTypeId",
-          "type": "uint16"
+          "type": "uint32"
         }
       ],
       "stateMutability": "nonpayable",
@@ -2044,6 +2096,19 @@
       "type": "function"
     },
     {
+      "inputs": [],
+      "name": "upgradeGovernor",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
       "inputs": [
         {
           "internalType": "address",
@@ -2119,6 +2184,19 @@
           "internalType": "address",
           "name": "",
           "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "voteLockGovernorFrozen",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
         }
       ],
       "stateMutability": "view",

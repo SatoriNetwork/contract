@@ -34,7 +34,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { time, loadFixture } = require("@nomicfoundation/hardhat-network-helpers");
-const { deploySatoriFixture, pack1, deployAndRegisterYesNoGame, createYesNoGame, VOTE } = require("./fixtures");
+const { deploySatoriFixture, pack1, deployAndRegisterYesNoGame, createYesNoGame, VOTE, ensureAdapterBountyToken } = require("./fixtures");
 
 const UP = 1;
 
@@ -133,6 +133,7 @@ describe("A1 — bounty pays out when gameId != streamId", function () {
   it("a non-default game (gameId != streamId) carries its own bounty and pays its predictors", async function () {
     // Bounty funded on the GAME (gameId != streamId), the unit a funder
     // actually endorses now that games carry custom logic.
+    await ensureAdapterBountyToken(bounties, gameId, usd);
     await bounties.connect(funder).fundBounty(
       gameId, await usd.getAddress(),
       ethers.parseEther("1000"), ethers.parseEther("200")
@@ -163,6 +164,7 @@ describe("A1 — bounty pays out when gameId != streamId", function () {
 
   it("per-game isolation: a bounty on one game does NOT pay predictors of another game on the same stream", async function () {
     // Fund ONLY the extra (adapter) game's bounty.
+    await ensureAdapterBountyToken(bounties, gameId, usd);
     await bounties.connect(funder).fundBounty(
       gameId, await usd.getAddress(),
       ethers.parseEther("1000"), ethers.parseEther("200")

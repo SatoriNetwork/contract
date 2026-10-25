@@ -3,96 +3,112 @@
     "label": "adapter",
     "slot": "0",
     "offset": 0,
-    "type": "t_mapping(t_uint16,t_address)"
+    "type": "t_mapping(t_uint32,t_address)",
+    "shape": "mapping(uint32/4=>address/20)"
   },
   {
     "label": "adapterName",
     "slot": "1",
     "offset": 0,
-    "type": "t_mapping(t_uint16,t_string_storage)"
+    "type": "t_mapping(t_uint32,t_string_storage)",
+    "shape": "mapping(uint32/4=>string/32)"
   },
   {
     "label": "isCommunityAdapter",
     "slot": "2",
     "offset": 0,
-    "type": "t_mapping(t_uint16,t_bool)"
+    "type": "t_mapping(t_uint32,t_bool)",
+    "shape": "mapping(uint32/4=>bool/1)"
   },
   {
     "label": "nextAdapterId",
     "slot": "3",
     "offset": 0,
-    "type": "t_uint16"
+    "type": "t_uint32",
+    "shape": "uint32/4"
   },
   {
     "label": "deployer",
     "slot": "3",
-    "offset": 2,
-    "type": "t_address"
+    "offset": 4,
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "satoriCore",
     "slot": "4",
     "offset": 0,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "satoriRewards",
     "slot": "5",
     "offset": 0,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "nextStreamId",
     "slot": "5",
     "offset": 20,
-    "type": "t_uint32"
+    "type": "t_uint32",
+    "shape": "uint32/4"
   },
   {
     "label": "streams",
     "slot": "6",
     "offset": 0,
-    "type": "t_array(t_struct(StreamMeta)_storage)dyn_storage"
+    "type": "t_array(t_struct(StreamMeta)_storage)dyn_storage",
+    "shape": "struct SatoriTypes.StreamMeta[][struct SatoriTypes.StreamMeta{provider@0.0:address/20,streamType@0.20:uint8/1,minCadenceMinutes@0.21:uint24/3,adapterId@0.24:uint32/4,named@0.28:bool/1,config@1.0:bytes/32,name@2.0:string/32}]"
   },
   {
     "label": "historyData",
     "slot": "7",
     "offset": 0,
-    "type": "t_mapping(t_uint32,t_array(t_struct(HistoryEntry)_storage)_storage)"
+    "type": "t_mapping(t_uint32,t_array(t_struct(HistoryEntry)_storage)_storage)",
+    "shape": "mapping(uint32/4=>struct SatoriRegistry.HistoryEntry[768][struct SatoriRegistry.HistoryEntry{value@0.0:int232/29,round@0.29:uint24/3}])"
   },
   {
     "label": "ringMeta",
     "slot": "8",
     "offset": 0,
-    "type": "t_mapping(t_uint32,t_struct(RingMeta)_storage)"
+    "type": "t_mapping(t_uint32,t_struct(RingMeta)_storage)",
+    "shape": "mapping(uint32/4=>struct SatoriRegistry.RingMeta{head@0.0:uint16/2,count@0.2:uint16/2,lastUpdateTimestamp@0.4:uint64/8})"
   },
   {
     "label": "satoriEngine",
     "slot": "9",
     "offset": 0,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "satoriToken",
     "slot": "10",
     "offset": 0,
-    "type": "t_address"
+    "type": "t_address",
+    "shape": "address/20"
   },
   {
     "label": "_initialized",
     "slot": "10",
     "offset": 20,
-    "type": "t_bool"
+    "type": "t_bool",
+    "shape": "bool/1"
   },
   {
     "label": "namedAdapterId",
     "slot": "10",
     "offset": 21,
-    "type": "t_uint16"
+    "type": "t_uint32",
+    "shape": "uint32/4"
   },
   {
     "label": "namedNameTaken",
     "slot": "11",
     "offset": 0,
-    "type": "t_mapping(t_bytes32,t_bool)"
+    "type": "t_mapping(t_bytes32,t_bool)",
+    "shape": "mapping(bytes32/32=>bool/1)"
   }
 ]

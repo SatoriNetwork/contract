@@ -1,85 +1,60 @@
 import { predictGate, reopenTime } from './predictGate';
 
-// Mirrors SatoriEngine's predict gate; a named game takes one prediction per
-// address per 24 clock hours, on top of once per round.
+// Mirrors SatoriEngine's predict gate: one prediction per game per address per
+// round, with no clock-hour wait across the round boundary.
 
 const ROUND = 41500;
 const H0 = ROUND * 24;          // 00:00 UTC of the current round
-const NOW = H0 + 14;            // 14:xx UTC
 const NAMED = { valueHour: 0, isNamed: true };
 const PLAIN = { valueHour: H0 + 3, isNamed: false };
 
 describe('predictGate — named streams', () => {
   it('offers a never-touched named stream, with no value written yet', () => {
-    expect(predictGate(9, NAMED, undefined, ROUND, NOW)).toEqual({ active: true });
+    expect(predictGate(9, NAMED, undefined, ROUND)).toEqual({ active: true });
   });
 
-  it('holds a named stream predicted this round, until hour + 24', () => {
-    const g = predictGate(9, NAMED, { roundMade: ROUND, hour: H0 + 2 }, ROUND, NOW);
-    expect(g).toEqual({ active: false, reopenHour: H0 + 26 });
+  it('holds a named stream predicted this round, until the next round opens', () => {
+    expect(predictGate(9, NAMED, { roundMade: ROUND }, ROUND)).toEqual({ active: false, reopenHour: H0 + 24 });
   });
 
-  it('holds a named stream predicted this round even when the hour is unknown', () => {
-    expect(predictGate(9, NAMED, { roundMade: ROUND, hour: null }, ROUND, NOW)).toEqual({ active: false, reopenHour: undefined });
-  });
-
-  it('holds a named stream predicted 23 hours ago in the previous round, and says when it reopens', () => {
-    const hour = NOW - 23;
-    const g = predictGate(9, NAMED, { roundMade: ROUND - 1, hour }, ROUND, NOW);
-    expect(g).toEqual({ active: false, reopenHour: NOW + 1 });
-  });
-
-  it('reopens a named stream exactly 24 hours after the last prediction', () => {
-    const hour = NOW - 24;
-    expect(predictGate(9, NAMED, { roundMade: ROUND - 1, hour }, ROUND, NOW)).toEqual({ active: true });
+  it('offers a named stream predicted late in the previous round (no 24-hour wait)', () => {
+    expect(predictGate(9, NAMED, { roundMade: ROUND - 1 }, ROUND)).toEqual({ active: true });
   });
 
   it('does not wait on the stream being written (no StaleValue mirror for named)', () => {
-    const g = predictGate(9, { valueHour: NOW - 30, isNamed: true }, { roundMade: ROUND - 1, hour: NOW - 30 }, ROUND, NOW);
+    const g = predictGate(9, { valueHour: H0 - 30, isNamed: true }, { roundMade: ROUND - 1 }, ROUND);
     expect(g.active).toBe(true);
-  });
-
-  it('treats an unknown hour from a previous round as open (the preflight is the backstop)', () => {
-    expect(predictGate(9, NAMED, { roundMade: ROUND - 1, hour: null }, ROUND, NOW)).toEqual({ active: true });
-  });
-
-  it('ignores an indexer hour older than the chain\'s latest prediction', () => {
-    const g = predictGate(9, NAMED, { roundMade: ROUND, hour: NOW - 72 }, ROUND, NOW);
-    expect(g).toEqual({ active: false, reopenHour: undefined });
   });
 });
 
-describe('predictGate — every other stream, unchanged', () => {
-  it('the default stream: active unless predicted this round', () => {
-    expect(predictGate(1, { valueHour: 0, isNamed: false }, undefined, ROUND, NOW).active).toBe(true);
-    expect(predictGate(1, undefined, { roundMade: ROUND, hour: null }, ROUND, NOW).active).toBe(false);
-    expect(predictGate(1, undefined, { roundMade: ROUND - 1, hour: null }, ROUND, NOW).active).toBe(true);
+describe('predictGate — plain streams', () => {
+  it('the default stream (id 1) is the Sentiment stream "satori", gated like any other Sentiment stream', () => {
+    expect(predictGate(1, NAMED, undefined, ROUND).active).toBe(true);
+    expect(predictGate(1, NAMED, { roundMade: ROUND }, ROUND).active).toBe(false);
+    // Without the stream's record it is left to the preflight.
+    expect(predictGate(1, undefined, { roundMade: ROUND }, ROUND).active).toBe(true);
   });
 
   it('a stream not in the loaded list is left to the preflight', () => {
-    expect(predictGate(9, undefined, undefined, ROUND, NOW).active).toBe(true);
+    expect(predictGate(9, undefined, undefined, ROUND).active).toBe(true);
   });
 
   it('a never-written stream cannot be predicted (EmptyStream)', () => {
-    expect(predictGate(9, { valueHour: 0, isNamed: false }, undefined, ROUND, NOW).active).toBe(false);
+    expect(predictGate(9, { valueHour: 0, isNamed: false }, undefined, ROUND).active).toBe(false);
   });
 
   it('a written stream with no prediction is active', () => {
-    expect(predictGate(9, PLAIN, undefined, ROUND, NOW).active).toBe(true);
+    expect(predictGate(9, PLAIN, undefined, ROUND).active).toBe(true);
   });
 
-  it('predicted this round is inactive, with no reopen hour', () => {
-    expect(predictGate(9, PLAIN, { roundMade: ROUND, hour: H0 + 1 }, ROUND, NOW)).toEqual({ active: false });
+  it('predicted this round is inactive, until the next round opens', () => {
+    expect(predictGate(9, PLAIN, { roundMade: ROUND }, ROUND)).toEqual({ active: false, reopenHour: H0 + 24 });
   });
 
   it('a write in a later round than the prediction is fresh; one in the same round is stale', () => {
-    expect(predictGate(9, PLAIN, { roundMade: ROUND - 1, hour: null }, ROUND, NOW).active).toBe(true);
+    expect(predictGate(9, PLAIN, { roundMade: ROUND - 1 }, ROUND).active).toBe(true);
     const sameRound = { valueHour: (ROUND - 1) * 24 + 20, isNamed: false };
-    expect(predictGate(9, sameRound, { roundMade: ROUND - 1, hour: null }, ROUND, NOW).active).toBe(false);
-  });
-
-  it('ignores the 24h wait off a named stream', () => {
-    expect(predictGate(9, PLAIN, { roundMade: ROUND - 1, hour: H0 - 2 }, ROUND, NOW).active).toBe(true);
+    expect(predictGate(9, sameRound, { roundMade: ROUND - 1 }, ROUND).active).toBe(false);
   });
 });
 

@@ -159,6 +159,17 @@ async function main() {
   }
   const marketingFeeRecipient = requireAddr("MARKETING_FEE_RECIPIENT", process.env.MARKETING_FEE_RECIPIENT, PLACEHOLDER_MARKETING);
   if (marketingFeeRecipient === ethers.ZeroAddress) throw new Error("MARKETING_FEE_RECIPIENT must not be the zero address");
+  // The recipient takes its 5% by calling hub.claim itself, so a contract that cannot
+  // send a transaction (a splitter, say) would strand the cut. A wallet or a Safe can.
+  if ((await ethers.provider.getCode(marketingFeeRecipient)) !== "0x") {
+    const safeLike = await new ethers.Contract(
+      marketingFeeRecipient, ["function getThreshold() view returns (uint256)"], ethers.provider,
+    ).getThreshold().then(() => true, () => false);
+    if (!safeLike) {
+      throw new Error(`MARKETING_FEE_RECIPIENT ${marketingFeeRecipient} is a contract that is not a Safe. ` +
+        `It must be able to call hub.claim, or the 5% cut is stranded.`);
+    }
+  }
   const localChain = net === "hardhat" || net === "localhost";
 
   // The home chain is the chain this runs on: this script builds the playable
@@ -224,6 +235,37 @@ async function main() {
     );
   }
   const coinedAddress = coinedEnv ? requireAddr("COINED_ADDRESS", coinedEnv) : null;
+  // ChainlinkV3Adapter is immutable and its sequencer feed with it, so a wrong
+  // value is a new adapter id: prove the feed answers before the first chain write.
+  const factoryEnv = (process.env.UNISWAP_V3_FACTORY || "").trim();
+  if (!localChain && !factoryEnv) {
+    throw new Error(
+      `UNISWAP_V3_FACTORY is required on '${net}': UniswapV3Adapter accepts only pools this factory created, ` +
+      `and the adapter is immutable. Set the factory's address, or 'none' on a chain without Uniswap V3.`
+    );
+  }
+  const uniswapFactory = factoryEnv && factoryEnv.toLowerCase() !== "none"
+    ? requireAddr("UNISWAP_V3_FACTORY", factoryEnv) : ethers.ZeroAddress;
+  if (uniswapFactory !== ethers.ZeroAddress && (await ethers.provider.getCode(uniswapFactory)) === "0x") {
+    throw new Error(`UNISWAP_V3_FACTORY ${uniswapFactory} has no code on '${net}'.`);
+  }
+  const sequencerEnv = (process.env.SEQUENCER_UPTIME_FEED || "").trim();
+  if (!localChain && !sequencerEnv) {
+    throw new Error(
+      `SEQUENCER_UPTIME_FEED is required on '${net}': Chainlink reads must stop while the ` +
+      `L2 sequencer is down. Set Chainlink's uptime feed for this chain, or 'none' on a chain without a sequencer.`
+    );
+  }
+  const sequencerFeed = sequencerEnv && sequencerEnv.toLowerCase() !== "none"
+    ? requireAddr("SEQUENCER_UPTIME_FEED", sequencerEnv) : ethers.ZeroAddress;
+  if (sequencerFeed !== ethers.ZeroAddress) {
+    const probe = new ethers.Contract(sequencerFeed, ["function latestRoundData() view returns (uint80,int256,uint256,uint256,uint80)"], ethers.provider);
+    const [, down, startedAt] = await probe.latestRoundData().catch(() => {
+      throw new Error(`SEQUENCER_UPTIME_FEED ${sequencerFeed} does not answer latestRoundData() on '${net}'.`);
+    });
+    if (startedAt === 0n) throw new Error(`SEQUENCER_UPTIME_FEED ${sequencerFeed} has no round on '${net}'.`);
+    if (down !== 0n) throw new Error(`SEQUENCER_UPTIME_FEED ${sequencerFeed} reports the sequencer down.`);
+  }
   // The adapter's `coined` is immutable, so a wrong address is a redeploy:
   // prove there is code there before the first chain write.
   if (coinedAddress && (await ethers.provider.getCode(coinedAddress)) === "0x") {
@@ -285,7 +327,7 @@ async function main() {
       && (await ethers.provider.getCode(controller)) !== "0x"
       && await (await ethers.getContractAt("SatoriHub", controller)).defaultStreamInitialized();
     const frozen = [];
-    for (const [k, f] of [["controller", "controllerFrozen"], ["hook", "hookFrozen"], ["airdrop", "airdropFrozen"]]) {
+    for (const [k, f] of [["controller", "controllerFrozen"], ["hook", "hookFrozen"]]) {
       if (await token[f]()) frozen.push(k);
     }
     if (controllerFinished && prior?.lastWriteBlock && same(prior.addresses.hub, controller)) {
@@ -363,10 +405,9 @@ async function main() {
   if (!verifyOnly) {
     // 1b. the airdrop — a plain contract, no proxy, no upgrade path, no table at
     //     deploy. The token's `airdrop` pointer (wired in step 5) is the only door
-    //     through which airdrop SATORI can be minted. After deploy: load the table,
-    //     check it, token.freezeAirdrop (closes the table and pins the door, for
-    //     good), then finalizeAirdropLoading, which opens every claim at once
-    //     (docs/issues/airdrop-claim-at-finalize.md).
+    //     through which airdrop SATORI can be minted. After deploy: load batches;
+    //     each allocation is claimable the block it lands; finalizeAirdropLoading
+    //     closes loading for good (docs/issues/airdrop-claim-at-finalize.md).
     //     The loader starts on REWARDS_ADMIN; handoff.js moves it.
     //     See docs/issues/airdrop-own-contract.md.
     const airdrop = await deploy("SatoriAirdrop", tokenAddr, rewardsAdmin);
@@ -448,20 +489,43 @@ async function main() {
     //    permissionless community path (registerCommunityAdapter, which charges
     //    streamBurn — hence the approve below) and is flagged isCommunity=true.
     console.log("Registering adapters...");
-    const chainlink = await deploy("ChainlinkV3Adapter");
-    const uniswap = await deploy("UniswapV3Adapter");
+    const chainlink = await deploy("ChainlinkV3Adapter", sequencerFeed);
+    const uniswap = await deploy("UniswapV3Adapter", uniswapFactory);
     const custom = await deploy("CustomAdapter");
     A.coined = coinedAddress ?? await (await deploy("MockCoined")).getAddress();
     const coinedAdapter = await deploy("CoinedAdapter", A.coined);
     const named = await deploy("NamedStreamAdapter", A.engine, A.registry, A.coined);
-    await (await token.approve(A.hub, ethers.MaxUint256)).wait();
+    await (await token.approve(A.hub, ADAPTER_FEE)).wait();
     await (await hub.registerAdapter(await chainlink.getAddress(), "Chainlink V3")).wait();
     await (await hub.registerAdapter(await uniswap.getAddress(), "Uniswap V3")).wait();
     await (await hub.registerCommunityAdapter(await custom.getAddress(), "Custom")).wait();
-    await (await hub.registerAdapter(await coinedAdapter.getAddress(), "Coined")).wait();
-    await (await hub.registerAdapter(await named.getAddress(), "Named")).wait();
+    await (await token.approve(A.hub, 0)).wait();
+    await (await hub.registerAdapter(await coinedAdapter.getAddress(), "Coined price")).wait();
+    await (await hub.registerAdapter(await named.getAddress(), "Sentiment")).wait();
     // Must precede initializeDefaultStream: setNamedAdapterId requires nextStreamId == 1.
     await (await registry.setNamedAdapterId(NAMED_ADAPTER_ID)).wait();
+    // 6a. bootstrap the default prediction stream (id 1), straight after
+    //     `setNamedAdapterId`: `initializeDefaultStream` is open to anyone from the
+    //     moment the stack is wired, and a call before the named adapter is set
+    //     would block Sentiment streams. Nothing later in the deploy needs it to
+    //     wait.
+    //
+    // F8 fail-fast: the default stream MUST be the FIRST stream (initializeDefaultStream
+    // reverts DefaultStreamNotFirst otherwise). A stream existing here means someone
+    // front-ran createSimpleDataStream and grabbed id 1 — abort with a clear message
+    // rather than a downstream revert. In practice unreachable: createSimpleDataStream
+    // charges a SATORI burn and no third party holds SATORI before distribution, and
+    // this whole deploy runs pre-distribution. See docs/issues/closed/default-stream-bootstrap-f8.md.
+    //
+    // Under burn voting the default game casts NO standing vote and the deploy no
+    // longer pre-funds one: its weight is DERIVED (a fixed 1% share of the
+    // round, DEFAULT_SHARE_BPS = 100, floored so genesis is non-zero) and `vote()` rejects it
+    // outright with CannotVoteDefault.
+    if (await registry.streamExists(1)) {
+      throw new Error("F8: a stream already exists at id 1 before bootstrap — default-stream front-run detected; do NOT continue this deploy");
+    }
+    console.log("Bootstrapping default stream...");
+    await (await hub.initializeDefaultStream()).wait();
     A.chainlinkAdapter = await chainlink.getAddress();
     A.uniswapAdapter = await uniswap.getAddress();
     A.customAdapter = await custom.getAddress();
@@ -524,19 +588,6 @@ async function main() {
     console.log("Enabling launch capabilities (delegatePrediction)...");
     await (await rewards.setCapabilities(launchBitmap)).wait();
 
-    // 8. bootstrap the default prediction stream (id 1).
-    //
-    // F8 fail-fast: the default stream MUST be the FIRST stream (initializeDefaultStream
-    // reverts DefaultStreamNotFirst otherwise). A stream existing here means someone
-    // front-ran createSimpleDataStream and grabbed id 1 — abort with a clear message
-    // rather than a downstream revert. In practice unreachable: createSimpleDataStream
-    // charges a SATORI burn and no third party holds SATORI before distribution, and
-    // this whole deploy runs pre-distribution. See docs/issues/closed/default-stream-bootstrap-f8.md.
-    //
-    // Under burn voting the default game casts NO standing vote and the deploy no
-    // longer pre-funds one: its weight is DERIVED (a fixed 20% share of all other
-    // burnt weight, floored so genesis is non-zero) and `vote()` rejects it
-    // outright with CannotVoteDefault.
     // 8a. GOVERNANCE INSTRUMENTS — both holder-voting paths, deployed as part
     // of the stack so no chain ships without them (owner, 2026-09-15). Neither
     // holds authority over anything (docs/design/authority-map.md 10b); the
@@ -551,19 +602,12 @@ async function main() {
     const lockGov = await deploy("LockVoteGovernor", A.token, A.hub, governor);
     A.holderGovernor = await holderGov.getAddress();
     A.lockVoteGovernor = await lockGov.getAddress();
-    await (await hub.setVoteLockGovernor(A.lockVoteGovernor)).wait();
-    console.log(`  holderGovernor=${A.holderGovernor} (window=${holderWindow} blocks, period=${holderPeriod}s)`);
-    console.log(`  lockVoteGovernor=${A.lockVoteGovernor} (proposer=${governor})`);
-    saveBook();
-
-    if (await registry.streamExists(1)) {
-      throw new Error("F8: a stream already exists at id 1 before bootstrap — default-stream front-run detected; do NOT continue this deploy");
-    }
-    console.log("Bootstrapping default stream...");
     // Last state-changing write of the deploy, so its block is the read barrier the
     // post-conditions wait for: everything they verify was written at or before it.
-    const lastWrite = await (await hub.initializeDefaultStream()).wait();
+    const lastWrite = await (await hub.setVoteLockGovernor(A.lockVoteGovernor)).wait();
     lastWriteBlock = lastWrite.blockNumber;
+    console.log(`  holderGovernor=${A.holderGovernor} (window=${holderWindow} blocks, period=${holderPeriod}s)`);
+    console.log(`  lockVoteGovernor=${A.lockVoteGovernor} (proposer=${governor})`);
     saveBook();
   }
 
@@ -617,15 +661,11 @@ async function main() {
     ["token.controller == hub", async () => eq(await token.controller(), A.hub)],
     ["token.hook == hub", async () => eq(await token.hook(), A.hub)],
     // The airdrop lane: the token's pointer is the ONLY door, the contract
-    // points back, the loader is where REWARDS_ADMIN said, and nothing is
-    // frozen yet: the freeze closes the table, so a door frozen here would
-    // leave the airdrop empty for good. It is a launch-checklist step after the
-    // last batch, and finalize (which opens claims) comes after it.
+    // points back, the loader is where REWARDS_ADMIN said, and loading is open.
     ["token.airdrop == airdrop", async () => eq(await token.airdrop(), A.airdrop)],
     ["airdrop.token == token", async () => eq(await airdrop.token(), A.token)],
     ["airdrop.airdropAuthority == rewardsAdmin", async () => eq(await airdrop.airdropAuthority(), rewardsAdmin)],
     ["airdrop loading not finalized at deploy", async () => (await airdrop.airdropLoadingFinalized()) === false],
-    ["airdrop lever not pre-frozen", async () => !(await token.airdropFrozen())],
     // The constructor seeds EVERY slot with the root; a Safe root has lent
     // wiring and appoint to the deployer, and handoff.js pulls them all apart.
     // Checking only `root` here would pass a token whose other five slots were
@@ -657,6 +697,17 @@ async function main() {
       const general = (initial * (10000n - bps)) / 10000n;
       return (await token.devFeeMinted()) === initial - general;
     }],
+    // Genesis is booked and minted in the same breath (M03): the token's
+    // accrued counters equal its minted ones, and the hub's on-chain allowance
+    // starts at the general share it may pay.
+    ["token genesis accrued == minted", async () =>
+      (await token.generalAccrued()) === (await token.generalMinted())
+      && (await token.devFeeAccrued()) === (await token.devFeeMinted())],
+    // initializeDefaultStream's first value priced the current round, so the
+    // allowance already sits above the genesis share by that round's gross.
+    ["hub lanes seeded from the token", async () =>
+      (await hub.onChainMinted()) === (await token.generalMinted())
+      && (await hub.onChainAllowance()) >= (await token.generalAccrued()) - (await hub.merkleReserveCumulative())],
     ["registry.satoriCore == hub", async () => eq(await registry.satoriCore(), A.hub)],
     ["registry.satoriEngine == engine", async () => eq(await registry.satoriEngine(), A.engine)],
     ["registry.namedAdapterId == 5 → NamedStreamAdapter", async () =>
@@ -688,7 +739,8 @@ async function main() {
     ["registry.satoriToken == token", async () => eq(await registry.satoriToken(), A.token)],
     ["games.satoriToken == token", async () => eq(await games.satoriToken(), A.token)],
     ["default stream (id 1) exists", async () => await registry.streamExists(1)],
-    ["default stream initialized on engine", async () => await engine.defaultStreamInitialized()],
+    ["default stream initialized on the hub", async () => await hub.defaultStreamInitialized()],
+    ["default stream (id 1) is the Coined stream", async () => await registry.isNamedStream(1)],
     ["lens.satoriCore == hub", async () => eq(await lens.satoriCore(), A.hub)],
     ["lens.rewards == rewards", async () => eq(await lens.rewards(), A.rewards)],
     // F69: assert EVERY one-shot back-pointer wired in step 5 is non-zero and
@@ -698,6 +750,17 @@ async function main() {
     // silently stay at address(0) with the deployer's one-shot authority still
     // live — these post-conditions make that fail the deploy instead (audit F69).
     ["engine.hub == hub", async () => eq(await engine.hub(), A.hub)],
+    ["hub.engine == engine", async () => eq(await hub.engine(), A.engine)],
+    ["engine.token == token", async () => eq(await engine.token(), A.token)],
+    ["engine children are the deployed ones", async () =>
+      eq(await engine.satoriVoting(), A.voting) && eq(await engine.satoriRewards(), A.rewards)
+      && eq(await engine.satoriRegistry(), A.registry) && eq(await engine.satoriGames(), A.games)
+      && eq(await engine.satoriBounties(), A.bounties)],
+    ["namedAdapter.engine/registry are the deployed ones", async () =>
+      eq(await named.engine(), A.engine) && eq(await named.registry(), A.registry)],
+    ["registry.adapter(1..3) are Chainlink, Uniswap, Custom", async () =>
+      eq(await registry.adapter(1), A.chainlinkAdapter) && eq(await registry.adapter(2), A.uniswapAdapter)
+      && eq(await registry.adapter(3), A.customAdapter)],
     ["rewards.satoriBounties == bounties", async () => eq(await rewards.satoriBounties(), A.bounties)],
     ["games.satoriCore == hub", async () => eq(await games.satoriCore(), A.hub)],
     ["bounties.satoriCore == hub", async () => eq(await bounties.satoriCore(), A.hub)],
@@ -801,13 +864,21 @@ async function main() {
   // 2026-08-30 (see the header of check-upgrade-safety.js).
   const { layoutOf, TRACKED } = require("./storage-layout-lib");
   const layouts = {};
+  // The same layouts again, keyed by the implementation address that runs them,
+  // so a later upgrade is checked against what the proxy is running NOW, not
+  // against the deploy-time layout (M08). `deploy-impl.js` adds one per upgrade.
+  const implLayouts = {};
   for (const fq of TRACKED) {
     const short = fq.split(":")[1];
-    try { layouts[short] = await layoutOf(fq); }
+    try {
+      layouts[short] = await layoutOf(fq);
+      const implAddr = A[short.replace(/^Satori/, "").replace(/^./, (c) => c.toLowerCase()) + "Impl"];
+      if (implAddr) implLayouts[implAddr.toLowerCase()] = layouts[short];
+    }
     catch (e) { console.warn(`  layout capture failed for ${short}: ${e.message}`); }
   }
 
-  saveBook({ complete: true, deploymentRound, deploymentBlock, layouts }, out);
+  saveBook({ complete: true, deploymentRound, deploymentBlock, layouts, implLayouts }, out);
   fs.rmSync(partial, { force: true });
   console.log(`\nDeployed. Address book -> ${out}`);
   console.log(JSON.stringify(A, null, 2));

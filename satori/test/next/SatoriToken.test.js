@@ -7,9 +7,10 @@ const DEV_BPS = 1500n;
 const BUDGET = ethers.parseEther("1440");        // ROUND_REWARD_BUDGET — the token's OUTER envelope
 const GEN = (BUDGET * (10000n - DEV_BPS)) / 10000n;  // 1224 — 85% of it; the dev's 15% is reserved
 // INITIAL_MINT is ONE ROUND OF THE HUB'S DEPLOY-TIME DEFAULT RATE (846.62), not
-// of the token's 1440 envelope, so the deploy round is NOT saturated here — it
-// is saturated at the HUB, which holds its lane to 85% of its own per-round
-// rate. The token's 1440 is deliberately the looser of the two.
+// of the token's 1440 envelope, so genesis does NOT saturate the deploy round.
+// Genesis pays the deploy round and the hub prices that round once more on its
+// first touch (accepted, at most ~846 SATORI), so in the deploy round the
+// token's envelope is the tighter limit; from the next round on, the hub's is.
 let INITIAL_MINT, DEV_GENESIS;
 // Read from the contract, the one place the cap is set.
 let AIRDROP_CAP;
@@ -67,14 +68,29 @@ describe("SatoriToken (constitution)", function () {
     await token.connect(governor).setController(controller.address);
   }
 
-  // Mint away the deploy round's remaining general headroom, so a following
-  // 1-wei mint can only succeed if something wrongly FREED budget. Genesis no
-  // longer saturates this cap on its own (INITIAL_MINT is one hub round, not
-  // one token round), so the tests that need a saturated lane make it so.
+  // The fee is rounded up per report: `general + feeOn(general)` is what a
+  // report costs the envelope.
+  const feeOn = (g) => (g * DEV_BPS + (10000n - DEV_BPS) - 1n) / (10000n - DEV_BPS);
+  // The largest general report the 1440 x rounds envelope still takes.
+  async function room() {
+    const left = (await token.rewardCeiling()) - (await token.generalAccrued()) - (await token.devFeeAccrued());
+    let g = (left * (10000n - DEV_BPS)) / 10000n;
+    while (g + feeOn(g) > left) g--;
+    return g;
+  }
+  // Report `amount` as earned and mint it: a hub crediting a win, then paying
+  // the claim.
+  async function earn(to, amount) {
+    await token.connect(controller).accrueRewards(amount);
+    await token.connect(controller).rewardMint(to, amount);
+  }
+  // Report away the envelope's remaining room, so a following 1-wei report can
+  // only succeed if something wrongly FREED budget. Genesis does not fill the
+  // deploy round on its own (INITIAL_MINT is one hub round, not one token
+  // round), so the tests that need a full envelope make it so.
   async function saturateRound0() {
-    const room = ((await token.rewardCeiling()) * (10000n - DEV_BPS)) / 10000n
-               - (await token.generalMinted());
-    if (room > 0n) await token.connect(controller).rewardMint(bob.address, room);
+    const g = await room();
+    if (g > 0n) await earn(bob.address, g);
   }
 
   // ------------------------------------------------------------------
@@ -86,6 +102,22 @@ describe("SatoriToken (constitution)", function () {
       expect(await token.totalRewardsMinted()).to.equal(INITIAL_MINT);
       expect(await token.devFeeMinted()).to.equal(DEV_GENESIS);
       expect(await token.totalSupply()).to.equal(INITIAL_MINT);
+    });
+
+    it("announces every genesis slot and the genesis fee rate, so the read model rebuilds from logs", async function () {
+      const SatoriToken = await ethers.getContractFactory("SatoriToken");
+      const t = await SatoriToken.connect(deployer).deploy(governor.address, devRecipient.address, HOME);
+      const rc = await t.deploymentTransaction().wait();
+      const logs = rc.logs.map((l) => { try { return t.interface.parseLog(l); } catch { return null; } }).filter(Boolean);
+      const slots = logs.filter((p) => p.name === "AuthoritySet").map((p) => [p.args[0], p.args[1], p.args[2]]);
+      expect(slots).to.deep.equal(["fee", "upgrade", "wiring", "appoint", "freeze"]
+        .map((s) => [s, ethers.ZeroAddress, governor.address]));
+      const fee = logs.filter((p) => p.name === "DevFeeBpsSet");
+      expect(fee.length).to.equal(1);
+      expect([fee[0].args[0], fee[0].args[1]]).to.deep.equal([0n, DEV_BPS]);
+      const accrued = logs.filter((p) => p.name === "RewardsAccrued");
+      expect(accrued.length).to.equal(1);
+      expect(accrued[0].args[2] + accrued[0].args[3]).to.equal(INITIAL_MINT);
     });
 
     it("records deployment round and block; getCurrentRound = timestamp / 86400", async function () {
@@ -126,39 +158,35 @@ describe("SatoriToken (constitution)", function () {
   });
 
   // ------------------------------------------------------------------
-  describe("reward mint ceiling (85% of the token envelope; the hub is stricter)", function () {
+  describe("reward envelope (1440 x rounds, fee included, checked at the report; the hub is stricter)", function () {
     beforeEach(withController);
 
-    it("round 0 has headroom HERE, because the genesis mint is one hub round not one token round", async function () {
-      // This used to assert zero headroom, when INITIAL_MINT was a full 1440.
-      // It is now 846.62 — one round of the HUB's schedule — against a token
-      // envelope of 1440, so 85% of 1440 minus the genesis general share is
-      // left over. The deploy round is still saturated where it matters: at the
-      // hub, which caps its lane at 85% of its own rate.
-      const room = ((await token.rewardCeiling()) * (10000n - DEV_BPS)) / 10000n
-                 - (await token.generalMinted());
-      expect(room).to.be.gt(0n);
-      await expect(token.connect(controller).rewardMint(alice.address, room + 1n))
+    it("round 0 has headroom, because the genesis mint is one hub round not one token round", async function () {
+      const g = await room();
+      expect(g).to.be.gt(0n);
+      await expect(token.connect(controller).accrueRewards(g + 1n))
         .to.be.revertedWithCustomError(token, "BudgetExceeded");
-      await expect(token.connect(controller).rewardMint(alice.address, room)).to.not.be.reverted;
+      await expect(token.connect(controller).accrueRewards(g)).to.not.be.reverted;
+      // Everything reported mints, and not a wei more.
+      await expect(token.connect(controller).rewardMint(alice.address, g)).to.not.be.reverted;
+      await expect(token.connect(controller).rewardMint(alice.address, 1n))
+        .to.be.revertedWithCustomError(token, "NotAccrued");
     });
 
-    it("accrues 85% of the envelope per elapsed round; boundary exact", async function () {
-      // Drain the deploy round's leftover first, so each later round's accrual
+    it("takes 85% of the envelope per elapsed round as general reports; boundary exact", async function () {
+      // Drain the deploy round's leftover first, so each later round's room
       // stands alone.
-      const room0 = ((await token.rewardCeiling()) * (10000n - DEV_BPS)) / 10000n
-                  - (await token.generalMinted());
-      if (room0 > 0n) await token.connect(controller).rewardMint(bob.address, room0);
+      await saturateRound0();
       await time.increase(ROUND);
-      await expect(token.connect(controller).rewardMint(alice.address, GEN + 1n))
+      await expect(token.connect(controller).accrueRewards(GEN + 1n))
         .to.be.revertedWithCustomError(token, "BudgetExceeded");
-      await token.connect(controller).rewardMint(alice.address, GEN);
+      await earn(alice.address, GEN);
       expect(await token.balanceOf(alice.address)).to.equal(GEN);
-      await expect(token.connect(controller).rewardMint(alice.address, 1n))
+      await expect(token.connect(controller).accrueRewards(1n))
         .to.be.revertedWithCustomError(token, "BudgetExceeded");
       await time.increase(3 * ROUND);
-      await token.connect(controller).rewardMint(alice.address, 3n * GEN);
-      await expect(token.connect(controller).rewardMint(alice.address, 1n))
+      await earn(alice.address, 3n * GEN);
+      await expect(token.connect(controller).accrueRewards(1n))
         .to.be.revertedWithCustomError(token, "BudgetExceeded");
     });
 
@@ -173,6 +201,8 @@ describe("SatoriToken (constitution)", function () {
       for (const s of [governor, alice, bridge]) {
         await expect(token.connect(s).rewardMint(alice.address, 1n))
           .to.be.revertedWithCustomError(token, "Unauthorized");
+        await expect(token.connect(s).accrueRewards(1n))
+          .to.be.revertedWithCustomError(token, "Unauthorized");
       }
     });
   });
@@ -180,7 +210,7 @@ describe("SatoriToken (constitution)", function () {
   // ------------------------------------------------------------------
   describe("airdrop mint (one-shot cap)", function () {
     // The airdrop door is gated on `token.airdrop` — the SatoriAirdrop contract
-    // in production — never on the controller, and opens only once frozen.
+    // in production — never on the controller.
     // MockAirdropTable stands in for it: it reports a table total of 0 and
     // mints whatever it is asked, so the cap is the only thing in its way.
     let table;
@@ -188,11 +218,10 @@ describe("SatoriToken (constitution)", function () {
       await withController();
       table = await (await ethers.getContractFactory("MockAirdropTable")).deploy(await token.getAddress());
       await token.connect(governor).setAirdrop(await table.getAddress());
-      await token.connect(governor).freezeAirdrop(await table.getAddress(), 0n);
     });
 
-    it("the cap is the owner's 1,200,000 SATORI (2026-10-19), fixed for the token's life", async function () {
-      expect(AIRDROP_CAP).to.equal(ethers.parseEther("1200000"));
+    it("the cap is the owner's 1,100,000 SATORI (2026-10-23), fixed for the token's life", async function () {
+      expect(AIRDROP_CAP).to.equal(ethers.parseEther("1100000"));
     });
 
     it("the airdrop contract reads the cap THROUGH the token, so the two cannot disagree", async function () {
@@ -216,7 +245,7 @@ describe("SatoriToken (constitution)", function () {
       await table.mint(alice.address, AIRDROP_CAP);
       expect(await token.totalRewardsMinted()).to.equal(INITIAL_MINT); // unchanged
       await time.increase(ROUND);
-      await token.connect(controller).rewardMint(bob.address, GEN); // general lane still available
+      await earn(bob.address, GEN); // general lane still available
     });
 
     it("only the airdrop slot can airdropMint — not the governor, not the controller", async function () {
@@ -232,15 +261,15 @@ describe("SatoriToken (constitution)", function () {
     beforeEach(withController);
 
     it("burn destroys own tokens and does NOT free reward budget", async function () {
-      // With round 0's general lane exhausted, the only way the closing 1-wei
-      // mint could succeed is if the burn freed budget.
+      // With the envelope full, the only way the closing 1-wei report could
+      // succeed is if the burn freed budget.
       await saturateRound0();
       const supply0 = await token.totalSupply();
       const minted0 = await token.totalRewardsMinted();
       await token.connect(governor).burn(ethers.parseEther("100"));
       expect(await token.totalSupply()).to.equal(supply0 - ethers.parseEther("100"));
       expect(await token.totalRewardsMinted()).to.equal(minted0); // unchanged
-      await expect(token.connect(controller).rewardMint(alice.address, 1n))
+      await expect(token.connect(controller).accrueRewards(1n))
         .to.be.revertedWithCustomError(token, "BudgetExceeded"); // burn freed nothing
     });
 
@@ -317,15 +346,17 @@ describe("SatoriToken (constitution)", function () {
     });
 
     it("bridging never consumes reward budget in either direction", async function () {
-      // With round 0's general lane exhausted, the closing 1-wei mint can only
-      // succeed if bridging touched the reward counters.
+      // With the envelope full, the closing 1-wei report can only succeed if
+      // bridging touched the reward counters.
       await saturateRound0();
       const minted0 = await token.totalRewardsMinted();
+      const accrued0 = await token.generalAccrued();
       const amt = ethers.parseEther("50");
       await token.connect(bridge).crosschainBurn(alice.address, amt);
       await token.connect(bridge).crosschainMint(alice.address, amt);
       expect(await token.totalRewardsMinted()).to.equal(minted0);
-      await expect(token.connect(controller).rewardMint(alice.address, 1n))
+      expect(await token.generalAccrued()).to.equal(accrued0);
+      await expect(token.connect(controller).accrueRewards(1n))
         .to.be.revertedWithCustomError(token, "BudgetExceeded");
     });
 
@@ -513,11 +544,13 @@ describe("SatoriToken (constitution)", function () {
         .to.be.revertedWithCustomError(remote, "NotHomeChain");
       expect(await remote.totalSupply()).to.equal(0);
       // ...while the same call on the home deployment pays out normally. The
-      // fee is now 15% of what was actually MINTED, not of elapsed time, so the
-      // clock alone owes nothing — a general mint is what creates the debt.
+      // fee is booked when a reward is reported as earned, not on the clock, so
+      // only a report creates the debt.
       await withController();
-      await token.connect(controller).rewardMint(alice.address, ethers.parseEther("100"));
+      await token.connect(controller).accrueRewards(ethers.parseEther("100"));
       await expect(token.connect(alice).mintDevFee()).to.emit(token, "DevFeeMinted");
+      expect(await token.balanceOf(devRecipient.address))
+        .to.equal(DEV_GENESIS + feeOn(ethers.parseEther("100")));
     });
 
     it("accepts bridged supply off-home with NO prior outflow — the destination property", async function () {
@@ -547,18 +580,18 @@ describe("SatoriToken (constitution)", function () {
     it("reports a zero emission ceiling off-home, where nothing can ever be minted", async function () {
       await time.increase(ROUND * 10);
       expect(await remote.rewardCeiling()).to.equal(0);
-      expect(await remote.devFeeCeiling()).to.equal(0);
-      // The home deployment's envelope keeps accruing on the clock exactly as
-      // before. The dev ceiling no longer does: it is a ratio of what has been
-      // minted, so ten idle rounds move it by nothing at all, and a general
-      // mint is what moves it.
+      expect(await remote.devFeeAccrued()).to.equal(0);
+      expect(await remote.generalAccrued()).to.equal(0);
+      // The home deployment's envelope grows on the clock; its dev fee does
+      // not: the fee is booked on what is reported as earned, so ten idle
+      // rounds move it by nothing and a report is what moves it.
       expect(await token.rewardCeiling()).to.be.greaterThan(BUDGET);
-      const devCap0 = await token.devFeeCeiling();
+      const devFee0 = await token.devFeeAccrued();
       await time.increase(ROUND * 10);
-      expect(await token.devFeeCeiling()).to.equal(devCap0); // the clock owes nothing
+      expect(await token.devFeeAccrued()).to.equal(devFee0); // the clock owes nothing
       await withController();
-      await token.connect(controller).rewardMint(alice.address, ethers.parseEther("850"));
-      expect(await token.devFeeCeiling()).to.be.greaterThan(devCap0);
+      await token.connect(controller).accrueRewards(ethers.parseEther("850"));
+      expect(await token.devFeeAccrued()).to.equal(devFee0 + feeOn(ethers.parseEther("850")));
     });
 
     it("lets the governor renounce off-home without a controller it can never set", async function () {
@@ -656,7 +689,7 @@ describe("SatoriToken (constitution)", function () {
         .to.be.revertedWithCustomError(token, "Locked");
       await token.connect(governor).transfer(alice.address, 5n); // receive OK
       await time.increase(ROUND);
-      await token.connect(controller).rewardMint(alice.address, 10n); // mint-to OK
+      await earn(alice.address, 10n); // mint-to OK
     });
 
     it("lane must be < 10 (== LOCK_LANES); setLock is controller-only", async function () {
@@ -698,7 +731,7 @@ describe("SatoriToken (constitution)", function () {
     it("hook fires on mint (from=0) and burn (to=0) for participants", async function () {
       await token.connect(controller).markParticipated(alice.address);
       await time.increase(ROUND);
-      await token.connect(controller).rewardMint(alice.address, 5n);
+      await earn(alice.address, 5n);
       expect(await hookMock.lastFrom()).to.equal(ethers.ZeroAddress);
       await token.connect(alice).burn(5n);
       expect(await hookMock.lastTo()).to.equal(ethers.ZeroAddress);
@@ -847,7 +880,7 @@ describe("SatoriToken (constitution)", function () {
       await token.connect(bridge).crosschainMint(alice.address, 1n);
       // controller keeps working after renounce
       await time.increase(ROUND);
-      await token.connect(controller).rewardMint(alice.address, 1n);
+      await earn(alice.address, 1n);
     });
   });
 

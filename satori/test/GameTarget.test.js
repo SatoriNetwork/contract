@@ -46,7 +46,7 @@ describe("Game targets (explicit overload + ladder rules)", function () {
     const sid = await hourlyStream();
     const next = Number(await games.gameCount()) + 1;
     const [me] = await ethers.getSigners();
-    await expect(satori["createGame(uint32,uint16,bytes,string,uint24)"](sid, 0, "0x", "weekly", 10080))
+    await expect(satori["createGame(uint32,uint32,bytes,string,uint24)"](sid, 0, "0x", "weekly", 10080))
       .to.emit(games, "GameCreated")
       .withArgs(next, sid, me.address, 0, 10080, "weekly", "0x");
   });
@@ -54,7 +54,7 @@ describe("Game targets (explicit overload + ladder rules)", function () {
   it("creates a WEEKLY game on an hourly stream with an explicit target", async function () {
     const sid = await hourlyStream();
     const before = await games.gameCount();
-    await satori["createGame(uint32,uint16,bytes,string,uint24)"](sid, 0, "0x", "weekly", 10080)
+    await satori["createGame(uint32,uint32,bytes,string,uint24)"](sid, 0, "0x", "weekly", 10080)
       .then((tx) => tx.wait())
       .catch(async () => {
         // The stream's auto binary game exists; a SECOND type-0 game reverts
@@ -71,14 +71,37 @@ describe("Game targets (explicit overload + ladder rules)", function () {
   it("rejects sub-daily targets and targets below the stream's cadence", async function () {
     const sid = await hourlyStream();
     await expect(
-      satori["createGame(uint32,uint16,bytes,string,uint24)"](sid, 0, "0x", "6h", 360)
+      satori["createGame(uint32,uint32,bytes,string,uint24)"](sid, 0, "0x", "6h", 360)
     ).to.be.revertedWithCustomError(games, "InvalidTarget");
     const tx = await satori["createSimpleDataStream(string,address,uint24)"]("COARSE", provider.address, 2880);
     await tx.wait();
     const sid2 = Number(await registry.getDataStreamCount());
     await expect(
-      satori["createGame(uint32,uint16,bytes,string,uint24)"](sid2, 0, "0x", "daily-on-2day", 1440)
+      satori["createGame(uint32,uint32,bytes,string,uint24)"](sid2, 0, "0x", "daily-on-2day", 1440)
     ).to.be.revertedWithCustomError(games, "InvalidTarget");
+  });
+
+  it("refuses a rung longer than the stream's history ring can reach, and accepts one that just fits", async function () {
+    const sid = await hourlyStream();
+    // 768 entries x a 60-minute cadence = 46080 minutes (32 days).
+    await expect(
+      satori["createGame(uint32,uint32,bytes,string,uint24)"](sid, 0, "0x", "too-long", 46140)
+    ).to.be.revertedWithCustomError(games, "InvalidTarget");
+    await expect(
+      satori["createGame(uint32,uint32,bytes,string,uint24)"](sid, 0, "0x", "fits", 46080)
+    ).to.not.be.reverted;
+  });
+
+  it("refuses a second binary game at a target the stream already has, however many games it holds", async function () {
+    const sid = await hourlyStream();
+    await satori["createGame(uint32,uint32,bytes,string,uint24)"](sid, 0, "0x", "weekly", 10080);
+    await expect(
+      satori["createGame(uint32,uint32,bytes,string,uint24)"](sid, 0, "0x", "weekly-again", 10080)
+    ).to.be.revertedWithCustomError(games, "DuplicateBinaryGame");
+    // The auto-created daily game holds the 1440 target.
+    await expect(
+      satori["createGame(uint32,uint32,bytes,string,uint24)"](sid, 0, "0x", "daily-again", 1440)
+    ).to.be.revertedWithCustomError(games, "DuplicateBinaryGame");
   });
 
   it("weekly game clock: once per target period", async function () {
@@ -88,7 +111,7 @@ describe("Game targets (explicit overload + ladder rules)", function () {
     await time.increaseTo(Math.floor(now / HOUR) * HOUR + HOUR + 5);
     await registry.connect(provider).setValue(sid, 100);
 
-    await (await satori["createGame(uint32,uint16,bytes,string,uint24)"](sid, 0, "0x", "weekly", 10080)).wait();
+    await (await satori["createGame(uint32,uint32,bytes,string,uint24)"](sid, 0, "0x", "weekly", 10080)).wait();
     const gid = Number(await games.gameCount());
     await voting.connect(owner).setGameApproved(gid, true);
     await satori.connect(alice).vote(gid, VOTE);

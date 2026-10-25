@@ -22,8 +22,7 @@ const {
   deployAndRegisterYesNoGame,
   createYesNoGame,
   pack1,
-  VOTE,
-} = require("./fixtures");
+  VOTE, ensureAdapterBountyToken } = require("./fixtures");
 
 const YES = 1;
 // The adapter host stream is a two-round (2880-minute) cadence stream:
@@ -97,6 +96,7 @@ describe("F2 — adapter bounty payouts are tracked in claimed; reclaim cannot d
     // Two equal winners stake, fund the adapter game's bounty, both predict YES.
     await bounties.connect(alice).stakeBountyToken(usdAddr, ethers.parseEther("100"));
     await bounties.connect(bob).stakeBountyToken(usdAddr, ethers.parseEther("100"));
+    await ensureAdapterBountyToken(bounties, gameId, usdAddr);
     await bounties
       .connect(funder)
       .fundBounty(gameId, usdAddr, ethers.parseEther("1000"), ethers.parseEther("400"));

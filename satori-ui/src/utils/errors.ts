@@ -40,10 +40,10 @@ const COPY: Record<string, string> = {
   BadRewardsAddress:   'Bad rewards address.',
   BadVotingAddress:    'Bad voting address.',
   // Shared by the token's rewardMint and airdropMint.
-  BudgetExceeded:      'Over a cap: the reward budget, or the airdrop\'s 1,200,000 SATORI ceiling (which the freeze also checks the loaded table against).',
+  BudgetExceeded:      'Over a cap: the reward budget, or the airdrop\'s 1,100,000 SATORI ceiling (loading refuses a batch past it).',
   DelegateActive:      'Your current delegate has already predicted this round. Wait for the next round.',
   Delegated:           'Your prediction power is delegated. Undelegate first to predict yourself.',
-  DuplicatePrediction: 'You already predicted on this stream this round, or within the last 24 hours on a named stream.',
+  DuplicatePrediction: 'You already predicted on this stream this round.',
   EmptyBatch:          'Batch is empty.',
   EmptyStream:         'Stream has no values yet. Wait for its first update.',
   FeeTooHigh:          'Fee exceeds the cap (1440 SATORI).',
@@ -87,6 +87,9 @@ const COPY: Record<string, string> = {
   ValueOverflow:            'Oracle value out of range.',
   Stale:                    'The oracle feed is stale. Retry after it updates.',
   RoundNotComplete:         'The oracle round is not complete yet. Try again shortly.',
+  StreamPullFailed:         'This stream\'s latest value could not be read, so predicting on it is paused. Try again shortly.',
+  SequencerDown:            'The network sequencer is down, so oracle prices are paused. Try again once it is back.',
+  SequencerGracePeriod:     'The network sequencer only just restarted. Oracle prices resume shortly.',
   CarriedForward:           'The oracle answer is not fresh (carried forward). Retry after the feed updates.',
   InvalidFeed:              'Invalid Chainlink feed address.',
   MaxFeedAgeOutOfRange:     'Max feed age is outside the allowed range.',
@@ -100,15 +103,16 @@ const COPY: Record<string, string> = {
   UnknownTerm:              'That Coined term does not exist.',
   // Named streams: NameTaken and NamedStreamConfig are the registry's; the other
   // two are NamedStreamAdapter's (its InvalidProvider shares the registry's selector).
-  NameTaken:                'That name is already a named stream.',
-  NamedStreamConfig:        'A named stream takes no config; the registry sets it.',
+  NameTaken:                'That name is already a Sentiment stream.',
+  NamedStreamConfig:        'A Sentiment stream takes no config; the registry sets it.',
   StreamIdMismatch:         'Another stream was created first — try again.',
-  NotWired:                 'Named streams are not enabled on this chain yet.',
+  NotWired:                 'Sentiment streams are not enabled on this chain yet.',
   // Coined's errors, carried by NamedStreamAdapter's ICoinedErrors fragment --
   // extend that fragment when Coined adds a text error, or the dapp cannot name it.
   EmptyName:                'Names can\'t be empty.',
   BadName:                  'That name has characters Coined doesn\'t allow (control or invisible characters), or starts or ends with a space.',
   MixedScript:              'A name must use one writing system.',
+  MixedDigits:              'A name must use digits from one numeral system.',
 
   // ---- SatoriVoting.sol ----
   CoreAlreadySet:        'Voting core already set.',
@@ -145,7 +149,11 @@ const COPY: Record<string, string> = {
   ClaimDelegatedAway:        'Your claim ability is delegated. The delegate must claim for you.',
   ClaimUndelegationCooldown: 'Claim-delegation cooldown is still active.',
   InsufficientStake:         'Unstake amount exceeds your current stake.',
-  NamedGame:                 'Named games take no bounties.',
+  NamedGame:                 'Sentiment games take no bounties.',
+  NotTheGamesBountyToken:    'This game pays bounties in one token, chosen by its author. Fund that token.',
+  NotGameAuthority:          'Only the game\'s author can do that.',
+  BountyTokenInUse:          'The current bounty token still has funds. It can be changed once they are used up.',
+  NotAnAdapterGame:          'A bounty token is chosen only for adapter games.',
   NoPendingPrediction:       'No pending prediction to finalize.',
   NotClaimDelegate:          'You are not the claim delegate for this address.',
   NotDrained:                'Bounty pool still has funds or an active rate.',
@@ -157,17 +165,13 @@ const COPY: Record<string, string> = {
 
   // ---- split-core additions (SatoriToken / SatoriEngine / SatoriHub) ----
   AlreadySet:               'This one-time setting has already been configured.',
-  AirdropNotSet:            'The token has no airdrop contract set, so there is nothing to freeze.',
-  AirdropChanged:           'The airdrop door or its table changed since it was checked. Reload and check the table again before freezing.',
   Frozen:                   'This setting is frozen for good and can no longer be changed.',
 
   // ---- SatoriAirdrop.sol ----
   NothingToClaim:           'Nothing to claim: nothing is owed to this address, or it has already been claimed.',
   DuplicateRecipient:       'One of these addresses already has an allocation. Allocations are written once.',
   LengthMismatch:           'Addresses and amounts do not line up.',
-  AirdropLoadingClosed:     'The airdrop table is closed (frozen or finalized): nothing more can be loaded.',
-  ClaimsNotOpen:            'Airdrop claims are not open yet. They open when the airdrop is finalized.',
-  AirdropNotFrozen:         'The token\'s airdrop door must be frozen to this airdrop first: finalize, and any airdrop mint, wait for the freeze.',
+  AirdropLoadingClosed:     'The airdrop table is closed (finalized): nothing more can be loaded.',
   BountyParamsInvalid:      'Bounty parameters are invalid.',
   ControllerNotSet:         'The token controller is not wired yet. Try again after setup completes.',
   CrosschainLimit:          'That would mint more SATORI on the home chain than has actually been bridged out of it.',

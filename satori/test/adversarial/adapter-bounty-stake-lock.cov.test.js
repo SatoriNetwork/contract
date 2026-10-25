@@ -26,8 +26,7 @@ const {
   deploySatoriFixture,
   deployAndRegisterYesNoGame,
   createYesNoGame,
-  pack1,
-} = require("../fixtures");
+  pack1, ensureAdapterBountyToken } = require("../fixtures");
 
 const ROUND = 86400;
 const YES = 1;
@@ -51,6 +50,7 @@ async function stakeFor(bounties, user, token, amount) {
 async function fundBounty(bounties, funder, gameId, token, amount, rate) {
   await token.mint(funder.address, amount);
   await token.connect(funder).approve(await bounties.getAddress(), amount);
+  await ensureAdapterBountyToken(bounties, gameId, token);
   await bounties.connect(funder).fundBounty(gameId, await token.getAddress(), amount, rate);
 }
 

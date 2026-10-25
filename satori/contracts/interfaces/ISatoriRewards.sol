@@ -80,18 +80,11 @@ interface ISatoriRewards {
     ) external;
 
     /**
-     * @notice Adapter-game score-time entry (score/total model + bounty). For
-     *         SATORI: pins the first scorer's `total` for the (gameId, round),
-     *         caps the round's running paid numerators at it, pays
-     *         `pool × (userScore × multiplier) / total` — `multiplier` (0 ⇒ won nothing) is
-     *         the SATORI-weight effect split out of the raw accuracy `userScore`,
-     *         and `total` already folds it across winners (split for delegation
-     *         via _splitReward).
-     *         For bounties: if this bet was boosted, pays the round's single
+     * @notice Adapter-game score-time entry. Pays no SATORI. If this bet was
+     *         boosted, it pays the round's single
      *         active bounty token's pot by `pot × (userScore × stake) /
      *         bountyTotal` (first-scorer pins `bountyTotal`, running paid capped).
-     *         Conservation: SATORI per (game,round) <= one pool; the bounty pot
-     *         <= itself.
+     *         Conservation: the bounty paid per (game, round) <= its pot.
      * @return finalized Whether a REAL protocol-recorded pending bet was
      *                    consumed by this call. False for a no-op — the game is
      *                    off-chain, or the user had no pending on it. The caller
@@ -193,4 +186,7 @@ interface ISatoriRewards {
     function referral(address user) external view returns (address);
     /// @notice onlyCore `setPredictorFee` as `user` — the hub's relay path.
     function setPredictorFeeFor(address user, uint16 bps) external;
+
+    /// @notice The SATORI burned to register a community stream or game adapter.
+    function registrationFee() external view returns (uint256);
 }

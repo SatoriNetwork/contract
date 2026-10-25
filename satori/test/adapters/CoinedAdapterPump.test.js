@@ -42,8 +42,8 @@ async function setup() {
   const adapter = await (await ethers.getContractFactory("CoinedAdapter")).deploy(await coined.getAddress());
   await adapter.waitForDeployment();
   const adapterId = await registry.nextAdapterId();
-  await (await hub.connect(owner).registerAdapter(await adapter.getAddress(), "Coined")).wait();
-  const create = (provider, t) => hub.connect(owner)["createAdapterDataStream(string,uint16,address,bytes,uint24)"](
+  await (await hub.connect(owner).registerAdapter(await adapter.getAddress(), "Coined price")).wait();
+  const create = (provider, t) => hub.connect(owner)["createAdapterDataStream(string,uint32,address,bytes,uint24)"](
     `Coined: ${t}`, adapterId, provider, cfg(t), 60);
   const rc = await (await create(await coined.getAddress(), term)).wait();
   const sid = rc.logs.map((l) => { try { return registry.interface.parseLog(l); } catch { return null; } })

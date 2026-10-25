@@ -38,7 +38,7 @@ const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { loadFixture, time, impersonateAccount, setBalance } =
   require("@nomicfoundation/hardhat-network-helpers");
-const { deploySatoriFixture, pack1, voteFor } = require("../fixtures");
+const { deploySatoriFixture, pack1, voteFor, ensureAdapterBountyToken } = require("../fixtures");
 
 const ROUND = 86400, YES = 1, NO = 2;
 const TOL = ethers.parseEther("0.01");
@@ -91,6 +91,7 @@ async function fundBountyOn(fix, funder, token, gameId, poolEth = "1000", rateEt
   await token.mint(funder.address, ethers.parseEther("100000"));
   await token.connect(funder).approve(await bounties.getAddress(), ethers.MaxUint256);
   const POT = ethers.parseEther(rateEth); // virgin pool: drip == rate per scored round
+  await ensureAdapterBountyToken(bounties, gameId, token);
   await bounties.connect(funder).fundBounty(gameId, await token.getAddress(), ethers.parseEther(poolEth), POT);
   return POT;
 }

@@ -279,9 +279,8 @@ describe("ADV-COV2 predictions: predict-window freshness / one-round-lag", funct
         satori.connect(a).predictMultipleWithPayloads([{ gameId: DEFAULT_ID, payload: pack1(UP) }])
       ).to.be.revertedWithCustomError(satori, "AlreadyPredicted");
 
-      // Every subsequent round the predict auto-flushes the default stream
-      // (predictMultipleWithPayloads calls flushDefaultStream first), so its
-      // value advances to a NEW current-round value each round. With the
+      // Every subsequent round the predict's own pull writes the default
+      // stream's snapshot, so its value advances to a NEW current-round value each round. With the
       // freshness check using the same-round window (`streamLastUpdate == round`)
       // and the staleness threshold `streamLastUpdate > lastPredRound`, the
       // default game lands a prediction EVERY round — not every other round

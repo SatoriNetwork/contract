@@ -51,9 +51,10 @@ contract ConservationInvariantTest is Test {
     //        The three mint sites are the token's own counters (`rewardMint`
     //        and `mintDevFee` both bump `totalRewardsMinted`; `airdropMint`
     //        bumps `airdropMinted`; the genesis mint seeds both supply and
-    //        `totalRewardsMinted` with INITIAL_MINT). The only burn any handler
-    //        action reaches is `SatoriHub.vote` -> `token.burnFrom`, ghosted by
-    //        the handler. `crosschainMint`/`crosschainBurn` are unreachable —
+    //        `totalRewardsMinted` with INITIAL_MINT). The burns the handler
+    //        reaches are `SatoriHub.vote` -> `token.burnFrom` and the hub's fees
+    //        (stream, game, adapter, bounty posting), also `burnFrom`: votes
+    //        ghost the amount asked, fees the measured supply drop. `crosschainMint`/`crosschainBurn` are unreachable —
     //        they require `msg.sender == SUPERCHAIN_BRIDGE` (the hardcoded OP
     //        predeploy) and no fuzz sender is pranked to it. (The
     //        token also inherits ERC20Burnable's permissionless self-burn; no
@@ -323,6 +324,18 @@ contract ConservationInvariantTest is Test {
         (uint256 issued, , ) = _emission();
         assertEq(issued, handler.ghostIssued(), "emission.issued must equal genesis + grossed commits + reserve banks");
         assertEq(handler.ghostSplitMismatch(), 0, "every RewardSplit must be followed by noteIssued(u + d when W != 0)");
+    }
+
+    // Every report to the token is a scoring credit or a banked reserve delta,
+    // so the token's general total is genesis + every noteIssued argument + the
+    // reserve, exactly, with no rounding. Counted from the hub's inputs, so a
+    // hub that reported something other than what it was given shows here.
+    function invariant_reportsAreCreditsPlusReserve() public view {
+        assertEq(
+            handler.satoriToken().generalAccrued(),
+            handler.generalGenesis() + handler.ghostNotedGeneral() + handler.satori().merkleReserveCumulative(),
+            "token.generalAccrued must equal genesis + noted credits + banked reserve"
+        );
     }
 
     uint256 public observedIssued;

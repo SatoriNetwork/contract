@@ -169,7 +169,7 @@ async function main() {
     ["governor matches home", async () => eq(await token.rootAuthority(), governor)],
     ["PLATFORM_FEE_RECIPIENT matches home", async () => eq(await token.PLATFORM_FEE_RECIPIENT(), platformFeeRecipient)],
     ["emission ceiling reads zero", async () => (await token.rewardCeiling()) === 0n],
-    ["dev fee ceiling reads zero", async () => (await token.devFeeCeiling()) === 0n],
+    ["nothing accrued", async () => (await token.generalAccrued()) === 0n && (await token.devFeeAccrued()) === 0n],
     ["advertises IERC7802", async () => await token.supportsInterface(IERC7802_ID)],
     // The two that matter most: the gates are read at call time, so calling them
     // is the only honest proof they are closed on THIS chain.
