@@ -31,7 +31,15 @@ contract PaymentChannels is EIP712, ReentrancyGuard {
         address signer;
     }
 
+    /// Kept apart from `Channel` so `getChannel` keeps its shape.
+    struct Terms {
+        uint32 grace;
+        bool graceSet;
+        address payout;
+    }
+
     mapping(bytes32 => Channel) private _channels;
+    mapping(bytes32 => Terms) private _terms;
 
     event Opened(
         bytes32 indexed channelId,
@@ -59,6 +67,13 @@ contract PaymentChannels is EIP712, ReentrancyGuard {
         bytes32 indexed channelId, address indexed payer, address indexed payee,
         address by, uint96 settled, uint96 refunded
     );
+    event Withdrawn(
+        bytes32 indexed channelId, address indexed payer, address indexed payee,
+        address to, uint96 amount, uint96 settled
+    );
+    event GraceProposed(bytes32 indexed channelId, address indexed payer, address indexed payee, address by, uint32 grace);
+    event GraceChanged(bytes32 indexed channelId, address indexed payer, address indexed payee, address by, uint32 grace);
+    event PayoutSet(bytes32 indexed channelId, address indexed payer, address indexed payee, address payout);
 
     error BadInput();
     error ChannelExists();
@@ -67,6 +82,7 @@ contract PaymentChannels is EIP712, ReentrancyGuard {
     error NotPayee();
     error NotPayer();
     error NotPayerOrSigner();
+    error NotPayerOrPayee();
     error BadSignature();
     error NothingToSettle();
     error CloseNotRequested();
@@ -161,7 +177,7 @@ contract PaymentChannels is EIP712, ReentrancyGuard {
         if (msg.sender != c.payer && msg.sender != c.signer) revert NotPayerOrSigner();
         if (c.closeRequestedAt != 0) return;
         c.closeRequestedAt = uint64(block.timestamp);
-        emit CloseRequested(channelId, c.payer, c.payee, msg.sender, uint64(block.timestamp) + CLOSE_GRACE_PERIOD);
+        emit CloseRequested(channelId, c.payer, c.payee, msg.sender, uint64(block.timestamp) + _grace(channelId));
     }
 
     /// @notice The payer withdraws its close request. Not the signer: a hot key
@@ -178,13 +194,69 @@ contract PaymentChannels is EIP712, ReentrancyGuard {
     function withdraw(bytes32 channelId) external nonReentrant {
         Channel storage c = _live(channelId);
         if (msg.sender != c.payer && msg.sender != c.signer) revert NotPayerOrSigner();
-        if (c.closeRequestedAt == 0) revert CloseNotRequested();
-        if (block.timestamp < uint256(c.closeRequestedAt) + CLOSE_GRACE_PERIOD) revert CloseNotReady();
+        _requireGraceOver(channelId, c);
         _finalize(channelId, c);
+    }
+
+    /// @notice After the grace period, the payer takes `amount` of what was not
+    ///         settled to `to` (`type(uint96).max`: all of it). The channel stays
+    ///         open for reuse: `cancelClose`, then vouchers above `settled`.
+    ///         Not the signer: only the payer picks `to`.
+    /// @dev The amount is counted as settled, not taken off the deposit, so every
+    ///      voucher up to the new `settled` is spent and none can claim a later top-up.
+    function withdrawTo(bytes32 channelId, uint96 amount, address to) external nonReentrant {
+        Channel storage c = _live(channelId);
+        if (msg.sender != c.payer) revert NotPayer();
+        _requireGraceOver(channelId, c);
+        uint96 left = c.deposit - c.settled;
+        if (amount == type(uint96).max) amount = left;
+        if (amount == 0 || amount > left || to == address(0) || to == address(this)) revert BadInput();
+        c.settled += amount;
+        IERC20(c.token).safeTransfer(to, amount);
+        emit Withdrawn(channelId, c.payer, c.payee, to, amount, c.settled);
+    }
+
+    /// @notice Change the channel's grace period (seconds). A longer one asked by
+    ///         the payer, or a shorter one asked by the payee, applies at once,
+    ///         also to a close already requested. Otherwise it is only proposed;
+    ///         the other side applies it by asking for it (any value in its own
+    ///         direction applies at once).
+    ///         Not the signer: a hot key could stretch the payer's wait forever.
+    function setGrace(bytes32 channelId, uint32 grace) external nonReentrant {
+        Channel storage c = _live(channelId);
+        bool isPayer = msg.sender == c.payer;
+        bool isPayee = msg.sender == c.payee;
+        if (!isPayer && !isPayee) revert NotPayerOrPayee();
+        uint64 current = _grace(channelId);
+        if ((isPayer && grace >= current) || (isPayee && grace <= current)) {
+            Terms storage t = _terms[channelId];
+            t.grace = grace;
+            t.graceSet = true;
+            emit GraceChanged(channelId, c.payer, c.payee, msg.sender, grace);
+        } else {
+            emit GraceProposed(channelId, c.payer, c.payee, msg.sender, grace);
+        }
+    }
+
+    /// @notice The payee names where its settlements are paid (default: itself).
+    ///         It stays the payee for everything else.
+    function setPayout(bytes32 channelId, address payout) external nonReentrant {
+        Channel storage c = _live(channelId);
+        if (msg.sender != c.payee) revert NotPayee();
+        if (payout == address(0) || payout == address(this)) revert BadInput();
+        _terms[channelId].payout = payout;
+        emit PayoutSet(channelId, c.payer, c.payee, payout);
     }
 
     function getChannel(bytes32 channelId) external view returns (Channel memory) {
         return _channels[channelId];
+    }
+
+    /// @return grace the channel's grace period in seconds
+    /// @return payout where settlements are paid
+    function getTerms(bytes32 channelId) external view returns (uint64 grace, address payout) {
+        grace = _grace(channelId);
+        payout = _payout(channelId, _channels[channelId]);
     }
 
     function computeChannelId(address payer, address payee, address token, address signer, bytes32 salt)
@@ -236,7 +308,7 @@ contract PaymentChannels is EIP712, ReentrancyGuard {
     function _pay(bytes32 id, Channel storage c, uint96 cumulativeAmount, uint96 target) private returns (uint96 paid) {
         paid = target - c.settled;
         c.settled = target;
-        IERC20(c.token).safeTransfer(c.payee, paid);
+        IERC20(c.token).safeTransfer(_payout(id, c), paid);
         emit Settled(id, c.payer, c.payee, cumulativeAmount, paid, target);
     }
 
@@ -262,6 +334,21 @@ contract PaymentChannels is EIP712, ReentrancyGuard {
             let ok := staticcall(gas(), signer, add(data, 0x20), mload(data), 0x00, 0x20)
             valid := and(and(ok, gt(returndatasize(), 0x1f)), eq(mload(0x00), magic))
         }
+    }
+
+    function _grace(bytes32 id) private view returns (uint64) {
+        Terms storage t = _terms[id];
+        return t.graceSet ? t.grace : CLOSE_GRACE_PERIOD;
+    }
+
+    function _payout(bytes32 id, Channel storage c) private view returns (address) {
+        address payout = _terms[id].payout;
+        return payout == address(0) ? c.payee : payout;
+    }
+
+    function _requireGraceOver(bytes32 id, Channel storage c) private view {
+        if (c.closeRequestedAt == 0) revert CloseNotRequested();
+        if (block.timestamp < uint256(c.closeRequestedAt) + _grace(id)) revert CloseNotReady();
     }
 
     function _live(bytes32 id) private view returns (Channel storage c) {

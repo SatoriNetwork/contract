@@ -10,8 +10,10 @@ import "../../contracts/mocks/MockERC20Permit.sol";
  * @notice Opens channels between a few payers and payees (each with its own
  *         voucher key), tops them up from strangers, signs ever-higher vouchers
  *         (sometimes past the deposit), settles old and new ones, requests
- *         closes, lets time pass, withdraws and closes. Ghosts track what each
- *         side was paid, so the invariants can say where every token went.
+ *         closes, lets time pass, withdraws and closes. Payees name payout
+ *         addresses, payers take part of the rest elsewhere and reuse the
+ *         channel, and both sides change the grace period. Ghosts track what
+ *         each side was paid, so the invariants can say where every token went.
  */
 contract PaymentChannelsHandler is Test {
     PaymentChannels public channels;
@@ -20,6 +22,7 @@ contract PaymentChannelsHandler is Test {
     uint256[] internal signerKeys;
     address[] public payers;
     address[] public payees;
+    address[] public payouts;
     bytes32[] public ids;
     mapping(bytes32 => uint256) public signerKeyOf;
     mapping(bytes32 => uint96) public signedTotal;
@@ -43,6 +46,7 @@ contract PaymentChannelsHandler is Test {
             signerKeys.push(0xA11CE + i);
             payers.push(address(uint160(0xBA0 + i)));
             payees.push(address(uint160(0xEE0 + i)));
+            payouts.push(address(uint160(0xDA0 + i)));
         }
     }
 
@@ -90,7 +94,7 @@ contract PaymentChannelsHandler is Test {
         if (total > signedTotal[id]) signedTotal[id] = total;
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerKeyOf[id], channels.voucherDigest(id, total));
         PaymentChannels.Channel memory before = channels.getChannel(id);
-        address payee = before.payee;
+        (, address payee) = channels.getTerms(id);
         uint256 had = token.balanceOf(payee);
         uint96 due = total < before.deposit ? total : before.deposit;
         try channels.settle(id, total, abi.encodePacked(r, s, v)) {
@@ -118,14 +122,13 @@ contract PaymentChannelsHandler is Test {
         }
         batch[n] = keccak256(abi.encode(junk));
         totals[n] = junk;
-        for (uint256 i = 0; i < payees.length; i++) before += token.balanceOf(payees[i]);
+        before = _paidOut();
         owedBefore = token.balanceOf(address(channels));
         try channels.settleMany(batch, totals, sigs) {} catch {
             ghostPayeeBlocked = true;
             return;
         }
-        uint256 afterPaid;
-        for (uint256 i = 0; i < payees.length; i++) afterPaid += token.balanceOf(payees[i]);
+        uint256 afterPaid = _paidOut();
         ghostPaidToPayees += afterPaid - before;
         if (owedBefore - token.balanceOf(address(channels)) != afterPaid - before) ghostOverpaid = true;
         for (uint256 i = 0; i < n; i++) {
@@ -133,6 +136,15 @@ contract PaymentChannelsHandler is Test {
             uint96 due = totals[i] < c.deposit ? totals[i] : c.deposit;
             if (!c.closed && c.settled < due) ghostPayeeBlocked = true;
         }
+    }
+
+    function _paidOut() internal view returns (uint256 sum) {
+        for (uint256 i = 0; i < payees.length; i++) sum += token.balanceOf(payees[i]) + token.balanceOf(payouts[i]);
+    }
+
+    function _graceOver(bytes32 id, PaymentChannels.Channel memory c) internal view returns (bool) {
+        (uint64 grace, ) = channels.getTerms(id);
+        return c.closeRequestedAt != 0 && block.timestamp >= uint256(c.closeRequestedAt) + grace;
     }
 
     function requestClose(uint256 seed, bool bySigner) external {
@@ -148,7 +160,7 @@ contract PaymentChannelsHandler is Test {
         if (!ok) return;
         PaymentChannels.Channel memory c = channels.getChannel(id);
         uint256 had = token.balanceOf(c.payer);
-        bool due = c.closeRequestedAt != 0 && block.timestamp >= uint256(c.closeRequestedAt) + channels.CLOSE_GRACE_PERIOD();
+        bool due = _graceOver(id, c);
         vm.prank(c.payer);
         try channels.withdraw(id) {
             if (!due) ghostEarlyWithdraw = true;
@@ -168,12 +180,52 @@ contract PaymentChannelsHandler is Test {
             (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerKeyOf[id], channels.voucherDigest(id, total));
             sig = abi.encodePacked(r, s, v);
         }
-        uint256 payeeHad = token.balanceOf(c.payee);
+        (, address payout) = channels.getTerms(id);
+        uint256 payeeHad = token.balanceOf(payout);
         uint256 payerHad = token.balanceOf(c.payer);
         vm.prank(c.payee);
         channels.close(id, total, sig);
-        ghostPaidToPayees += token.balanceOf(c.payee) - payeeHad;
+        ghostPaidToPayees += token.balanceOf(payout) - payeeHad;
         ghostRefunded += token.balanceOf(c.payer) - payerHad;
+    }
+
+    /// The payer takes part (or all) of the rest to an address of its own; the channel stays open.
+    function withdrawTo(uint256 seed, uint96 amount, uint256 dest) external {
+        (bytes32 id, bool ok) = _pick(seed);
+        if (!ok) return;
+        PaymentChannels.Channel memory c = channels.getChannel(id);
+        uint96 left = c.deposit - c.settled;
+        if (left == 0) return;
+        amount = uint96(bound(amount, 1, left));
+        address to = address(uint160(0xC0 + dest % 3));
+        uint256 had = token.balanceOf(to);
+        bool due = _graceOver(id, c);
+        vm.prank(c.payer);
+        try channels.withdrawTo(id, amount, to) {
+            if (!due) ghostEarlyWithdraw = true;
+            if (token.balanceOf(to) - had != amount) ghostOverpaid = true;
+            ghostRefunded += amount;
+            uint96 spent = channels.getChannel(id).settled; // the payer's client carries on from what is spent
+            if (signedTotal[id] < spent) signedTotal[id] = spent;
+        } catch {
+            if (due) ghostPayerBlocked = true;
+        }
+    }
+
+    function setGrace(uint256 seed, uint32 grace, bool byPayee) external {
+        (bytes32 id, bool ok) = _pick(seed);
+        if (!ok) return;
+        PaymentChannels.Channel memory c = channels.getChannel(id);
+        vm.prank(byPayee ? c.payee : c.payer);
+        channels.setGrace(id, uint32(bound(grace, 0, 20 days)));
+    }
+
+    function setPayout(uint256 seed, uint256 which) external {
+        (bytes32 id, bool ok) = _pick(seed);
+        if (!ok) return;
+        PaymentChannels.Channel memory c = channels.getChannel(id);
+        vm.prank(c.payee);
+        channels.setPayout(id, which % 4 == 3 ? c.payee : payouts[which % 3]);
     }
 
     function cancelClose(uint256 seed) external {

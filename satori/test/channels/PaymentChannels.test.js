@@ -427,6 +427,148 @@ describe("PaymentChannels", function () {
     });
   });
 
+  describe("reuse, the grace period and where money goes", function () {
+    it("lets the payer take part of the rest to any address after the grace period, and reuse the channel", async function () {
+      const f = await loadFixture(deploy);
+      const { channels, token, payer, payee, identity, funder, stranger } = f;
+      const id = await openChannel(f);
+      await channels.connect(payee).settle(id, E(3), await voucher(channels, identity, id, E(3)));
+      await expect(channels.connect(payer).withdrawTo(id, E(1), funder.address)).to.be.revertedWithCustomError(channels, "CloseNotRequested");
+      const tx = await channels.connect(identity).requestClose(id);
+      const at = BigInt((await ethers.provider.getBlock(tx.blockNumber)).timestamp);
+      await time.setNextBlockTimestamp(at + BigInt(GRACE) - 1n);
+      await expect(channels.connect(payer).withdrawTo(id, E(1), funder.address)).to.be.revertedWithCustomError(channels, "CloseNotReady");
+      await time.setNextBlockTimestamp(at + BigInt(GRACE));
+      for (const who of [identity, payee, stranger]) {
+        await expect(channels.connect(who).withdrawTo(id, E(1), who.address)).to.be.revertedWithCustomError(channels, "NotPayer");
+      }
+      await expect(channels.connect(payer).withdrawTo(id, E(8), funder.address)).to.be.revertedWithCustomError(channels, "BadInput");
+      await expect(channels.connect(payer).withdrawTo(id, 0, funder.address)).to.be.revertedWithCustomError(channels, "BadInput");
+      await expect(channels.connect(payer).withdrawTo(id, E(1), ethers.ZeroAddress)).to.be.revertedWithCustomError(channels, "BadInput");
+      await expect(channels.connect(payer).withdrawTo(id, E(1), await channels.getAddress())).to.be.revertedWithCustomError(channels, "BadInput");
+      const before = await token.balanceOf(funder.address);
+      await expect(channels.connect(payer).withdrawTo(id, E(4), funder.address))
+        .to.emit(channels, "Withdrawn").withArgs(id, payer.address, payee.address, funder.address, E(4), E(7));
+      expect(await token.balanceOf(funder.address)).to.equal(before + E(4));
+      const c = await channels.getChannel(id);
+      expect([c.deposit, c.settled, c.closed]).to.deep.equal([E(10), E(7), false]);
+      expect(await token.balanceOf(await channels.getAddress())).to.equal(E(3));
+
+      // Resume: what was taken back counts as settled, so vouchers up to it pay nothing; new ones go above it.
+      await channels.connect(payer).cancelClose(id);
+      await expect(channels.connect(payer).withdrawTo(id, E(1), payer.address)).to.be.revertedWithCustomError(channels, "CloseNotRequested");
+      for (const n of [3, 7]) {
+        await expect(channels.connect(payee).settle(id, E(n), await voucher(channels, identity, id, E(n))))
+          .to.be.revertedWithCustomError(channels, "NothingToSettle");
+      }
+      await expect(channels.connect(payee).settle(id, E(9), await voucher(channels, identity, id, E(9))))
+        .to.emit(channels, "Settled").withArgs(id, payer.address, payee.address, E(9), E(2), E(9));
+      await channels.connect(payer).topUp(id, E(2));
+      await expect(channels.connect(payee).settle(id, E(11), await voucher(channels, identity, id, E(11))))
+        .to.emit(channels, "Settled").withArgs(id, payer.address, payee.address, E(11), E(2), E(11));
+    });
+
+    it("spends every voucher up to what was taken back: an old big voucher can't claim a later top-up", async function () {
+      const f = await loadFixture(deploy);
+      const { channels, token, payer, payee, identity } = f;
+      const id = await openChannel(f);
+      const big = await voucher(channels, identity, id, E(10));
+      await channels.connect(payee).settle(id, E(5), await voucher(channels, identity, id, E(5)));
+      await channels.connect(payer).requestClose(id);
+      await time.increase(GRACE);
+      await channels.connect(payer).withdrawTo(id, MAX96, payer.address); // all that is left: 5
+      expect((await channels.getChannel(id)).settled).to.equal(E(10));
+      await channels.connect(payer).cancelClose(id);
+      await channels.connect(payer).topUp(id, E(5));
+      await expect(channels.connect(payee).settle(id, E(10), big)).to.be.revertedWithCustomError(channels, "NothingToSettle");
+      expect(await token.balanceOf(payee.address)).to.equal(E(5));
+    });
+
+    it("leaves an emptied channel open: a top-up and new vouchers use it again", async function () {
+      const f = await loadFixture(deploy);
+      const { channels, token, payer, payee, identity } = f;
+      const id = await openChannel(f);
+      await channels.connect(payer).requestClose(id);
+      await time.increase(GRACE);
+      await channels.connect(payer).withdrawTo(id, E(10), payer.address);
+      const c = await channels.getChannel(id);
+      expect([c.deposit, c.settled]).to.deep.equal([E(10), E(10)]);
+      await expect(channels.connect(payer).withdrawTo(id, 1n, payer.address)).to.be.revertedWithCustomError(channels, "BadInput");
+      await expect(channels.connect(payer).withdrawTo(id, MAX96, payer.address)).to.be.revertedWithCustomError(channels, "BadInput");
+      await channels.connect(payer).topUp(id, E(2));
+      await channels.connect(payer).cancelClose(id);
+      await channels.connect(payee).settle(id, E(11), await voucher(channels, identity, id, E(11)));
+      expect(await token.balanceOf(payee.address)).to.equal(E(1));
+    });
+
+    it("changes the grace period: longer by the payer or shorter by the payee at once, otherwise once the other side agrees", async function () {
+      const f = await loadFixture(deploy);
+      const { channels, payer, payee, identity, stranger } = f;
+      const id = await openChannel(f);
+      const grace = async () => (await channels.getTerms(id)).grace;
+      const DAY = 24 * 3600;
+      expect(await grace()).to.equal(BigInt(GRACE));
+      for (const who of [identity, stranger]) {
+        await expect(channels.connect(who).setGrace(id, DAY)).to.be.revertedWithCustomError(channels, "NotPayerOrPayee");
+      }
+      await expect(channels.connect(payee).setGrace(id, 30 * DAY))
+        .to.emit(channels, "GraceProposed").withArgs(id, payer.address, payee.address, payee.address, 30 * DAY);
+      expect(await grace()).to.equal(BigInt(GRACE));
+      await expect(channels.connect(payer).setGrace(id, 30 * DAY))
+        .to.emit(channels, "GraceChanged").withArgs(id, payer.address, payee.address, payer.address, 30 * DAY);
+      expect(await grace()).to.equal(BigInt(30 * DAY));
+      await expect(channels.connect(payer).setGrace(id, 6 * DAY)).to.emit(channels, "GraceProposed");
+      expect(await grace()).to.equal(BigInt(30 * DAY));
+      await expect(channels.connect(payee).setGrace(id, 6 * DAY)).to.emit(channels, "GraceChanged");
+      expect(await grace()).to.equal(BigInt(6 * DAY));
+      await expect(channels.connect(payee).setGrace(id, 0)).to.emit(channels, "GraceChanged");
+      expect(await grace()).to.equal(0n);
+      await expect(channels.connect(payer).setGrace(id, DAY)).to.emit(channels, "GraceChanged");
+      expect(await grace()).to.equal(BigInt(DAY));
+    });
+
+    it("times a close by the grace period in force, also one changed after the request", async function () {
+      const f = await loadFixture(deploy);
+      const { channels, payer, payee } = f;
+      const id = await openChannel(f);
+      await channels.connect(payer).setGrace(id, 8 * 24 * 3600);
+      const tx = await channels.connect(payer).requestClose(id);
+      const at = BigInt((await ethers.provider.getBlock(tx.blockNumber)).timestamp);
+      await expect(tx).to.emit(channels, "CloseRequested").withArgs(id, payer.address, payee.address, payer.address, at + BigInt(8 * 24 * 3600));
+      await channels.connect(payee).setGrace(id, 3600);
+      await time.setNextBlockTimestamp(at + 3599n);
+      await expect(channels.connect(payer).withdraw(id)).to.be.revertedWithCustomError(channels, "CloseNotReady");
+      await time.setNextBlockTimestamp(at + 3600n);
+      await expect(channels.connect(payer).withdraw(id)).to.emit(channels, "Closed");
+    });
+
+    it("pays settlements to the payout address the payee names; the payee stays the payee", async function () {
+      const f = await loadFixture(deploy);
+      const { channels, token, payer, payee, identity, funder, stranger } = f;
+      const id = await openChannel(f);
+      const second = await openChannel(f, { salt: ethers.id("2") });
+      expect((await channels.getTerms(id)).payout).to.equal(payee.address);
+      for (const who of [payer, identity, stranger]) {
+        await expect(channels.connect(who).setPayout(id, who.address)).to.be.revertedWithCustomError(channels, "NotPayee");
+      }
+      await expect(channels.connect(payee).setPayout(id, ethers.ZeroAddress)).to.be.revertedWithCustomError(channels, "BadInput");
+      await expect(channels.connect(payee).setPayout(id, await channels.getAddress())).to.be.revertedWithCustomError(channels, "BadInput");
+      await expect(channels.connect(payee).setPayout(id, stranger.address))
+        .to.emit(channels, "PayoutSet").withArgs(id, payer.address, payee.address, stranger.address);
+      expect((await channels.getTerms(id)).payout).to.equal(stranger.address);
+      const before = await token.balanceOf(stranger.address);
+      await channels.connect(funder).settle(id, E(2), await voucher(channels, identity, id, E(2)));
+      await channels.connect(funder).settleMany([id, second], [E(3), E(1)],
+        [await voucher(channels, identity, id, E(3)), await voucher(channels, identity, second, E(1))]);
+      expect(await token.balanceOf(stranger.address)).to.equal(before + E(3));
+      expect(await token.balanceOf(payee.address)).to.equal(E(1));
+      await expect(channels.connect(stranger).close(id, 0, "0x")).to.be.revertedWithCustomError(channels, "NotPayee");
+      await expect(channels.connect(payee).close(id, E(4), await voucher(channels, identity, id, E(4))))
+        .to.emit(channels, "Closed").withArgs(id, payer.address, payee.address, payee.address, E(4), E(6));
+      expect(await token.balanceOf(stranger.address)).to.equal(before + E(4));
+    });
+  });
+
   describe("SATORI's transfer lock", function () {
     async function satori() {
       const f = await loadFixture(deploy);

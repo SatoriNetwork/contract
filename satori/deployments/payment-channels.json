@@ -1,16 +1,24 @@
 {
   "contract": "PaymentChannels",
-  "address": "0xeF3f87042cd9619729E5D69Da2fF90F89EA6976c",
+  "address": "0xa6DCa52936EAb8DD1EC9f8AD98e75D1Afb0DC16c",
   "factory": "0x4e59b44847b379578588920cA78FbF26c0B4956C",
-  "salt": "0x4dbc4d7f1502ff1e7185eb127f8fdc08ff8874774495b478c5f8bc699e7901be",
-  "initCodeHash": "0x0afa1ee42a06ab7c2b2518e14242dd7a2021ec94fa4da7e9b1405e6253556891",
+  "salt": "0x28e0bdb62fb68642ad82368d8559dcd91e1a7a8b3c8448f0e69a0aaa0b2fc910",
+  "initCodeHash": "0xd3b7d429d1ae9a2a6f9bfbe69f3ea52c374a8272da6552878cb0c9a9331f03dd",
   "chains": {
     "84532": {
-      "name": "baseSepolia",
-      "tx": "0x9bd10fc0c644fc02f0512cdd68de5c995ec2105ed058cbd488a705d9c929e298",
-      "block": 48351055,
-      "deployer": "0x9d3109b8A045D63056Aa5C1d2c883F3F9fA18817"
+      "tx": "0x61324d1424d8d9e35e837ecf9adf4a49292d4e53ccd209974d57075e5194b6fb",
+      "block": 50199562
     }
   },
-  "note": "Base Sepolia's tx and block were filled in by hand from its receipt (status 1, 1,540,387 gas): the first run's code check read a lagging RPC before the script used waitForCode."
+  "previous": {
+    "address": "0xAB9408f9ec330351A21497c87E3d24218413b0C8",
+    "salt": "0x7d9b3a63e3cd7a71ca6ff83a90905a10bfc5176bba82bccee62eb78dfb64925b",
+    "initCodeHash": "0x560510927538cbfc4e3c1dd74391e59a6bd75e1e287dfe7e2e8ceddba4ff7b4a",
+    "chains": {
+      "84532": {
+        "tx": "0xc403ef02a542ff1756a24d5cc16f4bc2e253851417a1f0bc4c3bbe79c7cfb04c",
+        "block": 50192983
+      }
+    }
+  }
 }

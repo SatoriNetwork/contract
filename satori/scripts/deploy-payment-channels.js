@@ -17,7 +17,7 @@ const path = require("path");
 const { waitForCode } = require("./live-reads-lib");
 
 const FACTORY = "0x4e59b44847b379578588920cA78FbF26c0B4956C";
-const SALT = ethers.id("satori.payment-channels.v1");
+const SALT = ethers.id("satori.payment-channels.v3");
 const GRACE = 7n * 24n * 3600n;
 
 async function main() {
@@ -65,6 +65,11 @@ async function main() {
   }
   const file = path.join(__dirname, "..", "deployments", "payment-channels.json");
   const book = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {};
+  if (book.address && book.address !== address) {
+    book.previous = { address: book.address, salt: book.salt, initCodeHash: book.initCodeHash, chains: book.chains, note: book.note };
+    book.chains = {};
+    delete book.note;
+  }
   book.contract = "PaymentChannels";
   book.address = address;
   book.factory = FACTORY;
