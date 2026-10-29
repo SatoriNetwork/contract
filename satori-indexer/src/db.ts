@@ -224,6 +224,27 @@ export function openDb(dbPath: string): Database.Database {
       PRIMARY KEY (block, log_index)
     );
 
+    CREATE TABLE IF NOT EXISTS offchain_share (
+      block     INTEGER NOT NULL,
+      log_index INTEGER NOT NULL,
+      tx        TEXT NOT NULL,
+      round_set INTEGER NOT NULL,
+      bps       INTEGER NOT NULL,
+      PRIMARY KEY (block, log_index)
+    );
+
+    -- Rounds [from_round, through_round) each banked per_round_wei.
+    CREATE TABLE IF NOT EXISTS reserve_banked (
+      block     INTEGER NOT NULL,
+      log_index INTEGER NOT NULL,
+      tx        TEXT NOT NULL,
+      from_round    INTEGER NOT NULL,
+      through_round INTEGER NOT NULL,
+      per_round_wei TEXT NOT NULL,
+      cumulative_wei TEXT NOT NULL,
+      PRIMARY KEY (block, log_index)
+    );
+
     -- kind: delegated, undelegated, synced.
     CREATE TABLE IF NOT EXISTS delegation (
       block     INTEGER NOT NULL,
@@ -502,6 +523,8 @@ export const EVENT_TABLES = [
   'unclaimed_ledger',
   'round_budget',
   'offchain_budget',
+  'offchain_share',
+  'reserve_banked',
   'delegation',
   'data_stream_created',
   'game_created',

@@ -54,6 +54,10 @@ export interface Addresses {
   /// tables stay empty, boot warns, `/status` reports `gamesIndexed: false`
   /// and `/games` answers 503.
   games: string;
+  /// OPTIONAL, same deal: the hub's MerkleReserveBanked, which says what each
+  /// round's off-chain budget was under the share. Empty means
+  /// `/rounds/:round/offchain-budget` cannot answer for those rounds.
+  hub: string;
 }
 
 export interface Config {
@@ -72,7 +76,7 @@ function fromBook(path: string): Partial<Addresses> {
   const a = raw.addresses ?? raw; // accept the deploy book or a flat map
   return {
     token: a.token, engine: a.engine, rewards: a.rewards, bounties: a.bounties,
-    registry: a.registry, voting: a.voting, games: a.games,
+    registry: a.registry, voting: a.voting, games: a.games, hub: a.hub,
   };
 }
 
@@ -91,9 +95,10 @@ export function loadConfig(): Config {
     registry: (process.env.REGISTRY_ADDRESS ?? book.registry ?? '').toLowerCase(),
     voting: (process.env.VOTING_ADDRESS ?? book.voting ?? '').toLowerCase(),
     games: (process.env.GAMES_ADDRESS ?? book.games ?? '').toLowerCase(),
+    hub: (process.env.HUB_ADDRESS ?? book.hub ?? '').toLowerCase(),
   };
   for (const [k, v] of Object.entries(addresses)) {
-    if (k === 'registry' || k === 'voting' || k === 'games') continue; // optional — checked separately below
+    if (k === 'registry' || k === 'voting' || k === 'games' || k === 'hub') continue; // optional — checked separately below
     if (!/^0x[0-9a-f]{40}$/.test(v)) {
       throw new Error(`Missing/invalid address for "${k}" — set ADDRESS_BOOK or ${k.toUpperCase()}_ADDRESS`);
     }
@@ -108,6 +113,15 @@ export function loadConfig(): Config {
   }
   if (addresses.games !== '' && !/^0x[0-9a-f]{40}$/.test(addresses.games)) {
     throw new Error('GAMES_ADDRESS is set but is not a valid address');
+  }
+  if (addresses.hub !== '' && !/^0x[0-9a-f]{40}$/.test(addresses.hub)) {
+    throw new Error('HUB_ADDRESS is set but is not a valid address');
+  }
+  if (addresses.hub === '') {
+    console.warn(
+      '[config] HUB_ADDRESS not set — reserve indexing is OFF. /rounds/:round/offchain-budget\n' +
+      '         cannot answer for rounds under the off-chain share. Set it to enable.',
+    );
   }
   if (addresses.games === '') {
     console.warn(

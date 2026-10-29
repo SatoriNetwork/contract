@@ -141,7 +141,7 @@ describe("Claim Delegation", function () {
       // R3: Score R1 - Alice now has claimable rewards
       await advanceToNextRound();
       await registry.setValue(stream1, 200);
-      await satori.connect(alice).predictMultipleWithPayloads([{ gameId: stream1, payload: pack1(UP) }]);
+      await satori.settlePrediction(alice.address, stream1); // score without predicting, so the claim may go elsewhere
     });
 
     it("Should allow delegate to claim on behalf of owner", async function () {
@@ -248,7 +248,7 @@ describe("Claim Delegation", function () {
       // R3: Score R1, predict again
       await advanceToNextRound();
       await registry.setValue(stream1, 200);
-      await satori.connect(alice).predictMultipleWithPayloads([{ gameId: stream1, payload: pack1(UP) }]);
+      await satori.settlePrediction(alice.address, stream1); // score without predicting, so the claim may go elsewhere
 
       // Alice now has claimable rewards for round 1
     });
@@ -306,7 +306,7 @@ describe("Claim Delegation", function () {
       // Build more claimable rewards.
       await advanceToNextRound();
       await registry.setValue(stream1, 250);
-      await satori.connect(alice).predictMultipleWithPayloads([{ gameId: stream1, payload: pack1(UP) }]);
+      await satori.settlePrediction(alice.address, stream1); // score without predicting, so the claim may go elsewhere
 
       // Alice undelegates, then re-delegates to Carol — both in the same round.
       await satori.connect(alice).delegateClaimAbility(alice.address);
@@ -335,7 +335,7 @@ describe("Claim Delegation", function () {
 
       await advanceToNextRound();
       await registry.setValue(stream1, 200);
-      await satori.connect(bob).predictMultipleWithPayloads([{ gameId: stream1, payload: pack1(UP) }]);
+      await satori.settlePrediction(bob.address, stream1); // score without predicting, so the claim may go elsewhere
 
       // Bob delegates claim ability to Carol
       await satori.connect(bob).delegateClaimAbility(carol.address);
@@ -370,7 +370,7 @@ describe("Claim Delegation", function () {
 
       await advanceToNextRound();
       await registry.setValue(stream1, 200);
-      await satori.connect(alice).predictMultipleWithPayloads([{ gameId: stream1, payload: pack1(UP) }]);
+      await satori.settlePrediction(alice.address, stream1); // score without predicting, so the claim may go elsewhere
 
       // Alice delegates claim ability to Bob
       await satori.connect(alice).delegateClaimAbility(bob.address);
@@ -436,7 +436,7 @@ describe("Claim Delegation", function () {
 
       await advanceToNextRound();
       await registry.setValue(stream1, 200);
-      await satori.connect(alice).predictMultipleWithPayloads([{ gameId: stream1, payload: pack1(UP) }]);
+      await satori.settlePrediction(alice.address, stream1); // score without predicting, so the claim may go elsewhere
 
       // Alice delegates claim ability to Bob
       await satori.connect(alice).delegateClaimAbility(bob.address);
@@ -467,7 +467,7 @@ describe("Claim Delegation", function () {
 
       await advanceToNextRound();
       await registry.setValue(stream1, 200);
-      await satori.connect(alice).predictMultipleWithPayloads([{ gameId: stream1, payload: pack1(UP) }]);
+      await satori.settlePrediction(alice.address, stream1); // score without predicting, so the claim may go elsewhere
 
       // Alice delegates to Bob
       await satori.connect(alice).delegateClaimAbility(bob.address);

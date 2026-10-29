@@ -252,7 +252,7 @@ describe("Reward Distribution Accuracy", function () {
     // value-provider cut (providers are not paid at all any more). The gross is
     // the RESIDUAL after the senior dev fee (moved to the immutable token; see
     // test/next/DevFee.test.js): gross = ROUND_REWARD_BUDGET − devRateNow
-    // (offchainBudget = 0 here), so at genesis tier 1 gross = 720 − 144 = 576.
+    // (offchainShareBps = 0 here), so at genesis tier 1 gross = 720 − 144 = 576.
     // This game was the only one predicted in round 1, so it is the entire round
     // denominator and takes the whole 576. It is not the default game, so each
     // winner is paid its weight over BOTH sides' 10 units (B4): 1:2:4 tenths,

@@ -32,7 +32,7 @@ interface ISatoriCore {
     function noteIssued(uint256 general) external;
 
     /// @notice The on-chain gross a fresh round is priced at: the residual
-    ///         after the dev fee, net of the dial (which yields to a 1-wei floor).
+    ///         after the dev fee, less the off-chain share.
     function onChainGrossNow() external view returns (uint256);
 
     /// @notice Price the current round once, on its first touch, returning its
@@ -52,12 +52,12 @@ interface ISatoriCore {
 
 
     /**
-     * @notice Mirror the reward dial (`SatoriRewards.offchainBudget`) into core's
-     *         Merkle reserve accumulator (Phase 2b). Restricted to SatoriRewards;
-     *         called from `setOffchainBudget`. Core accrues the old rate first,
-     *         then the new per-round reserve applies going forward.
+     * @notice Mirror the reward split (`SatoriRewards.offchainShareBps`) into
+     *         core's Merkle reserve. Restricted to SatoriRewards; called from
+     *         `setOffchainShareBps`. Core banks the old share through the
+     *         current round, then the new one applies from the next.
      */
-    function setMerkleReserveRate(uint256 newRate) external;
+    function setMerkleReserveBps(uint256 bps) external;
 
     function balanceOf(address account) external view returns (uint256);
 

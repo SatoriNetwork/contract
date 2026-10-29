@@ -5,14 +5,14 @@
  * Round 1 exercised each NEW feature in isolation (referral skim; off-chain
  * dial / Merkle lanes; predict-logic module; airdrop; a cross-feature e2e).
  * This suite attacks the SEAMS: does every PRE-EXISTING subsystem still behave
- * correctly when the dial is live (offchainBudget > 0 → on-chain gross scaled
+ * correctly when the dial is live (offchainShareBps > 0 → on-chain gross scaled
  * DOWN), a Merkle root is banking reserve, and the referral skim is diverting
  * 5%?
  *
  * The single load-bearing question for most attacks: every derived on-chain
  * quantity (the predictor pools) is supposed to RE-BASE to the round's FROZEN
- * on-chain gross (`TOKENS_PER_ROUND − devRateNow − offchainBudget`, i.e. the
- * residual after the senior dev fee, minus the dial), not to the
+ * on-chain gross (the residual after the senior dev fee, less the off-chain
+ * share of it), not to the
  * raw `TOKENS_PER_ROUND`. (The platform fee no longer re-bases here — it moved
  * to the immutable token as a senior, off-budget dev fee; see
  * test/next/DevFee.test.js.) If any subsystem forgot to re-base, conservation to
@@ -88,17 +88,17 @@ const netOfCut = (amount) => amount - referralCut(amount);
 //
 // READ FROM THE HUB. This file used to write it out as 1152 (= 1440 − 288); the
 // emission is the hub's decaying schedule now, so every dial figure below is
-// expressed as a FRACTION of the residual rather than as a token literal.
+// expressed as a share of the residual rather than as a token literal.
 let RESIDUAL;
-let MAX_OFFCHAIN; // deepest legal dial → gross floor = 1 wei
+const MAX_SHARE = 9999n; // deepest legal share → the smallest on-chain gross
+const SHARE_B = 5000n;
 async function loadResidual(satori) {
   RESIDUAL = (await satori.emissionRateNow()) - (await satori.devRateNow());
-  MAX_OFFCHAIN = RESIDUAL - 1n;
 }
-// On-chain game gross when the dial routes `offchain` off-chain.
-const grossOf = (offchain) => RESIDUAL - offchain;
-// The dial that leaves `num/den` of the residual on-chain.
-const dialLeaving = (num, den) => RESIDUAL - (RESIDUAL * num) / den;
+// On-chain game gross when the share routes `bps` of the residual off-chain.
+const grossOf = (bps) => RESIDUAL - (RESIDUAL * bps) / 10000n;
+// The share (bps) that leaves about `num/den` of the residual on-chain.
+const dialLeaving = (num, den) => 10000n - (10000n * num) / den;
 // The PAYABLE round budget IS the on-chain gross: the first-predictor bonus
 // that used to be reserved out of it was removed, and the platform fee moved
 // off-budget to the token. Kept as a named function so the (now trivial)
@@ -134,7 +134,7 @@ function referralPaidEvents(receipt, rewards) {
 }
 
 // Bare stack with a parameterised platform-fee bps and a merkle contract wired
-// so the dial actually banks reserve (setOffchainBudget mirrors into core's
+// so the dial actually banks reserve (setOffchainShareBps mirrors into core's
 // merkle-reserve accumulator, which we can then observe). The default stream is
 // initialised by the shared fixture itself (exactly as production deploys), so
 // game id 1 is the default game and the first stream a test creates is id 2.
@@ -143,7 +143,7 @@ async function deployStack(platform, { feeBps = 0 } = {}) {
   // SatoriHub (ISatoriCore facade) + the existing children, wired by the shared
   // fixture and exposed as a monolith-shaped `satori` shim whose getAddress()
   // resolves to the HUB. The rewards admin is the deployer/owner (signer[0]),
-  // matching this file's `owner` handle used to drive setOffchainBudget. The
+  // matching this file's `owner` handle used to drive setOffchainShareBps. The
   // platform-fee bps is chosen from the fee-variant fixtures.
   const fix =
     feeBps === 2000 ? await deploySatoriFixture()
@@ -172,7 +172,7 @@ async function deployStack(platform, { feeBps = 0 } = {}) {
 //
 // The headline safety identity is:
 //   Σ(predictor credits) + Σ(referral skims) == the round's on-chain gross.
-// Round 1 only ever proved this at offchainBudget==0 (gross == the residual). Here we
+// Round 1 only ever proved this at offchainShareBps==0 (gross == the residual). Here we
 // re-run the SAME topology with the dial LIVE and assert the sum collapses to
 // the *shrunk frozen gross*, not to 1440. If a predictor pool were still sized
 // off TOKENS_PER_ROUND instead of the frozen gross, this sum would overshoot
@@ -202,7 +202,7 @@ describe("SEAM 1: predictor-pool conservation re-bases to the shrunk gross", fun
     }
     // Dial live for FUTURE rounds. Set before any round is touched so the
     // producing round freezes the shrunk gross.
-    await rewards.connect(owner).setOffchainBudget(OFFCHAIN);
+    await rewards.connect(owner).setOffchainShareBps(OFFCHAIN);
     await advanceRound();
   });
 
@@ -232,6 +232,9 @@ describe("SEAM 1: predictor-pool conservation re-bases to the shrunk gross", fun
     const mktBefore = await rewards.unclaimedRewards(MARKETING);
     await registry.setValue(A, 110);
     await registry.setValue(B, 110);
+    // R's own gross, read in R: the rate steps every round's worth issued.
+    await loadResidual(satori);
+    GROSS = grossOf(OFFCHAIN);
 
     await satori.connect(dave).predictMultipleWithPayloads([{ gameId: A, payload: pack1(UP) }]);
     await satori.connect(eve).predictMultipleWithPayloads([{ gameId: A, payload: pack1(UP) }]);
@@ -339,7 +342,7 @@ describe("SEAM 3: delegation split pays TWO independent 5% skims under the dial 
     const dgtRef = signers[4]; // delegate's referral
     const voter = signers[5];
 
-    await rewards.connect(owner).setOffchainBudget(dialLeaving(23n, 48n)); // dial live → gross 23/48 of the residual
+    await rewards.connect(owner).setOffchainShareBps(dialLeaving(23n, 48n)); // share live → gross ~23/48 of the residual
 
     await satori.transfer(delegator.address, E(60));
     await satori.transfer(delegate.address, E(10));
@@ -413,7 +416,7 @@ describe("SEAM 3: delegation split pays TWO independent 5% skims under the dial 
     const delegate = signers[2];
     const voter = signers[5];
 
-    await rewards.connect(owner).setOffchainBudget(E(600)); // gross 552, dial live
+    await rewards.connect(owner).setOffchainShareBps(SHARE_B); // share live, gross shrunk
 
     await satori.transfer(delegator.address, E(60));
     await satori.transfer(delegate.address, E(10));
@@ -445,10 +448,10 @@ describe("SEAM 3: delegation split pays TWO independent 5% skims under the dial 
     expect(totalPreSkim).to.be.gt(0n);
 
     // Independent upper bound: the reward earned can never exceed the round's
-    // whole on-chain GROSS sized off the SHRUNK dial (552 == the payable
+    // whole on-chain GROSS sized off the SHRUNK share (== the payable
     // budget). If any share had been sized off TOKENS_PER_ROUND, this would
-    // overshoot 552.
-    const gross = grossOf(E(600)); // 552
+    // overshoot it.
+    const gross = grossOf(SHARE_B);
     expect(totalPreSkim).to.be.lte(gross + RAW_TOLERANCE);
     // There is no skim-exempt component any more (the first-predictor bonus is
     // gone), so the skimmed base is the WHOLE reward. This proves the skim is
@@ -543,7 +546,7 @@ describe("SEAM 6: a real bounty win stays referral-exempt (ERC20 space) with the
     const POT = E(1000);
     const RATE = E(200);
 
-    await rewards.connect(owner).setOffchainBudget(dialLeaving(7n, 12n)); // dial → gross 7/12 of the residual
+    await rewards.connect(owner).setOffchainShareBps(dialLeaving(7n, 12n)); // share → gross ~7/12 of the residual
     // NEW timing: a dial set in round R freezes R at the OLD dial and only takes
     // effect from R+1. Advance one round so the dial is actually LIVE for the
     // round in which the staker predicts (predictRound below); otherwise that
@@ -683,19 +686,18 @@ describe("SEAM 7: burn-vote weight + allocation math is dial-invariant and safe 
     await loadResidual(satori);
   });
 
-  it("at the deepest legal dial (gross 1 wei), a full predict→settle cycle does not revert and re-bases to the shrunk gross (pool scaled down, not broken)", async function () {
+  it("at the deepest legal share (9999 bps), a full predict→settle cycle does not revert and re-bases to the shrunk gross (pool scaled down, not broken)", async function () {
     const p = signers[1];
     const voter = signers[2];
     await satori.transfer(p.address, E(50));
     await satori.transfer(voter.address, E(50));
 
-    // The senior dev fee bounds the dial below the residual; the dial routes only
-    // that residual off-chain, so the deepest legal dial shrinks the on-chain
-    // gross to 1 wei (the fee's 15% is untouchable — see
-    // test/next/DevFee.test.js). The pool re-bases DOWN to that gross; the cycle
-    // must still not revert and stay cap-safe.
-    await rewards.connect(owner).setOffchainBudget(MAX_OFFCHAIN); // gross 1 wei
-    const GROSS = grossOf(MAX_OFFCHAIN); // 1 wei
+    // The share routes only the residual off-chain (the fee's 15% is untouchable
+    // — see test/next/DevFee.test.js), and is bounded below 10000, so the
+    // deepest legal share leaves 0.01% of the residual on-chain. The pool
+    // re-bases DOWN to that gross; the cycle must still not revert and stay cap-safe.
+    await rewards.connect(owner).setOffchainShareBps(MAX_SHARE);
+    const GROSS = grossOf(MAX_SHARE);
     const s = await streamIdFrom(await satori[SIMPLE3]("S", owner.address, 1440), satori);
     await voteFor(satori, voter, s);
     await advanceRound();
@@ -731,7 +733,7 @@ describe("SEAM 7: burn-vote weight + allocation math is dial-invariant and safe 
       const { satori: sat, voting: vt, rewards: rw, registry: rg } = stack;
       const va = signers[1];
       await sat.transfer(va.address, E(30));
-      if (offchain > 0n) await rw.connect(o).setOffchainBudget(offchain);
+      if (offchain > 0n) await rw.connect(o).setOffchainShareBps(offchain);
 
       const A = await streamIdFrom(await sat[SIMPLE3]("A", o.address, 1440), sat);
       const B = await streamIdFrom(await sat[SIMPLE3]("B", o.address, 1440), sat);

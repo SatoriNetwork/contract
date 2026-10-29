@@ -67,7 +67,7 @@ export const rewardsIface = iface('SatoriRewards', [
   'DelegatorRewardsAccrued',
   'RewardsClaimed',
   'RoundBudgetFrozen',
-  'OffchainBudgetSet',
+  'OffchainShareSet',
   // A delegate's inbound power is the latest newDelegatePower naming it; a
   // delegator's delegate is its latest Delegated (or none after Undelegated).
   'PredictionDelegated',
@@ -146,6 +146,16 @@ export const tokenIface = new Interface([
   'function deploymentBlock() view returns (uint256)',
 ]);
 
+// Each round's off-chain reserve, as the hub banked it.
+export const hubIface = iface('SatoriHub', ['MerkleReserveBanked']);
+
+// The absolute dial the share replaced (2026-10-26). No compiled contract has it
+// any more, but a stack upgraded in place emitted it before the upgrade, and the
+// rounds it governed are still read.
+export const legacyRewardsIface = new Interface([
+  'event OffchainBudgetSet(uint256 newOffchainBudget, uint256 roundSet, address indexed setter)',
+]);
+
 export const TOPICS = {
   predictionMade: engineIface.getEvent('PredictionMade')!.topicHash,
   predictionScored: engineIface.getEvent('PredictionScored')!.topicHash,
@@ -165,7 +175,9 @@ export const TOPICS = {
   delegatorRewardsAccrued: rewardsIface.getEvent('DelegatorRewardsAccrued')!.topicHash,
   rewardsClaimed: rewardsIface.getEvent('RewardsClaimed')!.topicHash,
   roundBudgetFrozen: rewardsIface.getEvent('RoundBudgetFrozen')!.topicHash,
-  offchainBudgetSet: rewardsIface.getEvent('OffchainBudgetSet')!.topicHash,
+  offchainShareSet: rewardsIface.getEvent('OffchainShareSet')!.topicHash,
+  offchainBudgetSet: legacyRewardsIface.getEvent('OffchainBudgetSet')!.topicHash,
+  merkleReserveBanked: hubIface.getEvent('MerkleReserveBanked')!.topicHash,
   predictionDelegated: rewardsIface.getEvent('PredictionDelegated')!.topicHash,
   predictionUndelegated: rewardsIface.getEvent('PredictionUndelegated')!.topicHash,
   delegatePowerSynced: rewardsIface.getEvent('DelegatePowerSynced')!.topicHash,

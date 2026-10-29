@@ -231,9 +231,12 @@ describe("Earn-time dev fee — a fee change never touches what was earned", fun
       await setFee(2500n);
       const tx2 = await satori.connect(bob).predictMultipleWithPayloads([{ gameId: gameA, payload: pack1(UP) }]);
       expect(eventsNamed(await tx2.wait(), rewards, "RoundBudgetFrozen").length).to.equal(0);
-      // ...and prices the next one net of 25%.
+      // ...and prices the next one net of 25%, at the next round's own rate
+      // (the first touch above may have taken a step).
+      const rateNext = await hub.emissionRateNext();
       await advanceRound();
-      expect(await hub.onChainGrossNow()).to.equal(rate - (rate * 2500n) / 10000n);
+      expect(await hub.emissionRateNow()).to.equal(rateNext);
+      expect(await hub.onChainGrossNow()).to.equal(rateNext - (rateNext * 2500n) / 10000n);
     });
   });
 });

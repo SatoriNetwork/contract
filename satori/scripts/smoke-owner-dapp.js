@@ -30,14 +30,14 @@ async function main() {
   console.log("admin:", await rewards.admin(), "| connected:", deployer.address);
   const merkleAddr = await hub.merkle();
   console.log("satoriMerkle wired:", merkleAddr);
-  console.log("offchainBudget:", F(await rewards.offchainBudget()),
+  console.log("offchainShareBps:", String(await rewards.offchainShareBps()),
               "| onChainCeil:", F(await lens.onChainRewardCeiling()),
               "| merkleCeil:", F(await hub.merkleReserveCeiling()));
 
-  console.log("\n=== write: Set dial (setOffchainBudget 200) ===");
-  await (await rewards.setOffchainBudget(ethers.parseEther("200"))).wait();
+  console.log("\n=== write: Set split (setOffchainShareBps 2500) ===");
+  await (await rewards.setOffchainShareBps(2500)).wait();
   await hre.network.provider.send("evm_mine", []);
-  console.log("offchainBudget:", F(await rewards.offchainBudget()),
+  console.log("offchainShareBps:", String(await rewards.offchainShareBps()),
               "| onChainCeil:", F(await lens.onChainRewardCeiling()),
               "| merkleCeil:", F(await hub.merkleReserveCeiling()));
 
@@ -66,7 +66,7 @@ async function main() {
     const ONE = ethers.WeiPerEther;
     const before = await hub.emission();
     const orig = before.ratioWad;
-    const probe = orig === ONE ? await hub.PHI_INV() : (orig === ONE / 2n ? await hub.PHI_INV() : ONE / 2n);
+    const probe = orig === ONE ? await hub.DEFAULT_EMISSION_RATIO() : (orig === ONE / 2n ? await hub.DEFAULT_EMISSION_RATIO() : ONE / 2n);
     console.log(`\n=== write: setEmissionRatio round-trip ${F(orig)} -> ${F(probe)} -> ${F(orig)} ===`);
     await (await hub.setEmissionRatio(probe)).wait();
     if ((await hub.emission()).ratioWad !== probe) throw new Error("setEmissionRatio(probe) did not land");

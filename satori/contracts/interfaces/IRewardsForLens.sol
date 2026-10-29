@@ -22,6 +22,6 @@ interface IRewardsForLens {
     function delegationCheckpointAt(address user, uint256 i, uint256 j) external view returns (uint24 round, uint224 value);
     function delegationOpenRoundAt(address user, uint256 i, uint256 j) external view returns (uint24 round, uint224 banked);
     function delegatorRewardRatePerRound(address delegate, uint256 round) external view returns (uint256);
-    function offchainBudget() external view returns (uint256);
+    function offchainShareBps() external view returns (uint256);
     function registrationFee() external view returns (uint256);
 }

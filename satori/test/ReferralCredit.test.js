@@ -48,13 +48,14 @@ async function deployStack() {
 describe("Referral eager credit — 5% skimmed at credit time", function () {
   let satori, rewards, registry;
   let owner, alice, bob, carol, platform;
-  // The on-chain round pool, read from the chain (was the 1440 − 288 literal).
-  let GROSS;
+  // The on-chain round pool, read from the chain (was the 1440 − 288 literal),
+  // and the round's budget read off the hub's rate, both in the round `earn`
+  // predicts in: the rate steps every round's worth issued.
+  let GROSS, earnBudget;
 
   beforeEach(async function () {
     [owner, alice, bob, carol, platform] = await ethers.getSigners();
     ({ satori, rewards, registry } = await deployStack());
-    GROSS = await onChainGrossNow(satori);
     await satori.transfer(alice.address, E(100));
     await satori.transfer(bob.address, E(100));
     await satori.transfer(carol.address, E(100));
@@ -69,6 +70,8 @@ describe("Referral eager credit — 5% skimmed at credit time", function () {
     const sid = await streamIdFrom(await satori[SIMPLE3]("S", owner.address, 1440), satori);
     await registry.setValue(sid, 100);
     await voteFor(satori, subject, sid);
+    GROSS = await onChainGrossNow(satori);
+    earnBudget = (await satori.emissionRateNow()) - (await satori.devRateNow());
     await satori.connect(subject).predictMultipleWithPayloads([{ gameId: sid, payload: pack1(UP) }]);
     expect(await rewards.unclaimedRewards(subject.address)).to.equal(0n); // nothing credited at predict time
     await advanceRound(); await registry.setValue(sid, 110);
@@ -154,7 +157,7 @@ describe("Referral eager credit — 5% skimmed at credit time", function () {
     // The first term was `ROUND_REWARD_BUDGET()` — the token's 1440. That is the
     // outer constitutional ENVELOPE, not the rate: the hub mints under it at its
     // own decaying schedule, so anchoring on it over-states the round.
-    const budget = (await satori.emissionRateNow()) - (await satori.devRateNow());
+    const budget = earnBudget;
     expect(budget).to.equal(GROSS);
     expect(budget).to.be.lt(await satori.ROUND_REWARD_BUDGET()); // strictly inside the envelope
     expect(net + cut).to.equal(budget);                 // nothing minted on top, nothing lost

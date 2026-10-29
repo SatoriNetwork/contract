@@ -505,7 +505,7 @@ describe("ADV-COV scoring", function () {
     // cut, no first-predictor bonus reservation), so the budget IS the on-chain
     // gross. The platform fee moved to the immutable token as a senior,
     // off-budget dev fee (see test/next/DevFee.test.js), so that gross is the
-    // RESIDUAL after it: emissionRateNow - devRateNow (offchainBudget == 0
+    // RESIDUAL after it: emissionRateNow - devRateNow (offchainShareBps == 0
     // here). Both come from the HUB: the emission is its decaying schedule, and
     // the token can no longer compute a per-round fee slice because it does not
     // know that schedule.

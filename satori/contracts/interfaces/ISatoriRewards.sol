@@ -121,16 +121,20 @@ interface ISatoriRewards {
      * @param owner The reward owner (same address as caller; this is the
      *        non-delegated path — see `claimFor` for the claim-delegation
      *        variant)
-     * @param recipient The address to send rewards to
+     * @param recipient The address to send rewards to; only `owner` once the
+     *        owner has predicted this round
      * @return The amount of rewards claimed
      */
     function claim(address owner, address recipient) external returns (uint256);
 
     /**
-     * @notice Claim rewards for an owner using claim delegation authorization
+     * @notice Claim rewards for an owner on someone else's call
      * @param owner The reward owner
-     * @param caller The original caller (owner or authorized claim delegate)
-     * @param recipient The address to send rewards to
+     * @param caller The original caller: the owner's named claimer (any
+     *        recipient), or anyone when no claimer is named and `recipient` is
+     *        `owner`. A wallet that names itself as claimer opts out.
+     * @param recipient The address to send rewards to; only `owner` once the
+     *        owner has predicted this round
      * @return The amount of rewards claimed
      */
     function claimFor(address owner, address caller, address recipient) external returns (uint256);
@@ -138,6 +142,8 @@ interface ISatoriRewards {
     /**
      * @notice Self-claim that mints `fee` to `feeTo` out of the bucket and the
      *         remainder to `recipient`. Reverts if `fee` exceeds the bucket.
+     *         Once the owner has predicted this round, `recipient` must be the
+     *         owner and a nonzero fee may go only to `officialRelayer`.
      */
     function claimWithFee(address owner, address recipient, address feeTo, uint256 fee) external returns (uint256);
 

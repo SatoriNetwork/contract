@@ -58,11 +58,11 @@ contract EmissionGhostTest is Test {
     }
 
     function test_reserveBankIsGhosted() public {
-        handler.setOffchainBudget(50);
+        handler.setOffchainShare(5000);
         handler.advanceTime(3 days);
         handler.syncEmission();
         handler.merkleMint(0, 1);
-        assertGt(handler.ghostReserveBanks(), 0, "the dial must bank reserve");
+        assertGt(handler.ghostReserveBanks(), 0, "the share must bank reserve");
         assertGt(handler.callCount_merkleMint(), 0);
         assertEq(_issued(), handler.ghostIssued());
     }

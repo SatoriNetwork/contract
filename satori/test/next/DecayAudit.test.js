@@ -3,17 +3,25 @@ const { ethers } = require("hardhat");
 const { loadFixture } = require("@nomicfoundation/hardhat-network-helpers");
 const { deploySatoriFixtureNoFee, pack1, voteFor } = require("../fixtures");
 const {
-  ONE, BASE, PHI_INV, T0, stepRate, grossUp, rewardsSigner, issueTo,
+  ONE, BASE, DEFAULT_RATIO, T0, stepRate, grossUp, rewardsSigner, issueTo,
   currentRound, atRound, advanceRound,
 } = require("./emissionHelpers");
 
-// A bound checked when a value is SET does not stay true once the rate falls
-// under it. The rate falls by issuance (an automatic step) or by an admin
-// ratio cut that the next step applies; either can land under a dial that was
-// legal against the old residual. Each test pins one site that must survive.
+// The off-chain split is a share of each round's residual, so when the rate
+// falls — by issuance (an automatic step) or by an admin ratio cut that the
+// next step applies — both lanes follow the new residual instead of a fixed
+// amount overrunning it. These run at the deepest legal share (9999 bps), where
+// a fixed amount would have overrun soonest. Each test pins one site.
+//
+// The default schedule steps every round's worth, so the rate falls a little at
+// almost every touch. To read each lane against ONE known fall, these hold the
+// rate with the lever (ratio 1.0) on either side of it, and take the fall as a
+// single step: the same mechanism, isolated.
 
 const SIMPLE3 = "createSimpleDataStream(string,address,uint24)";
 const net = (x) => x - (x * 500n) / 10000n;
+const SHARE = 9999n;
+const part = (residual) => (residual * SHARE) / 10000n;
 
 function leafOf(addr, amount) {
   const inner = ethers.keccak256(
@@ -43,7 +51,7 @@ const TRIGGERS = [
   { name: "an admin ratio cut applied by the next step", ratio: ONE / 10n },
 ];
 
-describe("Decay audit — rate falls under a standing dial", function () {
+describe("Decay audit — rate falls under a standing share", function () {
   this.timeout(600000);
   let fix, satori, hub, rewards, merkle, token, rw, bps;
   let owner, alice, bob, publisher;
@@ -71,84 +79,111 @@ describe("Decay audit — rate falls under a standing dial", function () {
     expect(await hub.merkleMinted(), "rewardMint's merkle bound").to.be.lte(reserve);
   }
 
-  /** Sets the deepest dial legal now, then makes the rate fall three rounds later, in round x. */
-  async function maxDialThenFall(trigger) {
+  /** Holds the rate, so the next round's is this one's. */
+  async function holdRate() {
+    await hub.connect(owner).setEmissionRatio(ONE);
     await advanceRound();
-    const residual0 = residualOf(await hub.emissionRateNow());
+    const rate = await hub.emissionRateNow();
+    expect(await hub.emissionRateNext()).to.equal(rate);
+    return rate;
+  }
+
+  /** Banks through this round, then takes exactly one step at `ratio` and holds again. */
+  async function oneFall(ratio) {
+    await hub.syncEmission();
+    await hub.connect(owner).setEmissionRatio(ratio);   // leaving 1.0 re-bases one round's worth out
+    const steps = (await hub.emission()).stepsTaken;
+    await issueTo(hub, token, rw, (await hub.emission()).nextStepAt);
+    expect((await hub.emission()).stepsTaken).to.equal(steps + 1n);
+    await hub.connect(owner).setEmissionRatio(ONE);
+  }
+
+  /** Sets the deepest share, then makes the rate fall three rounds later, in round x. */
+  async function maxShareThenFall(trigger) {
+    const rate0 = await holdRate();
+    const residual0 = residualOf(rate0);
     const r = await currentRound(token);
-    await rewards.connect(owner).setOffchainBudget(residual0 - 1n);   // prices round r at the old dial
+    await rewards.connect(owner).setOffchainShareBps(SHARE);   // prices round r at the old share
     const allowanceAtR = await hub.onChainAllowance();
-    if (trigger.ratio !== null) await hub.connect(owner).setEmissionRatio(trigger.ratio);
     await atRound(token, r + 3n);
     const x = await currentRound(token);
-    await issueTo(hub, token, rw, T0);
-    const rate1 = stepRate(BASE, trigger.ratio ?? PHI_INV);
+    await oneFall(trigger.ratio ?? DEFAULT_RATIO);
+    const rate1 = stepRate(rate0, trigger.ratio ?? DEFAULT_RATIO);
     expect(await hub.emissionRateNext()).to.equal(rate1);
     const residual1 = residualOf(rate1);
-    // What the schedule pays the general lanes over the dial's rounds (r, cur].
+    // What the schedule pays the general lanes over the share's rounds (r, cur].
     const scheduleResidual = (cur) => residual0 * (x - r) + residual1 * (cur - x);
     return { r, x, residual0, residual1, allowanceAtR, scheduleResidual };
   }
 
   for (const trigger of TRIGGERS) {
     describe(`triggered by ${trigger.name}`, function () {
-      it("the merkle reserve yields to the new residual and the two lanes sum to the schedule's residual", async function () {
-        const { r, x, residual0, residual1, allowanceAtR, scheduleResidual } = await maxDialThenFall(trigger);
+      it("the merkle reserve follows the new residual and the two lanes sum to the schedule's residual", async function () {
+        const { r, x, residual0, residual1, allowanceAtR, scheduleResidual } = await maxShareThenFall(trigger);
         await atRound(token, x + 40n);
         const cur = await currentRound(token);
         const owed = scheduleResidual(cur);
 
-        // The old dial kept running would have banked past the residual: the scenario is real.
-        const unyielded = (residual0 - 1n) * (cur - r);
-        expect(unyielded, "the stale dial must actually overrun").to.be.gt(owed);
+        // An amount fixed at the old residual would have banked past the schedule: the scenario is real.
+        const fixed = part(residual0) * (cur - r);
+        expect(fixed, "a fixed amount must actually overrun").to.be.gt(owed);
 
-        const expected = (residual0 - 1n) * (x - r) + (residual1 - 1n) * (cur - x);
+        const expected = part(residual0) * (x - r) + part(residual1) * (cur - x);
         expect(await hub.merkleReserveCeiling()).to.equal(expected);
 
         // Pricing the round banks the reserve the projection showed, and prices
-        // the untouched rounds at the 1-wei gross the yield leaves the on-chain lane.
+        // the untouched rounds at the new residual's on-chain part.
         await hub.connect(rw).freezeRoundGross(cur);
         expect(await hub.merkleReserveCumulative()).to.equal(expected);
-        expect(await hub.onChainGrossNow()).to.equal(1n);
+        expect(await hub.onChainGrossNow()).to.equal(residual1 - part(residual1));
         const allowanceGrowth = (await hub.onChainAllowance()) - allowanceAtR;
-        expect(allowanceGrowth + expected, "reserve + on-chain room == residual, round by round").to.equal(owed);
+        // freezeRoundGross prices every round untouched since r at the gross live
+        // now, so the pre-step rounds (r, x] get the post-step on-chain room while
+        // their reserve banked at the pre-step residual. The on-chain lane is
+        // short by exactly that, never over: nobody was credited in those rounds.
+        const gross0 = residual0 - part(residual0);
+        const gross1 = residual1 - part(residual1);
+        expect(allowanceGrowth).to.equal(gross1 * (cur - r));
+        expect(allowanceGrowth + expected, "reserve + on-chain room, short only by the late pricing")
+          .to.equal(owed - (gross0 - gross1) * (x - r));
+        expect(allowanceGrowth + expected).to.be.lte(owed);
         expect(expected).to.be.lte((await token.generalAccrued()) - (await hub.onChainMinted()));
         await expectBooksHold();
       });
 
-      it("a merkle claim on a stale dial pays only the yielded reserve", async function () {
-        const { r, x, residual0, residual1, scheduleResidual } = await maxDialThenFall(trigger);
+      it("a merkle claim after the fall pays only the reserve the share banked", async function () {
+        const { r, x, residual0, residual1, scheduleResidual } = await maxShareThenFall(trigger);
         await atRound(token, x + 40n);
         const cur = await currentRound(token);
         const huge = (await hub.emissionCeiling()) * 10n;
         await merkle.connect(publisher).setMerkleRoot(leafOf(alice.address, huge));
         await merkle.connect(alice).claimMerkle(huge, []);
 
-        const expected = (residual0 - 1n) * (x - r) + (residual1 - 1n) * (cur - x);
+        const expected = part(residual0) * (x - r) + part(residual1) * (cur - x);
         expect(await hub.merkleMinted()).to.equal(expected);
         expect(await hub.merkleMinted()).to.equal(await hub.merkleReserveCumulative());
         expect(await token.balanceOf(alice.address)).to.equal(expected);
         expect(expected).to.be.lt(scheduleResidual(cur));
         await expectBooksHold();
-        // The token's envelope alone would have let the stale dial through: the yield is what holds.
-        const stale = (residual0 - 1n) * (cur - r);
+        // The token's envelope alone would have let a fixed amount through: the share is what holds.
+        const stale = part(residual0) * (cur - r);
         const room = (await token.rewardCeiling()) - (await token.generalAccrued()) - (await token.devFeeAccrued());
         expect(room).to.be.gte(grossUp(stale - expected, bps));
       });
 
-      it("the on-chain dial yields instead of reverting when the residual falls under it", async function () {
-        const { x } = await maxDialThenFall(trigger);
+      it("the share stays legal when the residual falls, and can still be changed", async function () {
+        const { x, residual1 } = await maxShareThenFall(trigger);
         await atRound(token, x + 40n);
-        const shrunk = residualOf(await hub.emissionRateNow());
-        expect(await rewards.offchainBudget()).to.be.gt(shrunk);
-        await expect(rewards.connect(owner).setOffchainBudget(0n)).to.not.be.reverted;
+        expect(residualOf(await hub.emissionRateNow())).to.equal(residual1);
+        expect(await rewards.offchainShareBps()).to.equal(SHARE);
+        await expect(rewards.connect(owner).setOffchainShareBps(0n)).to.not.be.reverted;
       });
     });
   }
 
-  it("a fee raise under a standing dial never shrinks the banked reserve, and all of it still claims", async function () {
+  it("a fee raise under a standing share never shrinks the banked reserve, and all of it still claims", async function () {
     await advanceRound();
-    await rewards.connect(owner).setOffchainBudget(residualOf(await hub.emissionRateNow()) - 1n);
+    await rewards.connect(owner).setOffchainShareBps(SHARE);
     await atRound(token, (await token.deploymentRound()) + 30n);   // the fee dial's gap counts from genesis
     await hub.syncEmission();
     const banked = await hub.merkleReserveCumulative();
@@ -164,7 +199,7 @@ describe("Decay audit — rate falls under a standing dial", function () {
     const logged = rc.logs.filter((l) => l.address === hub.target)
       .map((l) => { try { return hub.interface.parseLog(l); } catch { return null; } })
       .filter((p) => p && p.name === "MerkleReserveBanked");
-    const grown = banked + residualOf(await hub.emissionRateNow()) - 1n;   // yields to the new residual
+    const grown = banked + part(residualOf(await hub.emissionRateNow()));   // the share of the new residual
     expect(logged.length).to.equal(1);
     expect(logged[0].args.throughRoundExclusive).to.equal((await currentRound(token)) + 1n);
     expect(logged[0].args.cumulative).to.equal(grown);
@@ -178,19 +213,19 @@ describe("Decay audit — rate falls under a standing dial", function () {
     await expectBooksHold();
   });
 
-  it("after an automatic step under a max dial: reserve takes residual-1, on-chain gross is 1 wei, pre-step credit still claims", async function () {
+  it("after an automatic step under the deepest share: both lanes split the new residual, pre-step credit still claims", async function () {
     await satori.transfer(alice.address, ethers.parseEther("100"));
     await satori.transfer(bob.address, ethers.parseEther("100"));
-    await advanceRound();
+    const rate0 = await holdRate();
     const registry = fix.registry;
     const sid = await streamIdFrom(await satori[SIMPLE3]("S", owner.address, 1440), satori);
 
-    // Round R0: alice predicts at dial 0; the max dial lands from R0+1.
+    // Round R0: alice predicts at share 0; the deepest share lands from R0+1.
     await registry.setValue(sid, 100);
     await voteFor(satori, alice, sid);
     await satori.connect(alice).predictMultipleWithPayloads([{ gameId: sid, payload: pack1(1) }]);
     const residual0 = residualOf(await hub.emissionRateNow());
-    await rewards.connect(owner).setOffchainBudget(residual0 - 1n);
+    await rewards.connect(owner).setOffchainShareBps(SHARE);
 
     await advanceRound();
     await registry.setValue(sid, 110);
@@ -200,8 +235,8 @@ describe("Decay audit — rate falls under a standing dial", function () {
     const earned = await rewards.unclaimedRewards(alice.address);
     expect(earned).to.equal(net(residual0));
 
-    await issueTo(hub, token, rw, T0); // the step lands under the max dial
-    const residual1 = residualOf(stepRate(BASE, PHI_INV));
+    await oneFall(DEFAULT_RATIO); // the step lands under the deepest share
+    const residual1 = residualOf(stepRate(rate0, DEFAULT_RATIO));
     await advanceRound();
     expect(residualOf(await hub.emissionRateNow())).to.equal(residual1);
 
@@ -212,11 +247,12 @@ describe("Decay audit — rate falls under a standing dial", function () {
     await advanceRound();
     await registry.setValue(sid, 140);
     const m1 = await hub.merkleReserveCeiling();
-    expect(m1 - m0, "reserve accrues residual-1 per round").to.equal(residual1 - 1n);
+    expect(m1 - m0, "reserve accrues the share of the new residual").to.equal(part(residual1));
     await advanceRound();
     await registry.setValue(sid, 150);
     await satori.settlePrediction(bob.address, sid);
-    expect(await rewards.unclaimedRewards(bob.address), "on-chain gross yields to 1 wei").to.equal(1n);
+    expect(await rewards.unclaimedRewards(bob.address), "on-chain gross is the rest of the new residual")
+      .to.equal(net(residual1 - part(residual1)));
 
     for (let i = 0; i < 10; i++) await advanceRound();
     const bal = await token.balanceOf(alice.address);

@@ -1,4 +1,4 @@
-import { payoutForStream, ROUND_REWARD_BUDGET, payableBudget, scoringSplit } from './roundPayout';
+import { payoutForStream, ROUND_REWARD_BUDGET } from './roundPayout';
 
 // These pin the three separate mistakes that were live in StreamsTab at once
 // (found 2026-08-03). Each `it` below fails against the old implementation.
@@ -91,36 +91,6 @@ describe('payoutForStream', () => {
   });
 });
 
-// The emission is a MINT, not a payout: the dev fee and the off-chain dial come
-// off before the games see anything. All three terms are read from the chain —
-// the emission included, since it is SatoriHub's issuance-indexed schedule and
-// not a constant this file can know.
-describe('payableBudget', () => {
-  it('takes the dev fee and the off-chain dial off the EMISSION, not the envelope', () => {
-    // Nothing else is reserved: _computeRoundBudget(gross) returns gross.
-    expect(payableBudget(1000, 150, 10)).toBeCloseTo(840, 9);
-  });
-
-  it('IS the whole emission when both the fee and the dial are zero', () => {
-    // The first-predictor bonus is gone from the contracts, so unlike the 12h
-    // era there is no always-on reservation left: gross flows through whole.
-    expect(payableBudget(846.62, 0, 0)).toBeCloseTo(846.62, 9);
-  });
-
-  it('is driven by the emission, NOT by ROUND_REWARD_BUDGET', () => {
-    // The regression this file exists to stop repeating. `payableBudget` used
-    // to start from the 1440 constant, so an emission below the envelope would
-    // have been displayed at the envelope's size — overstating every payout.
-    const stepped = ROUND_REWARD_BUDGET * 0.2;
-    expect(payableBudget(stepped, 0, 0)).toBeCloseTo(stepped, 9);
-    expect(payableBudget(stepped, 0, 0)).toBeLessThan(ROUND_REWARD_BUDGET);
-  });
-
-  it('never goes negative if the dials are cranked past the mint', () => {
-    expect(payableBudget(1000, 900, 200)).toBe(0);
-  });
-});
-
 // The value-provider cut is GONE from the contracts — no StreamMeta field, no getter,
 // no setter, nothing paid to providers — so a stream's whole allocation reaches its
 // predictors. These pin that there is no deduction left anywhere in the payout math.
@@ -136,36 +106,5 @@ describe('payoutForStream pays the full allocation (no provider cut)', () => {
     const total = ONE_ * BigInt(4);
     expect(payoutForStream(1, votes, total, 1200)).toBeCloseTo(300, 6);
     expect(payoutForStream(2, votes, total, 1200)).toBeCloseTo(900, 6);
-  });
-});
-
-describe('scoringSplit', () => {
-  it('is all on-chain when the dial is zero', () => {
-    expect(scoringSplit(wei(846), wei(127), BigInt(0))).toEqual({ onChain: 100, offChain: 0 });
-  });
-
-  it('is a share of the residual after the dev fee, not of the emission', () => {
-    // Dial at half the residual reads 50/50, though it is only ~42% of emission.
-    expect(scoringSplit(wei(846), wei(126), wei(360))).toEqual({ onChain: 50, offChain: 50 });
-  });
-
-  it('reads 50/50 for the floored half of an odd-wei residual', () => {
-    const residual = wei(719) + BigInt(1);
-    expect(scoringSplit(residual + wei(127), wei(127), residual / BigInt(2))).toEqual({ onChain: 50, offChain: 50 });
-  });
-
-  it('always sums to 100', () => {
-    const s = scoringSplit(wei(900), wei(135), wei(255));
-    expect(s.onChain + s.offChain).toBe(100);
-  });
-
-  it('a dial left above a stepped-down residual reads as the residual, as the chain yields it', () => {
-    // Dial set at the base rate's max (residual - 1), then a step to 523.24.
-    const cents = (n: number) => BigInt(Math.round(n * 100)) * ONE / BigInt(100);
-    expect(scoringSplit(cents(523.24), cents(78.49), cents(719.63))).toEqual({ onChain: 0, offChain: 100 });
-  });
-
-  it('is all on-chain when nothing is left after the fee', () => {
-    expect(scoringSplit(wei(100), wei(100), BigInt(0))).toEqual({ onChain: 100, offChain: 0 });
   });
 });

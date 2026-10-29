@@ -4,10 +4,11 @@ const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
 const { T0, rewardsSigner, issueTo } = require("./emissionHelpers");
 
-// The off-chain dial (offchainBudget / merkle reserve rate) takes effect from the
-// NEXT round, uniformly on BOTH lanes: the on-chain gross is frozen at the OLD dial
-// for the in-flight round (SatoriRewards.setOffchainBudget) and the merkle reserve
-// carries the OLD rate through the in-flight round (SatoriHub.setMerkleReserveRate).
+// The off-chain share (offchainShareBps / the hub's merkle reserve bps) takes
+// effect from the NEXT round, uniformly on BOTH lanes: the on-chain gross is frozen
+// at the OLD share for the in-flight round (SatoriRewards.setOffchainShareBps) and
+// the merkle reserve carries the OLD share through the in-flight round
+// (SatoriHub.setMerkleReserveBps).
 // This closes the dial/merkle desync (docs/issues/closed/dial-merkle-reserve-desync-mid-round-change.md):
 // both lanes read the same dial for every round, so a round can never be
 // over-subscribed by a mid-round dial change (no BudgetExceeded on a legit claim).
@@ -17,6 +18,8 @@ const UP = 1;
 // are no longer paid at all, so the parameter (and the overload) are gone.
 const SIMPLE3 = "createSimpleDataStream(string,address,uint24)";
 const E = (n) => ethers.parseEther(String(n));
+const SHARE = 5000n;
+const part = (residual, bps) => residual * bps / 10000n;
 
 async function advanceRound() {
   const t = await time.latest();
@@ -62,11 +65,12 @@ describe("Dial takes effect NEXT round (dial/merkle sync)", function () {
     // 1094.4 / 684, which were 1440 − 288 and a 432 dial against it; the
     // emission is the hub's decaying schedule now, so those are the wrong
     // numbers and would be wrong again at the next rate change.
-    const residual = (await satori.emissionRateNow()) - (await satori.devRateNow());
-    const dial = residual - residual / 2n;   // leaves half the residual on-chain
-    const grossAfter = residual - dial;
+    // Each round's own rate: the schedule steps every round's worth issued, so
+    // R+1's residual is read in R+1, not carried from R.
+    const residualNow = async () => (await satori.emissionRateNow()) - (await satori.devRateNow());
+    const residual = await residualNow();
     const net = (x) => x - (x * 500n) / 10000n; // the 5% referral skim
-    await rewards.connect(owner).setOffchainBudget(dial); // would shrink R's gross if it applied NOW
+    await rewards.connect(owner).setOffchainShareBps(SHARE); // would shrink R's gross if it applied NOW
     const sid = await streamIdFrom(await satori[SIMPLE3]("S", owner.address, 1440), satori);
     await registry.setValue(sid, 100);
     await voteFor(satori, alice, sid);
@@ -81,6 +85,8 @@ describe("Dial takes effect NEXT round (dial/merkle sync)", function () {
     // immediately-following round is what makes this an off-by-one detector: a
     // dial that applied a round late would pay bob the FULL residual.
     await advanceRound();
+    const residual1 = await residualNow();
+    const grossAfter = residual1 - part(residual1, SHARE); // half R+1's residual stays on-chain
     await registry.setValue(sid, 150);
     const sid2 = await streamIdFrom(await satori[SIMPLE3]("T", owner.address, 1440), satori);
     await registry.setValue(sid2, 100);
@@ -103,28 +109,28 @@ describe("Dial takes effect NEXT round (dial/merkle sync)", function () {
     expect((await lens.getTotalClaimableRewards(bob.address))[0]).to.equal(net(grossAfter));
     // ...and it is genuinely the SHRUNK figure, not the unshrunk one a
     // round-late dial would have paid.
-    expect(net(grossAfter)).to.be.lt(net(residual));
+    expect(net(grossAfter)).to.be.lt(net(residual1));
   });
 
   it("merkle reserve: a dial set mid-round reserves NOTHING for the in-flight round", async function () {
     // The genesis-style over-reserve was: set dial in round R → merkle carried the new
     // rate for R while on-chain used the old dial → onChain + merkle > residual for R.
-    await rewards.connect(owner).setOffchainBudget(E(200)); // round R
-    expect(await hub.merkleReserveCeiling()).to.equal(0n);   // R: still the old dial (0)
+    await rewards.connect(owner).setOffchainShareBps(SHARE); // round R
+    const per = part(await hub.residualNext(), SHARE);       // read after the set: its banking may step
+    expect(await hub.merkleReserveCeiling()).to.equal(0n);   // R: still the old share (0)
     await hub.syncEmission();                                // a later bank in R adds nothing for R
     expect(await hub.merkleReserveCumulative()).to.equal(0n);
     expect(await hub.merkleReserveCeiling()).to.equal(0n);
 
     await advanceRound();                                    // R+1: reserved from the round's start
-    expect(await hub.merkleReserveCeiling()).to.equal(E(200));
+    expect(await hub.merkleReserveCeiling()).to.equal(per);
 
     await advanceRound();                                    // R+2: R+1 and R+2, never R
-    expect(await hub.merkleReserveCeiling()).to.equal(E(400));
+    expect(await hub.merkleReserveCeiling()).to.equal(2n * per);
   });
 
   it("conservation holds across a dial change: each round's on-chain gross plus its reserve is the round's residual", async function () {
     const residual = (await hub.emissionRateNow()) - (await hub.devRateNow());
-    const dial = E(200);
     const sid = await streamIdFrom(await satori[SIMPLE3]("S", owner.address, 1440), satori);
     // No credit is reported in this test: the general grows by exactly the
     // reserve banked, so the on-chain lane's ceiling must not move.
@@ -142,7 +148,7 @@ describe("Dial takes effect NEXT round (dial/merkle sync)", function () {
     const allowance0 = await hub.onChainAllowance();
     const R = await token.getCurrentRound();
     expect(priced0).to.be.lt(R);
-    await rewards.connect(owner).setOffchainBudget(dial);
+    await rewards.connect(owner).setOffchainShareBps(SHARE);
     expect(await hub.onChainPricedRound()).to.equal(R);
     expect((await hub.onChainAllowance()) - allowance0).to.equal(residual * (R - priced0));
     expect(await hub.merkleReserveCumulative()).to.equal(0n);
@@ -152,32 +158,35 @@ describe("Dial takes effect NEXT round (dial/merkle sync)", function () {
     // the NEW dial and banks the same dial as reserve.
     for (let i = 1n; i <= 2n; i++) {
       await advanceRound();
+      const residualI = (await hub.emissionRateNow()) - (await hub.devRateNow());
+      const dial = part(residualI, SHARE);
       const a = await hub.onChainAllowance();
       const c = await hub.merkleReserveCumulative();
       await registry.setValue(sid, 100n + i);
       expect(await hub.onChainPricedRound()).to.equal(R + i);
       const gross = (await hub.onChainAllowance()) - a;
       const reserve = (await hub.merkleReserveCumulative()) - c;
-      expect(gross, `R+${i} gross`).to.equal(residual - dial);
+      expect(gross, `R+${i} gross`).to.equal(residualI - dial);
       expect(reserve, `R+${i} reserve`).to.equal(dial);
-      expect(gross + reserve, `R+${i}`).to.equal(residual);
+      expect(gross + reserve, `R+${i}`).to.equal(residualI);
       await onlyReserveReported(`R+${i}`);
     }
     expect(await lens.onChainRewardCeiling()).to.equal(onChain0);
   });
 
-  it("with a lower rate pending for R+1, both dial bounds check R+1's residual", async function () {
+  it("with a lower rate pending for R+1, the share applies to R+1's residual", async function () {
     const residualNow = (await satori.emissionRateNow()) - (await satori.devRateNow());
     await issueTo(hub, token, await rewardsSigner(rewards), T0);
     const residualNext = await hub.residualNext();
     expect(residualNext).to.be.lt(residualNow);
 
-    // Legal against R's residual, but R+1 is the first round it would apply to.
-    await expect(rewards.connect(owner).setOffchainBudget(residualNow - 1n))
+    // The bound is the share itself, not a residual that can move under it.
+    await expect(rewards.connect(owner).setOffchainShareBps(10000))
       .to.be.revertedWithCustomError(rewards, "BadInput");
-    await expect(rewards.connect(owner).setOffchainBudget(residualNext))
-      .to.be.revertedWithCustomError(rewards, "BadInput");
-    await expect(rewards.connect(owner).setOffchainBudget(residualNext - 1n)).to.not.be.reverted;
-    expect(await rewards.offchainBudget()).to.equal(residualNext - 1n);
+    await expect(rewards.connect(owner).setOffchainShareBps(SHARE)).to.not.be.reverted;
+    expect(await rewards.offchainShareBps()).to.equal(SHARE);
+    await advanceRound();
+    expect(await hub.merkleReserveCeiling() - (await hub.merkleReserveCumulative()))
+      .to.equal(part(residualNext, SHARE));
   });
 });

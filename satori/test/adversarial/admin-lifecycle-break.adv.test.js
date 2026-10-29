@@ -24,9 +24,9 @@
 //   Satori.setSatoriMerkle        (deployer, write-once)
 //   Satori.rewardMint gate        (only satoriRewards / satoriMerkle)
 //   SatoriToken.airdropMint gate  (only the SatoriAirdrop contract)
-//   Satori.setMerkleReserveRate   (only satoriRewards)
+//   Satori.setMerkleReserveBps    (only satoriRewards)
 //   SatoriRewards.setAdmin        (admin rotation)
-//   SatoriRewards.setOffchainBudget         (merkle-reserve dial)
+//   SatoriRewards.setOffchainShareBps       (merkle-reserve share)
 //   SatoriAirdrop.loadAirdropBatch / finalizeAirdropLoading (loader; ordering vs claims)
 //   SatoriMerkle.setMerkleRoot / setRootPublisher (publisher; rotation)
 //   *.setSatoriCore / setSatoriRewards / setSatoriBounties (deployer wiring)
@@ -51,13 +51,19 @@ const { deployMerkleProxied } = require("../next/splitFixture");
 const E = (n) => ethers.parseEther(String(n));
 const ROUND_BUDGET = E(1440); // ROUND_REWARD_BUDGET — the token's outer envelope
 // The residual general lane: the hub's per-round emission net of the fee's flat
-// 15%. The fee is senior, so the merkle reserve rate can never reach this
-// residual — the hub caps setMerkleReserveRate strictly below it. READ FROM THE
+// 15%. The merkle reserve takes a share of it below 10000 bps. READ FROM THE
 // HUB, because the emission is the hub's decaying schedule now.
 let RESERVE_MAX;
 async function loadReserveMax(satori) {
   RESERVE_MAX = (await satori.emissionRateNow()) - (await satori.devRateNow());
 }
+// The rate steps every round's worth issued, and a share change's own banking
+// may take a step: the rounds after a change run at residualNext as of then.
+async function loadReserveNext(satori) {
+  RESERVE_MAX = await satori.residualNext();
+}
+// The reserve a share banks per round at RESERVE_MAX (call loadReserveMax first).
+const per = (bps) => (RESERVE_MAX * BigInt(bps)) / 10000n;
 
 async function advanceRounds(n) {
   const t = await time.latest();
@@ -103,7 +109,7 @@ async function deployStack(admin, publisher, { feeBps = 0, withDefaultStream = f
 // mis-behaving or hostile rewards path — the correct rewards would never
 // over-issue). The real rewards stays wired; we just inject calls as it.
 //   satori.connect(rw).rewardMint(to, amt)        forces an on-chain mint
-//   satori.connect(rw).setMerkleReserveRate(rate) forces a reserve-rate move
+//   satori.connect(rw).setMerkleReserveBps(bps)   forces a reserve-share move
 async function asRewards(rewards) {
   const rewardsAddr = await rewards.getAddress();
   await impersonateAccount(rewardsAddr);
@@ -150,10 +156,10 @@ describe("[adv] ADMIN / AUTH / LIFECYCLE / EMERGENCY — full privileged surface
         .to.be.revertedWithCustomError(token, "Unauthorized");
       await expect(token.connect(owner).airdropMint(owner.address, 1n))
         .to.be.revertedWithCustomError(token, "Unauthorized");
-      // setMerkleReserveRate: only satoriRewards.
-      await expect(satori.connect(stranger).setMerkleReserveRate(E(1)))
+      // setMerkleReserveBps: only satoriRewards.
+      await expect(satori.connect(stranger).setMerkleReserveBps(1))
         .to.be.revertedWithCustomError(satori, "Unauthorized");
-      await expect(satori.connect(owner).setMerkleReserveRate(E(1)))
+      await expect(satori.connect(owner).setMerkleReserveBps(1))
         .to.be.revertedWithCustomError(satori, "Unauthorized");
       // An unwired contract calling rewardMint is NOT recognized as a minter.
       const rogue = await (await ethers.getContractFactory("MockRewardsMinter")).deploy();
@@ -169,13 +175,13 @@ describe("[adv] ADMIN / AUTH / LIFECYCLE / EMERGENCY — full privileged surface
         .to.be.revertedWithCustomError(satori, "Unauthorized");
     });
 
-    it("rewards admin surface (setAdmin / setOffchainBudget) and the airdrop loader reject a stranger", async function () {
+    it("rewards admin surface (setAdmin / setOffchainShareBps) and the airdrop loader reject a stranger", async function () {
       const { rewards, airdrop } = await deployStack(owner, publisher);
       await expect(rewards.connect(stranger).setAdmin(stranger.address))
         .to.be.revertedWithCustomError(rewards, "Unauthorized");
       await expect(airdrop.connect(stranger).loadAirdropBatch([stranger.address], [E(1)]))
         .to.be.revertedWithCustomError(airdrop, "Unauthorized");
-      await expect(rewards.connect(stranger).setOffchainBudget(E(1)))
+      await expect(rewards.connect(stranger).setOffchainShareBps(1))
         .to.be.revertedWithCustomError(rewards, "Unauthorized");
     });
 
@@ -206,11 +212,13 @@ describe("[adv] ADMIN / AUTH / LIFECYCLE / EMERGENCY — full privileged surface
       const coreAddr = await satori.getAddress();
 
       // Dial the reserve and let it accrue while Merkle does not exist yet.
-      await rewards.connect(owner).setOffchainBudget(E(500));
-      // Dial is effective from the NEXT round (genesis round D uses dial 0), so
-      // 4 rounds elapse to accrue 4 rounds (current included) at 500 == 2000.
-      await advanceRounds(4); // reserve accrues 2000
-      expect(await satori.merkleReserveCeiling()).to.equal(E(2000));
+      await loadReserveMax(satori);
+      await rewards.connect(owner).setOffchainShareBps(5000);
+      await loadReserveNext(satori);
+      // The share is effective from the NEXT round (genesis round D uses 0), so
+      // 4 rounds elapse to accrue 4 rounds (current included).
+      await advanceRounds(4);
+      expect(await satori.merkleReserveCeiling()).to.equal(4n * per(5000));
 
       // Late-wire the Merkle contract (deployer-only, still available: write-once slot empty).
       const merkle = await deployMerkleProxied(publisher.address, await satori.satoriToken());
@@ -234,7 +242,7 @@ describe("[adv] ADMIN / AUTH / LIFECYCLE / EMERGENCY — full privileged surface
       // Same partial stack, but deploy a merkle and DON'T wire it into the core.
       const { satori, rewards } = await deploySatoriFixtureOpts(0);
       const coreAddr = await satori.getAddress();
-      await rewards.connect(owner).setOffchainBudget(E(300));
+      await rewards.connect(owner).setOffchainShareBps(3000);
       await advanceRounds(2);
 
       const merkle = await deployMerkleProxied(publisher.address, await satori.satoriToken());
@@ -264,13 +272,13 @@ describe("[adv] ADMIN / AUTH / LIFECYCLE / EMERGENCY — full privileged surface
       }
       const onMinted = await satori.onChainMinted();
 
-      // Now dial the reserve to the MAX legal rate and let it balloon 100 rounds.
-      await satori.connect(rw).setMerkleReserveRate(RESERVE_MAX - 1n);
+      // Now dial the reserve to the MAX legal share and let it balloon 100 rounds.
+      await satori.connect(rw).setMerkleReserveBps(9999);
       await advanceRounds(100);
 
       // The on-chain ceiling shrank by the reserve, but the general cap grew by
       // the emission's 85% each round while the reserve grew at most
-      // RESERVE_MAX-1: onChainMinted stays <= ceiling (+1 wei/round slack).
+      // 99.99% of it: onChainMinted stays <= ceiling.
       expect(onMinted).to.be.lte(await satori.onChainRewardCeiling());
       await assertGlobalInvariants(satori);
     });
@@ -282,7 +290,7 @@ describe("[adv] ADMIN / AUTH / LIFECYCLE / EMERGENCY — full privileged surface
       await advanceRounds(1);
       const headroom = (await satori.onChainRewardCeiling()) - (await satori.onChainMinted());
       await satori.connect(rw).rewardMint(stranger.address, headroom); // on-chain at its (dev-net) cap
-      await satori.connect(rw).setMerkleReserveRate(RESERVE_MAX - 1n);
+      await satori.connect(rw).setMerkleReserveBps(9999);
       await advanceRounds(2);
 
       const reserve = await satori.merkleReserveCeiling();
@@ -308,18 +316,21 @@ describe("[adv] ADMIN / AUTH / LIFECYCLE / EMERGENCY — full privileged surface
   describe("ordering: rapid dial toggling within one round is exact", function () {
     it("toggling the dial many times in the same round neither mints nor strands reserve", async function () {
       const { satori, rewards } = await deployStack(owner, publisher);
-      await rewards.connect(owner).setOffchainBudget(E(100));
-      await advanceRounds(2); // 200 pending at next touch
-      // Three toggles in the SAME round: the first banks 200, the rest bank 0.
-      // (All rates stay under the residual cap — the dev fee is senior.)
-      await rewards.connect(owner).setOffchainBudget(E(300));
-      await rewards.connect(owner).setOffchainBudget(E(500));
-      await rewards.connect(owner).setOffchainBudget(E(50));
-      expect(await satori.merkleReserveCeiling()).to.equal(E(200));
-      // The most recent rate (50) governs the NEXT round only; advance 2 rounds
-      // so two rounds accrue at 50 (the current round included).
+      await loadReserveMax(satori);
+      await rewards.connect(owner).setOffchainShareBps(1000);
+      await loadReserveNext(satori);
+      await advanceRounds(2); // two rounds pending at next touch
+      const at10 = 2n * per(1000);
+      // Three toggles in the SAME round: the first banks the two, the rest bank 0.
+      await rewards.connect(owner).setOffchainShareBps(3000);
+      await rewards.connect(owner).setOffchainShareBps(5000);
+      await rewards.connect(owner).setOffchainShareBps(500);
+      expect(await satori.merkleReserveCeiling()).to.equal(at10);
+      await loadReserveNext(satori);
+      // The most recent share (5%) governs the NEXT round only; advance 2 rounds
+      // so two rounds accrue at 5% (the current round included).
       await advanceRounds(2);
-      expect(await satori.merkleReserveCeiling()).to.equal(E(300));
+      expect(await satori.merkleReserveCeiling()).to.equal(at10 + 2n * per(500));
     });
   });
 
@@ -384,8 +395,8 @@ describe("[adv] ADMIN / AUTH / LIFECYCLE / EMERGENCY — full privileged surface
   describe("rootPublisher rotation mid-claim", function () {
     it("rotating the publisher mid-stream; a lowered root can never claw back a cursor", async function () {
       const { satori, rewards, merkle } = await deployStack(owner, publisher);
-      await rewards.connect(owner).setOffchainBudget(E(300));
-      await advanceRounds(3); // 2 effective rounds at 300 == reserve 600
+      await rewards.connect(owner).setOffchainShareBps(5000);
+      await advanceRounds(3); // well over the 600 claimed below
       await merkle.connect(publisher).setMerkleRoot(leafOf(alice.address, E(400)));
       await merkle.connect(alice).claimMerkle(E(400), []); // cursor 400
 
@@ -412,8 +423,8 @@ describe("[adv] ADMIN / AUTH / LIFECYCLE / EMERGENCY — full privileged surface
 
     it("a rotated publisher still cannot mint past the accrued reserve (lane wall survives rotation)", async function () {
       const { satori, rewards, merkle } = await deployStack(owner, publisher);
-      await rewards.connect(owner).setOffchainBudget(E(10));
-      await advanceRounds(2); // 1 effective round at 10 == reserve 10
+      await rewards.connect(owner).setOffchainShareBps(100);
+      await advanceRounds(2); // a small reserve, far under the 5000 root below
       await merkle.connect(publisher).setRootPublisher(bob.address);
       await merkle.connect(bob).acceptRootPublisher();
       // The new publisher publishes a huge root, but the core wall holds at the
@@ -442,20 +453,21 @@ describe("[adv] ADMIN / AUTH / LIFECYCLE / EMERGENCY — full privileged surface
     // returns (0,0). The two step-down-schedule it()s are dropped; the immutable
     // token's 20/10/5 dev-fee schedule is covered by DevFee.test.js.
 
-    it("setOffchainBudget hits the reserve-cap floor: >= the residual reverts, and the core mirror agrees", async function () {
+    it("setOffchainShareBps hits the cap: >= 10000 reverts, and the core mirror agrees", async function () {
       const { satori, rewards } = await deployStack(owner, publisher);
-      await loadReserveMax(satori);
-      // The rewards dial still refuses a full-round budget so gross >= 1...
-      await expect(rewards.connect(owner).setOffchainBudget(ROUND_BUDGET))
+      const rw = await asRewards(rewards);
+      // The rewards share refuses the whole residual (and anything past it) so gross >= 1...
+      await expect(rewards.connect(owner).setOffchainShareBps(10000))
         .to.be.revertedWithCustomError(rewards, "BadInput");
-      // ...and the core mirror is TIGHTER: the merkle reserve rate can never
-      // reach the residual, since the dev fee is senior — so the dial reverts AT
-      // the residual too (BadInput bubbles up from the hub).
-      await expect(rewards.connect(owner).setOffchainBudget(RESERVE_MAX))
+      await expect(rewards.connect(owner).setOffchainShareBps(ROUND_BUDGET))
         .to.be.revertedWithCustomError(rewards, "BadInput");
-      // Exactly one wei under the residual is allowed and keeps the on-chain ceiling >= 1.
-      await rewards.connect(owner).setOffchainBudget(RESERVE_MAX - 1n);
+      // ...and the core mirror refuses it too, even from the real rewards child.
+      await expect(satori.connect(rw).setMerkleReserveBps(10000))
+        .to.be.revertedWithCustomError(satori, "BadInput");
+      // The deepest legal share is allowed and keeps the on-chain gross >= 1 wei.
+      await rewards.connect(owner).setOffchainShareBps(9999);
       await advanceRounds(1);
+      expect(await satori.onChainGrossNow()).to.be.gte(1n);
       expect(await satori.onChainRewardCeiling()).to.be.gte(1n);
     });
   });
@@ -528,14 +540,14 @@ describe("[adv] ADMIN / AUTH / LIFECYCLE / EMERGENCY — full privileged surface
 
       // 1) dial 100, advance, then drive precise on-chain mints / reserve moves
       // AS the authorized rewards child (impersonation), and claim merkle.
-      await rewards.connect(owner).setOffchainBudget(E(100));
+      await rewards.connect(owner).setOffchainShareBps(1000);
       await advanceRounds(2);
       await assertGlobalInvariants(satori);
 
-      // Impersonate the real rewards to inject an over-riding reserve rate so the
+      // Impersonate the real rewards to inject an over-riding reserve share so the
       // reserve keeps accruing, then advance.
       const rw = await asRewards(rewards);
-      await satori.connect(rw).setMerkleReserveRate(E(150));
+      await satori.connect(rw).setMerkleReserveBps(1500);
       await advanceRounds(3);
       await assertGlobalInvariants(satori);
 
@@ -555,7 +567,7 @@ describe("[adv] ADMIN / AUTH / LIFECYCLE / EMERGENCY — full privileged surface
       await assertGlobalInvariants(satori);
 
       // 2) re-dial down (via impersonation), advance, invariants still hold.
-      await satori.connect(rw).setMerkleReserveRate(E(50));
+      await satori.connect(rw).setMerkleReserveBps(500);
       await advanceRounds(4);
       await assertGlobalInvariants(satori);
 

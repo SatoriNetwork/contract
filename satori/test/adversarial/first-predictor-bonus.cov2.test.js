@@ -38,7 +38,7 @@ const SIMPLE3 = "createSimpleDataStream(string,address,uint24)";
 const TOKENS_PER_ROUND = ethers.parseEther("1440");
 // On-chain game GROSS = the RESIDUAL after the senior dev fee (288, carved out
 // at the immutable SatoriToken, OFF the reward budget — see test/next/DevFee.test.js).
-// With offchainBudget == 0: gross = the emission net of the senior dev fee.
+// With offchainShareBps == 0: gross = the emission net of the senior dev fee.
 // The whole of it is now the payable predictor budget: nothing is reserved.
 // READ FROM THE CHAIN. Was `parseEther("1152")` — 1440 less a 288 dev fee —
 // which held only while emission was a fixed 1440.

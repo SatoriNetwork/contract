@@ -2,6 +2,7 @@ const { expect } = require("chai");
 const { deploySatoriFixture, pack1, VOTE, RAW_TOLERANCE } = require("./fixtures");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
+const { onChainGrossOf } = require("./helpers/onChainGross");
 
 async function advanceToNextRound() {
   const now = await time.latest();
@@ -95,16 +96,14 @@ describe("MultiRound: Delegation Transitions", function () {
     // Each delegate was the sole predictor of their round, so the whole round pool
     // is theirs; alice's delegated 100 SATORI is exactly half of their 200 total
     // prediction power, and the predictor fee is skimmed off that half. Anchor the
-    // rate on the ROUND BUDGET (devRateNow / offchainBudget are read live), not on
+    // rate on the ROUND BUDGET (devRateNow / offchainShareBps are read live), not on
     // anything derived from alice's claimable. The round pool is now the WHOLE
     // on-chain gross: the first-predictor bonus that used to be reserved off the
     // top no longer exists.
     // The emission per round comes from the HUB's schedule, not from the token's
     // 1440. That 1440 is the outer constitutional envelope; sizing a pool from it
     // over-states the round by the difference.
-    const onChainGross = (await satori.emissionRateNow())
-                       - (await satori.devRateNow())
-                       - (await rewards.offchainBudget());
+    const onChainGross = (await onChainGrossOf(satori, rewards));
     const roundPool = onChainGross;
     const aliceBal = ethers.parseEther("100");
     const SATORI_RATE_SCALE = 10n ** 24n; // SatoriRewards.sol

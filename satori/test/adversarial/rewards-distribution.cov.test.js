@@ -133,6 +133,7 @@ describe("rewards-distribution adversarial coverage", function () {
 
     // R: only A produces (B stays quiet — never valued, never predicted).
     const roundR = await satori.getCurrentRound();
+    ON_CHAIN_GROSS = await onChainGrossNow(satori); // R's own gross: the rate steps every round's worth issued
     await registry.setValue(A, 110);
     // dave predicts A AND the default game, so both are recorded for R. (The
     // default stream is auto-flushed at the top of every predict, so it always

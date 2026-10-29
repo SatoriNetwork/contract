@@ -149,7 +149,6 @@ describe("[adversarial-cov] erc20-token", function () {
       const rewardsSigner = await asRewards(satori, rewards);
       const initial = await satori.INITIAL_MINT();
       const recipient = (await ethers.getSigners())[7].address;
-      const GROSS = await scheduleGross(hub, token);
       const BPS = await token.devFeeBps();
 
       const deployRound = await satori.deploymentRound();
@@ -177,12 +176,17 @@ describe("[adversarial-cov] erc20-token", function () {
       // Price the round: exactly one gross more may be reported; a second
       // freeze of the same round adds nothing. Report and mint all of it.
       let minted = initial;
+      let pricedTotal = 0n;
       for (let i = 0; i < 2; i++) {
         if (i > 0) await time.increase(ROUND);
         const cur = await satori.getCurrentRound();
         const allowance0 = await hub.onChainAllowance();
-        // The first freeze also prices the deploy round, which nothing priced yet.
+        // This round's own gross: the rate steps every round's worth issued.
+        const GROSS = await scheduleGross(hub, token);
+        // The first freeze also prices the deploy round, which nothing priced
+        // yet, at the gross live when it prices.
         const priced = i === 0 ? 2n * GROSS : GROSS;
+        pricedTotal += priced;
         await hub.connect(rewardsSigner).freezeRoundGross(cur);
         expect(await hub.onChainAllowance()).to.equal(allowance0 + priced);
         await hub.connect(rewardsSigner).freezeRoundGross(cur);
@@ -195,7 +199,7 @@ describe("[adversarial-cov] erc20-token", function () {
         expect(await satori.totalRewardsMinted()).to.equal(minted);
       }
       // Two priced rounds plus the deploy round's overlap, no more.
-      expect(minted).to.equal(initial + 3n * GROSS);
+      expect(minted).to.equal(initial + pricedTotal);
       await expect(
         satori.connect(rewardsSigner).rewardMint(recipient, 1n)
       ).to.be.revertedWithCustomError(satori, "BudgetExceeded");

@@ -51,16 +51,23 @@ const TIME_UNIT = 86400; // 24h round
 const E = (n) => ethers.parseEther(String(n));
 const ROUND_BUDGET = E("1440"); // ROUND_REWARD_BUDGET — the token's OUTER envelope
 
-// No simulation here issues anywhere near the hub's first step threshold, and
-// none moves the fee, so the rate and bps hold constant across every round
-// any one of them walks.
-let RATE, DEV_RATE, RESIDUAL, MAX_OFFCHAIN, BPS, GEN_GENESIS, DEV_GENESIS;
+// These simulations measure precision against one fixed per-round residual, not
+// the schedule. The default schedule steps every round's worth issued, so
+// loadRates holds the rate with the emission lever (ratio 1.0, a configuration
+// the protocol supports); none moves the fee, so the rate and bps hold constant
+// across every round any one of them walks.
+let RATE, DEV_RATE, RESIDUAL, BPS, GEN_GENESIS, DEV_GENESIS;
+// The deepest legal off-chain share, and what a share banks per round at RESIDUAL.
+const MAX_SHARE = 9999n;
+const perRound = (bps) => (RESIDUAL * bps) / 10000n;
 async function loadRates(satori, token) {
+  const hub = await ethers.getContractAt("SatoriHub", await satori.getAddress());
+  await hub.connect(await ethers.getSigner(await hub.emissionHolder())).setEmissionRatio(E(1));
   RATE = await satori.emissionRateNow();
+  if ((await hub.emissionRateNext()) !== RATE) throw new Error("a step was already pending");
   DEV_RATE = await satori.devRateNow();
   RESIDUAL = RATE - DEV_RATE;
   // The reserve-rate dial is bounded STRICTLY BELOW the residual general lane.
-  MAX_OFFCHAIN = RESIDUAL - 1n;
   BPS = await token.devFeeBps();
   const initial = await token.INITIAL_MINT();
   GEN_GENESIS = (initial * (10000n - (await token.DEV_FEE_BPS_DEFAULT()))) / 10000n;
@@ -279,15 +286,14 @@ describe("ADV precision / long-horizon accumulation drift", function () {
     for (let round = 1; round <= ROUNDS; round++) {
       await nextRound();
 
-      // toggle the merkle dial: sometimes 0, sometimes a big rate, sometimes max.
+      // toggle the merkle share: sometimes 0, sometimes a big share, sometimes max.
       // This exercises reserve accrual + 0<->max toggling for back-count/leak.
       const dialPick = rng.int(6);
-      let dialTarget;
-      if (dialPick === 0) dialTarget = 0n;                 // off
-      else if (dialPick === 1) dialTarget = MAX_OFFCHAIN;  // MAX legal dial (< the residual general lane; dev fee carved first)
-      // mid: a fraction of the legal max, so it stays under the wall as the rate moves
-      else dialTarget = (MAX_OFFCHAIN * BigInt(4 + rng.int(92))) / 100n;
-      try { await rewards.connect(owner).setOffchainBudget(dialTarget); } catch {}
+      let shareTarget;
+      if (dialPick === 0) shareTarget = 0n;                 // off
+      else if (dialPick === 1) shareTarget = MAX_SHARE;     // MAX legal share
+      else shareTarget = 100n * BigInt(4 + rng.int(92));    // mid: 4%..95%
+      await rewards.connect(owner).setOffchainShareBps(shareTarget);
 
       // update stream values (create up/down directions, some gaps)
       for (const sid of streams) {
@@ -536,8 +542,8 @@ describe("ADV precision / long-horizon accumulation drift", function () {
 
     // Shadow of the hub's reserve bank. Every bank site banks rounds
     // [last, cur+1) at the dial in force and re-anchors `last` to cur+1 even at
-    // dial 0; a set takes effect from the next round. Each bank is ONE report to
-    // the token, which books its own rounded-up fee. Only setOffchainBudget runs
+    // share 0; a set takes effect from the next round. Each bank is ONE report to
+    // the token, which books its own rounded-up fee. Only setOffchainShareBps runs
     // here, so no on-chain credit is ever reported.
     let shadowRate = 0n;
     let shadowLast = deploymentRound;
@@ -583,17 +589,16 @@ describe("ADV precision / long-horizon accumulation drift", function () {
       expect(await satori.merkleReserveCeiling(), `live merkle ceiling @round ${round}`).to.equal(projection(cur));
       expect(await hub.merkleReserveCumulative(), `nothing banked by time @round ${round}`).to.equal(shadowCum);
 
-      // a third OFF, else MAX legal, else a mid rate as a FRACTION of the legal
-      // max: a set at the bound would revert and desync the shadow
+      // a third OFF, else MAX legal, else a mid share (1%..98%)
       const p = rng.int(3);
       let target;
       if (p === 0) target = 0n;
-      else if (p === 1) target = MAX_OFFCHAIN;
-      else target = (MAX_OFFCHAIN * BigInt(1 + rng.int(98))) / 100n;
+      else if (p === 1) target = MAX_SHARE;
+      else target = 100n * BigInt(1 + rng.int(98));
 
-      bankThrough(cur);    // the old dial pays through the current round
-      shadowRate = target; // the new one from cur+1
-      await rewards.connect(owner).setOffchainBudget(target);
+      bankThrough(cur);              // the old share pays through the current round
+      shadowRate = perRound(target); // the new one from cur+1
+      await rewards.connect(owner).setOffchainShareBps(target);
 
       expect(await hub.merkleReserveCumulative(), `reserve cumulative exact @round ${round}`).to.equal(shadowCum);
       expect(await satori.merkleReserveCeiling(), `banked through the round @round ${round}`).to.equal(shadowCum);
@@ -611,7 +616,7 @@ describe("ADV precision / long-horizon accumulation drift", function () {
     const curNow = BigInt(await satori.getCurrentRound());
     bankThrough(curNow);
     shadowRate = 0n;
-    await rewards.connect(owner).setOffchainBudget(0n); // same round: the last set never applied
+    await rewards.connect(owner).setOffchainShareBps(0n); // same round: the last set never applied
     expect(await hub.merkleReserveCumulative(), "off before it applied").to.equal(before);
     for (let i = 0; i < 20; i++) await nextRound();     // 20 dormant rounds
     expect(await hub.merkleReserveCumulative(), "no accrual while off").to.equal(before);
@@ -619,13 +624,13 @@ describe("ADV precision / long-horizon accumulation drift", function () {
 
     const curOn = BigInt(await satori.getCurrentRound());
     bankThrough(curOn);
-    shadowRate = MAX_OFFCHAIN;
-    await rewards.connect(owner).setOffchainBudget(MAX_OFFCHAIN);
+    shadowRate = perRound(MAX_SHARE);
+    await rewards.connect(owner).setOffchainShareBps(MAX_SHARE);
     expect(await hub.merkleReserveCumulative(), "dormant rounds not back-counted").to.equal(before);
     await checkLedger("after dormant", curOn);
     await nextRound();
-    expect(await satori.merkleReserveCeiling(), "dial pays from the next round only")
-      .to.equal(before + MAX_OFFCHAIN);
+    expect(await satori.merkleReserveCeiling(), "share pays from the next round only")
+      .to.equal(before + perRound(MAX_SHARE));
   });
 
   // ==========================================================================

@@ -70,7 +70,6 @@ describe("Delegator next-round auto-include", function () {
         await satori.transfer(carol.address, ethers.parseEther("100"));
         await satori.transfer(dave.address, ethers.parseEther("100"));
 
-        GROSS = (await satori.emissionRateNow()) - (await satori.devRateNow());
         await advanceRound();
     });
 
@@ -96,6 +95,7 @@ describe("Delegator next-round auto-include", function () {
         // ownPower=100, delegatedPower=150, totalPower=250.
         // delegatedReward = GROSS * 150/250. delegatorsShare = 90% of that.
         // rate_{D+1} = (622.08 * SCALE) / 150.
+        GROSS = (await satori.emissionRateNow()) - (await satori.devRateNow()); // this round's own rate
         await satori.connect(bob).predictMultipleWithPayloads([{ gameId: sid, payload: pack1(UP) }]);
 
         await advanceRound();
@@ -138,6 +138,7 @@ describe("Delegator next-round auto-include", function () {
         await advanceRound();
         await registry.setValue(sid, 100);
         await satori.transfer(carol.address, ethers.parseEther("50"));
+        GROSS = (await satori.emissionRateNow()) - (await satori.devRateNow()); // this round's own rate
         await satori.connect(bob).predictMultipleWithPayloads([{ gameId: sid, payload: pack1(UP) }]);
 
         await advanceRound();
@@ -195,6 +196,7 @@ describe("Delegator next-round auto-include", function () {
         // takes all of it — the 150/150 arithmetic the pinned wei below encode.
         await advanceRound();
         await registry.setValue(sid, 100);
+        GROSS = (await satori.emissionRateNow()) - (await satori.devRateNow()); // this round's own rate
         await satori.connect(eve).predictMultipleWithPayloads([{ gameId: sid, payload: pack1(UP) }]);
 
         await advanceRound();

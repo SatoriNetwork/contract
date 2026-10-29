@@ -1,11 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { useContracts } from '../hooks/useContracts';
 import { InfoTip } from './InfoTip';
-import { scoringSplit } from '../lib/roundPayout';
 import { EmissionStatus, toEmissionStatus } from '../lib/emissionStatus';
 import { fmtSatori } from './privilegedRow';
 
-/// Public read of the admin's on-chain/off-chain dial, as percentages of the
+/// Public read of the admin's on-chain/off-chain split, as percentages of the
 /// emission left after the dev fee, and of where the emission schedule stands.
 export function ScoringSplit() {
   const { contracts } = useContracts();
@@ -15,13 +14,9 @@ export function ScoringSplit() {
   useEffect(() => {
     if (!contracts) return;
     let live = true;
-    Promise.all([
-      contracts.cached.round.satori.emissionRateNow(),
-      contracts.cached.round.satori.devRateNow(),
-      contracts.cached.round.rewards.offchainBudget(),
-    ]).then(([emission, dev, offchain]) => {
-      if (live) setSplit(scoringSplit(BigInt(emission), BigInt(dev), BigInt(offchain)));
-    }).catch((e) => console.warn('scoring split read failed:', e));
+    contracts.cached.round.rewards.offchainShareBps().then((bps: bigint) => {
+      if (live) setSplit({ onChain: (10000 - Number(bps)) / 100, offChain: Number(bps) / 100 });
+    }).catch((e: any) => console.warn('scoring split read failed:', e));
     contracts.cached.live.lens.emissionStatus()
       .then((r: any) => { if (live) setEm(toEmissionStatus(r)); })
       .catch((e: any) => console.warn('emission status read failed:', e));
@@ -49,7 +44,7 @@ export function ScoringSplit() {
       {line(
         <>
           Emission this round{' '}
-          <InfoTip>SATORI minted per round, before the dev fee: 846.62 per round until 1,460 rounds-worth has been issued, then multiplied by the emission ratio each time another 730 rounds-worth at the new rate is issued, not on a calendar. A step takes effect from the round after the one that crosses it.</InfoTip>
+          <InfoTip>SATORI minted per round, before the dev fee: 846.62 on day 1, then multiplied by the emission ratio each time another round&rsquo;s worth at the current rate is issued, not on a calendar. By default that is 0.0292% less each time, so lifetime emission approaches 2,900,000. A step takes effect from the round after the one that crosses it.</InfoTip>
         </>,
         em ? `${fmtSatori(em.rateNow)}/round` : '—',
         'emission-rate-now',

@@ -4,9 +4,10 @@ const { time, impersonateAccount, setBalance } = require("@nomicfoundation/hardh
 const ROUND = 86400;
 const ONE = 10n ** 18n;
 const BASE = 846621902397116230417n;
-const PHI_INV = 618033988749894848n;
-const STEP_ROUNDS = 730n;
-const FLAT_ROUNDS = 1460n;
+// SatoriHub.DEFAULT_EMISSION_RATIO: 1 − BASE/2,900,000, truncated.
+const DEFAULT_RATIO = 999708061412966511n;
+const STEP_ROUNDS = 1n;
+const FLAT_ROUNDS = 1n;
 const RATE_CAP = 1440n * ONE;
 const NO_STEP = 2n ** 128n - 1n;
 const T0 = FLAT_ROUNDS * BASE;
@@ -19,7 +20,7 @@ function stepRate(rate, ratio) {
 }
 
 /** [{ rate, next }] for steps 1..n under a fixed ratio; a 0 rate ends it at NO_STEP. */
-function ladder(ratio = PHI_INV, rate = BASE, next = T0, max = 200) {
+function ladder(ratio = DEFAULT_RATIO, rate = BASE, next = T0, max = 200) {
   const rows = [];
   for (let i = 0; i < max; i++) {
     rate = stepRate(rate, ratio);
@@ -131,7 +132,7 @@ function eventsNamed(receipt, contract, name) {
 }
 
 module.exports = {
-  ROUND, ONE, BASE, PHI_INV, STEP_ROUNDS, FLAT_ROUNDS, RATE_CAP, NO_STEP, T0,
+  ROUND, ONE, BASE, DEFAULT_RATIO, STEP_ROUNDS, FLAT_ROUNDS, RATE_CAP, NO_STEP, T0,
   stepRate, ladder, grossUp, generalReaching, generalBelow,
   rewardsSigner, issuedOf, issueTo, issueBelow, issuanceHarness,
   currentRound, atRound, advanceRound, eventsNamed,

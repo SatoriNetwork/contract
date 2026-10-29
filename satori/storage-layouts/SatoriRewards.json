@@ -215,5 +215,19 @@
     "offset": 0,
     "type": "t_uint256",
     "shape": "uint256/32"
+  },
+  {
+    "label": "offchainShareBps",
+    "slot": "30",
+    "offset": 0,
+    "type": "t_uint256",
+    "shape": "uint256/32"
+  },
+  {
+    "label": "officialRelayer",
+    "slot": "31",
+    "offset": 0,
+    "type": "t_address",
+    "shape": "address/20"
   }
 ]

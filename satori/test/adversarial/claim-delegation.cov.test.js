@@ -115,6 +115,8 @@ describe("[adv-cov] claim-delegation", function () {
       // check below needs the bucket deltas of a SINGLE credit event, so the
       // scoring tx must be isolated from anything else that touches a bucket.
       await registry.setValue(stream1, 100);
+      // The predicted round's own budget: the rate steps every round's worth issued.
+      const roundGross = (await satori.emissionRateNow()) - (await satori.devRateNow());
       await satori.connect(alice).predictMultipleWithPayloads([{ gameId: stream1, payload: pack1(UP) }]);
       await advanceOneDay();
       await registry.setValue(stream1, 150); // UP -> correct
@@ -145,7 +147,6 @@ describe("[adv-cov] claim-delegation", function () {
       // is the whole payable round budget — 1440 − devRateNow (dial 0) = 1152 SATORI.
       // The first-predictor bonus reservation and the value-provider cut are BOTH
       // GONE, so the FULL on-chain gross is now distributable to predictors.
-      const roundGross = (await satori.emissionRateNow()) - (await satori.devRateNow());
       const grossCredit = roundGross; // payable budget for the round
       expect(netCredited + expectedCut, "earner net + referrer cut == the credited amount")
         .to.equal(grossCredit);

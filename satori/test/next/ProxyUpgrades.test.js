@@ -3,7 +3,7 @@ const { ethers } = require("hardhat");
 const { loadFixture, time } = require("@nomicfoundation/hardhat-network-helpers");
 const { deploySplitCompatFixture, TEST_PLATFORM_FEE_RECIPIENT, TEST_MARKETING_FEE_RECIPIENT } = require("./splitFixture");
 const { VOTE } = require("../fixtures");
-const { ROUND, FLAT_ROUNDS, rewardsSigner, generalReaching } = require("./emissionHelpers");
+const { ROUND, rewardsSigner, generalReaching } = require("./emissionHelpers");
 
 // Phase 2 (PHASE2-PROXY-ALL.md): the hub and all five children live behind
 // SatoriProxy with governor-gated, individually-renounceable upgradeTo.
@@ -190,7 +190,7 @@ describe("Phase-2 proxies: upgrade-with-state for hub + children", function () {
       gameVotes: await voting.gameWeight(gid),
       burnedTotal: await voting.totalBurnedWeight(),
       admin: await rewards.admin(),
-      offchainBudget: await rewards.offchainBudget(),
+      offchainShareBps: await rewards.offchainShareBps(),
       onChainMinted: await hub.onChainMinted(),
       gamesCount: await games.gameCount(),
       predictedCount: await satori.predictedStreamsCount(owner.address, await satori.getCurrentRound()),
@@ -209,7 +209,7 @@ describe("Phase-2 proxies: upgrade-with-state for hub + children", function () {
     expect(await voting.gameWeight(gid)).to.equal(pre.gameVotes);
     expect(await voting.totalBurnedWeight()).to.equal(pre.burnedTotal);
     expect(await rewards.admin()).to.equal(pre.admin);
-    expect(await rewards.offchainBudget()).to.equal(pre.offchainBudget);
+    expect(await rewards.offchainShareBps()).to.equal(pre.offchainShareBps);
     expect(await hub.onChainMinted()).to.equal(pre.onChainMinted);
     expect(await games.gameCount()).to.equal(pre.gamesCount);
     expect(await satori.predictedStreamsCount(owner.address, await satori.getCurrentRound())).to.equal(pre.predictedCount);
@@ -292,18 +292,19 @@ describe("Phase-2 proxies: upgrade-with-state for hub + children", function () {
     const e0 = await hub.emission();
     const allowance0 = await hub.onChainAllowance();
     // Untouched rounds are priced together at the next touch, so after this
-    // warp one real report reaches the first step inside both the allowance
-    // and the token's envelope.
-    await time.increase(Number(FLAT_ROUNDS) * ROUND);
+    // warp one real report reaches the next step inside both the allowance
+    // and the token's envelope. Genesis issued is the first threshold, so the
+    // touch itself takes step 1 and the report takes step 2.
+    await time.increase(3 * ROUND);
     await (await hub.connect(rw).freezeRoundGross(await token.getCurrentRound())).wait();
-    const toStep = e0.nextStepAt - (await hub.emission()).issued;
+    const toStep = (await hub.emission()).nextStepAt - (await hub.emission()).issued;
     await (await hub.connect(rw).noteIssued(generalReaching(toStep, await token.devFeeBps()))).wait();
     await (await hub.connect(owner).setEmissionRatio(10n ** 18n)).wait();
     await (await hub.connect(owner).setEmissionAuthority(f.signers[1].address)).wait();
     const moved = await hub.emission();
     const allowance = await hub.onChainAllowance();
     const priced = await hub.onChainPricedRound();
-    expect(moved.stepsTaken).to.equal(1n);
+    expect(moved.stepsTaken).to.equal(2n);
     expect(moved.issued).to.be.gt(e0.issued);
     expect(allowance).to.be.gt(allowance0);
 

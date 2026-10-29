@@ -3,7 +3,7 @@ const { ethers } = require("hardhat");
 const { loadFixture } = require("@nomicfoundation/hardhat-network-helpers");
 const { deploySatoriFixtureOpts, pack1, voteFor } = require("../fixtures");
 const {
-  ONE, BASE, PHI_INV, STEP_ROUNDS, RATE_CAP, NO_STEP, T0,
+  ONE, BASE, DEFAULT_RATIO, STEP_ROUNDS, RATE_CAP, NO_STEP, T0,
   stepRate, rewardsSigner, issuedOf, issueTo,
   currentRound, advanceRound,
 } = require("./emissionHelpers");
@@ -47,17 +47,18 @@ describe("SatoriHub — emission ratio lever", function () {
     it("initialization logs the starting ratio and threshold", async function () {
       const logs = await hub.queryFilter(hub.filters.EmissionRatioSet(), 0);
       expect(logs.length).to.equal(1);
-      expect(logs[0].args.ratioWad).to.equal(PHI_INV);
+      expect(logs[0].args.ratioWad).to.equal(DEFAULT_RATIO);
       expect(logs[0].args.nextStepAt).to.equal(T0);
       expect(logs[0].args.setter).to.equal(ethers.ZeroAddress);
     });
 
     it("a step logs the reserve cumulative it banked through fromRound", async function () {
       await advanceRound();
-      const residual = (await hub.emissionRateNow()) - (await hub.devRateNow());
-      await rewards.connect(admin).setOffchainBudget(residual - 1n);
+      await rewards.connect(admin).setOffchainShareBps(9999);
       for (let i = 0; i < 5; i++) await advanceRound();
-      const { tx } = await issueTo(hub, token, rw, T0);
+      // The reserve banked on the way here already counts toward the steps, so
+      // cross whichever threshold is next.
+      const { tx } = await issueTo(hub, token, rw, (await hub.emission()).nextStepAt);
       const rc = await tx.wait();
       const ev = rc.logs.filter((l) => l.address === hub.target)
         .map((l) => { try { return hub.interface.parseLog(l); } catch { return null; } })
@@ -157,8 +158,8 @@ describe("SatoriHub — emission ratio lever", function () {
       await issueTo(hub, token, rw, ethers.parseEther("10000000"));
       const issued = await issuedOf(hub);
       const expected = issued + STEP_ROUNDS * BASE;
-      await expect(hub.connect(admin).setEmissionRatio(PHI_INV))
-        .to.emit(hub, "EmissionRatioSet").withArgs(PHI_INV, expected, admin.address);
+      await expect(hub.connect(admin).setEmissionRatio(DEFAULT_RATIO))
+        .to.emit(hub, "EmissionRatioSet").withArgs(DEFAULT_RATIO, expected, admin.address);
       expect((await hub.emission()).nextStepAt).to.equal(expected);
 
       const { tx } = await issueTo(hub, token, rw, expected - ONE);
@@ -168,7 +169,7 @@ describe("SatoriHub — emission ratio lever", function () {
       const { tx: tx2 } = await issueTo(hub, token, rw, expected);
       await expect(tx2).to.emit(hub, "EmissionStepped");
       expect((await hub.emission()).stepsTaken).to.equal(1n);
-      expect(await hub.emissionRateNext()).to.equal(stepRate(BASE, PHI_INV));
+      expect(await hub.emissionRateNext()).to.equal(stepRate(BASE, DEFAULT_RATIO));
     });
 
     it("switching to 1.0 leaves the pending threshold in place", async function () {
@@ -246,7 +247,7 @@ describe("SatoriHub — emission ratio lever", function () {
 
     it("with a step pending, a ratio change does not touch the stepped rate", async function () {
       await issueTo(hub, token, rw, T0);
-      const s1 = stepRate(BASE, PHI_INV);
+      const s1 = stepRate(BASE, DEFAULT_RATIO);
       await hub.connect(admin).setEmissionRatio(HALF);
       expect(await hub.emissionRateNow()).to.equal(BASE);
       expect(await hub.emissionRateNext()).to.equal(s1);

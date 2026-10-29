@@ -58,8 +58,8 @@ describe("SatoriMerkle behind a proxy — upgradeable claim channel", function (
     [owner, alice, bob, publisher, stranger] = await ethers.getSigners();
     fix = await deployWiredStack(owner, publisher);
     ({ satori, rewards, token, merkle } = fix);
-    // Give the merkle lane a reserve to draw on (360 × 3 rounds = 1080).
-    await rewards.connect(owner).setOffchainBudget(E(360));
+    // Give the merkle lane a reserve to draw on (half of each round, 3 rounds).
+    await rewards.connect(owner).setOffchainShareBps(5000);
     await advanceRounds(3);
   });
 

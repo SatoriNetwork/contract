@@ -4,11 +4,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 const E = (n: number) => BigInt(Math.round(n * 1e6)) * BigInt(1e12);
 const mockStatus: any = {};
 const mockRound = {
-  satori: {
-    emissionRateNow: () => Promise.resolve(E(1000)),
-    devRateNow: () => Promise.resolve(E(150)),
-  },
-  rewards: { offchainBudget: () => Promise.resolve(E(170)) },
+  rewards: { offchainShareBps: () => Promise.resolve(BigInt(2000)) },
 };
 jest.mock('../hooks/useContracts', () => ({
   useContracts: () => ({
@@ -29,7 +25,7 @@ const status = (over: Record<string, unknown> = {}) => Object.assign(mockStatus,
   ratioWad: BigInt('618033988749894848'), stepsTaken: BigInt(0),
   issued: E(900000), issuedProjected: E(900000), nextStepAt: E(1236067.98),
   stepsActive: true, holder: '0x0000000000000000000000000000000000000001',
-  dial: BigInt(0), dialEffective: BigInt(0), ...over,
+  offchainShareBps: BigInt(2000), offchainNext: E(143.92), ...over,
 });
 
 it('keeps the split lines and adds the emission schedule lines', async () => {
@@ -51,10 +47,19 @@ it('shows the projected count and no step when the multiplier is 1', async () =>
   expect(screen.getByTestId('emission-rate-after-step').textContent).toBe('unchanged');
 });
 
-it('explains the fixed first threshold before the 730-round steps', async () => {
+it('reads a fractional share as it is', async () => {
+  mockRound.rewards.offchainShareBps = () => Promise.resolve(BigInt(3333));
+  status();
+  render(<ScoringSplit />);
+  await waitFor(() => expect(screen.getByTestId('scoring-split-offchain').textContent).toBe('33.33%'));
+  expect(screen.getByTestId('scoring-split-onchain').textContent).toBe('66.67%');
+  mockRound.rewards.offchainShareBps = () => Promise.resolve(BigInt(2000));
+});
+
+it('explains the step every round\'s worth from day 1', async () => {
   status();
   render(<ScoringSplit />);
   await waitFor(() => expect(screen.getByTestId('emission-rate-now').textContent).toBe('846.62/round'));
   fireEvent.click(screen.getAllByRole('button', { name: 'More info' })[1]);
-  expect(document.body.textContent).toContain('846.62 per round until 1,460 rounds-worth has been issued');
+  expect(document.body.textContent).toContain('846.62 on day 1, then multiplied by the emission ratio each time another round’s worth');
 });

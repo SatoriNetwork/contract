@@ -56,18 +56,26 @@ async function deployStack(admin, publisher) {
   return { satori, rewards, merkle };
 }
 
+// Half of each round's residual goes to the Merkle lane in these tests.
+const SHARE_BPS = 5000n;
+
 describe("SatoriMerkle (Phase 2a) — isolated second-minter cumulative drop", function () {
-  let satori, rewards, merkle;
+  let satori, rewards, merkle, PER;
   let owner, alice, bob, publisher, stranger;
 
   beforeEach(async function () {
     [owner, alice, bob, publisher, stranger] = await ethers.getSigners();
     ({ satori, rewards, merkle } = await deployStack(owner, publisher)); // owner = admin+deployer
-    // Phase 2b: the Merkle lane mints ONLY against its accrued reserve. Dial
-    // budget to the off-chain side and let it accrue so these claim tests have a
-    // lane to draw on. The dial is effective NEXT round, so 3 advances bank 3
-    // rounds (the current round included): reserve = 360 × 3 = 1080, well past what any small test claims.
-    await rewards.connect(owner).setOffchainBudget(E(360));
+    // Phase 2b: the Merkle lane mints ONLY against its accrued reserve. Route
+    // half of each round to the off-chain side and let it accrue so these claim
+    // tests have a lane to draw on. The share is effective NEXT round, so 3
+    // advances bank 3 rounds (the current round included): reserve = 3 × PER,
+    // well past what any small test claims.
+    await rewards.connect(owner).setOffchainShareBps(SHARE_BPS);
+    // The banked rounds run at the NEXT rate: the rate steps every round's
+    // worth issued, and setting the share may itself take a step.
+    const hub = await ethers.getContractAt("SatoriHub", await satori.getAddress());
+    PER = (await hub.residualNext()) * SHARE_BPS / 10000n;
     await advanceRounds(3);
   });
 
@@ -137,6 +145,49 @@ describe("SatoriMerkle (Phase 2a) — isolated second-minter cumulative drop", f
       .to.be.revertedWithCustomError(satori, "BudgetExceeded");
     expect(await merkle.alreadyMintedTo(alice.address)).to.equal(reserve);
     expect(await satori.balanceOf(alice.address)).to.equal(reserve);
+  });
+
+  describe("claiming for someone else", function () {
+    const claimFor = (signer, account, amount, proof) =>
+      merkle.connect(signer)["claimMerkle(address,uint256,bytes32[])"](account, amount, proof);
+
+    it("anyone can claim an account's drop; the tokens go to the account, not the caller", async function () {
+      await merkle.connect(publisher).setMerkleRoot(leafOf(alice.address, E(100)));
+      await expect(claimFor(stranger, alice.address, E(100), []))
+        .to.emit(merkle, "MerkleClaimed").withArgs(alice.address, E(100), E(100));
+      expect(await satori.balanceOf(alice.address)).to.equal(E(100));
+      expect(await satori.balanceOf(stranger.address)).to.equal(0n);
+      expect(await merkle.alreadyMintedTo(alice.address)).to.equal(E(100));
+      expect(await merkle.alreadyMintedTo(stranger.address)).to.equal(0n);
+    });
+
+    it("a proof for one account cannot be redirected to another", async function () {
+      const la = leafOf(alice.address, E(100));
+      const lb = leafOf(bob.address, E(200));
+      await merkle.connect(publisher).setMerkleRoot(hashPair(la, lb));
+      await expect(claimFor(stranger, bob.address, E(100), [lb]))
+        .to.be.revertedWithCustomError(merkle, "InvalidProof");
+      await expect(claimFor(stranger, stranger.address, E(100), [lb]))
+        .to.be.revertedWithCustomError(merkle, "InvalidProof");
+    });
+
+    it("shares the account's cursor: after a claim on its behalf, its own claim has nothing left", async function () {
+      await merkle.connect(publisher).setMerkleRoot(leafOf(alice.address, E(100)));
+      await claimFor(stranger, alice.address, E(100), []);
+      await expect(merkle.connect(alice).claimMerkle(E(100), []))
+        .to.be.revertedWithCustomError(merkle, "NothingToClaim");
+    });
+
+    it("pays partially exactly like a self-claim", async function () {
+      const reserve = await satori.merkleReserveCeiling();
+      await merkle.connect(publisher).setMerkleRoot(leafOf(alice.address, E(5000)));
+      await claimFor(stranger, alice.address, E(5000), []);
+      expect(await satori.merkleMinted()).to.equal(reserve);
+      expect(await merkle.alreadyMintedTo(alice.address)).to.equal(reserve);
+      expect(await satori.balanceOf(alice.address)).to.equal(reserve);
+      await expect(claimFor(stranger, alice.address, E(5000), []))
+        .to.be.revertedWithCustomError(satori, "BudgetExceeded");
+    });
   });
 
   it("the core admits BOTH satoriRewards and satoriMerkle as minters — nobody else", async function () {
@@ -245,56 +296,62 @@ describe("SatoriMerkle (Phase 2a) — isolated second-minter cumulative drop", f
   // ================================================================
   describe("partial pay against the accrued reserve", function () {
     it("an over-sized claim drains the reserve, then the same proof collects the rest over time", async function () {
-      // beforeEach: rate 360, effective next round, 3 rounds banked -> 1080.
+      // beforeEach: PER per round, effective next round, 3 rounds banked.
       const reserve0 = await satori.merkleReserveCeiling();
-      expect(reserve0).to.equal(E(1080));
-      await merkle.connect(publisher).setMerkleRoot(leafOf(alice.address, E(5000)));
+      expect(reserve0).to.equal(3n * PER);
+      const ENTITLED = 12n * PER; // more than 5 rounds bank, less than 15
+      await merkle.connect(publisher).setMerkleRoot(leafOf(alice.address, ENTITLED));
 
       // First claim: pays exactly the accrued reserve; the event reports the
       // proved entitlement alongside the partial mint; cursor == paid.
-      await expect(merkle.connect(alice).claimMerkle(E(5000), []))
-        .to.emit(merkle, "MerkleClaimed").withArgs(alice.address, E(5000), reserve0);
+      await expect(merkle.connect(alice).claimMerkle(ENTITLED, []))
+        .to.emit(merkle, "MerkleClaimed").withArgs(alice.address, ENTITLED, reserve0);
       expect(await satori.balanceOf(alice.address)).to.equal(reserve0);
       expect(await merkle.alreadyMintedTo(alice.address)).to.equal(reserve0);
       expect(await satori.merkleMinted()).to.equal(reserve0);
 
-      // Two more rounds accrue 720 — the SAME root and proof pay it out.
+      // Two more rounds accrue about 2 × PER (the rate keeps stepping a little)
+      // — the SAME root and proof pay out exactly what the lane banked.
       await advanceRounds(2);
-      await merkle.connect(alice).claimMerkle(E(5000), []);
-      expect(await merkle.alreadyMintedTo(alice.address)).to.equal(E(1800));
+      await merkle.connect(alice).claimMerkle(ENTITLED, []);
+      expect(await merkle.alreadyMintedTo(alice.address)).to.equal(await satori.merkleReserveCumulative());
+      expect(await merkle.alreadyMintedTo(alice.address)).to.be.closeTo(5n * PER, PER / 100n);
 
       // Enough accrual to cover the remainder: the clamp yields to the smaller
-      // entitlement remainder (3200 < the 3600 newly affordable) — never
+      // entitlement remainder (7 × PER < the 10 × PER newly affordable) — never
       // over-pays past the proved lifetime total.
       await advanceRounds(10);
-      await merkle.connect(alice).claimMerkle(E(5000), []);
-      expect(await merkle.alreadyMintedTo(alice.address)).to.equal(E(5000));
-      expect(await satori.balanceOf(alice.address)).to.equal(E(5000));
+      await merkle.connect(alice).claimMerkle(ENTITLED, []);
+      expect(await merkle.alreadyMintedTo(alice.address)).to.equal(ENTITLED);
+      expect(await satori.balanceOf(alice.address)).to.equal(ENTITLED);
 
       // Fully paid: the entitlement is exhausted, not the reserve.
-      await expect(merkle.connect(alice).claimMerkle(E(5000), []))
+      await expect(merkle.connect(alice).claimMerkle(ENTITLED, []))
         .to.be.revertedWithCustomError(merkle, "NothingToClaim");
     });
 
     it("small claimants can no longer starve a large one: it takes what is left, then the remainder", async function () {
-      // Two-leaf tree: alice 1000, bob 200 (reserve is 1080 — see beforeEach).
-      const la = leafOf(alice.address, E(1000));
+      // Two-leaf tree: bob 200, alice 120 more than the reserve leaves after
+      // bob (reserve is 3 × PER — see beforeEach).
+      const left = 3n * PER - E(200);
+      const ALICE = left + E(120);
+      const la = leafOf(alice.address, ALICE);
       const lb = leafOf(bob.address, E(200));
       await merkle.connect(publisher).setMerkleRoot(hashPair(la, lb));
 
-      // Bob (small) drains first — 880 left.
+      // Bob (small) drains first.
       await merkle.connect(bob).claimMerkle(E(200), [la]);
-      // Alice's 1000 exceeds the remaining 880. Before partial pay this
-      // reverted outright; now she takes the 880 immediately...
-      await merkle.connect(alice).claimMerkle(E(1000), [lb]);
-      expect(await satori.balanceOf(alice.address)).to.equal(E(880));
-      expect(await merkle.alreadyMintedTo(alice.address)).to.equal(E(880));
+      // Alice's entitlement exceeds what is left. Before partial pay this
+      // reverted outright; now she takes what is left immediately...
+      await merkle.connect(alice).claimMerkle(ALICE, [lb]);
+      expect(await satori.balanceOf(alice.address)).to.equal(left);
+      expect(await merkle.alreadyMintedTo(alice.address)).to.equal(left);
       // ...and the remaining 120 as soon as the reserve accrues it (a round
-      // at 360 more than covers it; the clamp stops at her entitlement).
+      // at PER more than covers it; the clamp stops at her entitlement).
       await advanceRounds(2);
-      await merkle.connect(alice).claimMerkle(E(1000), [lb]);
-      expect(await satori.balanceOf(alice.address)).to.equal(E(1000));
-      expect(await merkle.alreadyMintedTo(alice.address)).to.equal(E(1000));
+      await merkle.connect(alice).claimMerkle(ALICE, [lb]);
+      expect(await satori.balanceOf(alice.address)).to.equal(ALICE);
+      expect(await merkle.alreadyMintedTo(alice.address)).to.equal(ALICE);
     });
   });
 });

@@ -2,7 +2,7 @@
  * PER-ROUND BUDGET (item 8)
  *
  * Each round's payable on-chain budget is the WHOLE gross: 720 − devFee −
- * offchainBudget, snapshotted at the round's first action. Per-game allocation
+ * off-chain share, snapshotted at the round's first action. Per-game allocation
  * = budget × gameVotesAtRound/roundVoteTotal, and predictors split all of it.
  *
  * Two reservations that used to come off the top are gone:

@@ -68,6 +68,9 @@ async function deploy(factory, ...args) {
 // registration). A Safe root lends exactly this; a post-condition re-reads it.
 const ADAPTER_FEE = ethers.parseEther("0.001");
 
+// rewards.offchainShareBps at launch: the off-chain share of each round's residual.
+const OFFCHAIN_SHARE_BPS = 5000;
+
 // On a live network every read that follows a write is eventually consistent — a
 // receipt is not a read barrier. Without this, a perfectly wired deploy can be
 // declared NOT safe by a lagging node, after the money is spent, with "redeploy"
@@ -588,6 +591,13 @@ async function main() {
     console.log("Enabling launch capabilities (delegatePrediction)...");
     await (await rewards.setCapabilities(launchBitmap)).wait();
 
+    // 7.6. reward split at launch: half of each round's predictor emission goes
+    // to the off-chain Merkle channel, half stays on chain (owner, 2026-10-26).
+    // Merkle is wired in step 7, which E2 requires before the share goes above 0.
+    // emissionSplitAuthority is unset, so it falls to the admin, the deployer.
+    console.log(`Setting the reward split: ${OFFCHAIN_SHARE_BPS / 100}% off chain...`);
+    await (await rewards.setOffchainShareBps(OFFCHAIN_SHARE_BPS)).wait();
+
     // 8a. GOVERNANCE INSTRUMENTS — both holder-voting paths, deployed as part
     // of the stack so no chain ships without them (owner, 2026-09-15). Neither
     // holds authority over anything (docs/design/authority-map.md 10b); the
@@ -658,6 +668,7 @@ async function main() {
       }
       return true;
     }],
+    ["offchainShareBps == 50% split", async () => (await rewards.offchainShareBps()) === BigInt(OFFCHAIN_SHARE_BPS)],
     ["token.controller == hub", async () => eq(await token.controller(), A.hub)],
     ["token.hook == hub", async () => eq(await token.hook(), A.hub)],
     // The airdrop lane: the token's pointer is the ONLY door, the contract
@@ -838,7 +849,8 @@ async function main() {
     "  Open the rest later via rewards.setCapabilities(bitmap) — bit i = capability i,\n" +
     "  EIGHT capabilities at bits 0..7, so \"all on\" is 0xff (docs/design/capability-rollout.md).\n" +
     "  NOTE: voting is bit 7 and ships OFF, so until it is enabled only the admin can vote\n" +
-    "  and no game but the protocol's own accrues any weight."
+    "  and no game but the protocol's own accrues any weight.\n" +
+    `\nReward split: ${OFFCHAIN_SHARE_BPS / 100}% of each round's predictor emission off chain (Merkle), the rest on chain.`
   );
 
   // 10. write the address book (for the dapp / verification)

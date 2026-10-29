@@ -179,6 +179,7 @@ describe("Gasless relay", function () {
     });
 
     it("a fee nothing can pay takes no fee and consumes no nonce (locked user, empty bucket)", async function () {
+      await rewards.connect(owner).setOfficialRelayer(relayer.address); // after predicting, only it can be paid from the bucket
       await registry.setValue(stream1, 100);
       // Predicting locks alice for the round, so the wallet cannot pay the fee, and
       // she has no unclaimed rewards to fall back on — same atomic unwind.
@@ -278,6 +279,12 @@ describe("Gasless relay", function () {
   });
 
   describe("Claim fee comes out of the claim", function () {
+    // Alice predicts again before claiming, so the fee can go only to the
+    // official relayer (ClaimAfterPredicting.test.js).
+    beforeEach(async function () {
+      await rewards.connect(owner).setOfficialRelayer(relayer.address);
+    });
+
     async function aliceWinsThenPredictsAgain() {
       await registry.setValue(stream1, 100);
       await satori.connect(alice).predictMultipleWithPayloads([{ gameId: stream1, payload: pack1(1) }]);
@@ -345,6 +352,7 @@ describe("Gasless relay", function () {
     });
 
     it("a wallet locked by a prediction pays from its unclaimed rewards, and its lock is not lowered", async function () {
+      await rewards.connect(owner).setOfficialRelayer(relayer.address);
       // Alice wins, settles, and predicts again: she holds a bucket and a fresh lock.
       await registry.setValue(stream1, 100);
       await satori.connect(alice).predictMultipleWithPayloads([{ gameId: stream1, payload: pack1(1) }]);

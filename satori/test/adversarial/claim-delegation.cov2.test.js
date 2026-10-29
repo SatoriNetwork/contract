@@ -50,7 +50,8 @@ async function buildRewards(satori, registry, who, stream) {
   await registry.setValue(stream, 150); // UP -> correct
   await advanceOneDay();
   await registry.setValue(stream, 200);
-  await satori.connect(who).predictMultipleWithPayloads([{ gameId: stream, payload: pack1(UP) }]);
+  // Score without predicting this round, so a claim may go elsewhere.
+  await satori.settlePrediction(who.address, stream);
 }
 
 async function getStreamId(tx, satori) {

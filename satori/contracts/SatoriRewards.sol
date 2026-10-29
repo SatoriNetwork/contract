@@ -159,20 +159,12 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
     // immutable SatoriToken.)
     mapping(uint256 => uint256) internal _roundBudget;
 
-    /// @notice The per-round emission routed to the off-chain Merkle channel, in
-    ///         wei. The on-chain reward system gets the remainder,
-    ///         `onChainGross = emissionRateNow − devRateNow − offchainBudget`.
-    ///         Absolute wei (a percentage is UI-only). The setter floors it
-    ///         strictly below that residual so `onChainGross >= 1 wei` — which
-    ///         keeps the `_roundBudget[round]==0` "unset" sentinel honest and
-    ///         gives functional (not literal) true zero. Default 0 = the whole
-    ///         residual stays on-chain.
-    uint256 public offchainBudget;
+    /// Retired: the old absolute dial. Unread; never reuse the slot, a live
+    /// proxy still holds a value in it. The split is `offchainShareBps`.
+    uint256 internal offchainBudget;
 
-    /// @notice Emitted when the dial changes. `roundSet` is the round it was set
-    ///         in; the change takes effect on the next round that gets touched
-    ///         (an already-touched round has its gross frozen).
-    event OffchainBudgetSet(uint256 newOffchainBudget, uint256 roundSet, address indexed setter);
+    /// @notice The split takes effect from the round after `roundSet`.
+    event OffchainShareSet(uint256 bps, uint256 roundSet, address indexed setter);
     /// @notice A game's round pool after a prediction added weight: the two sides'
     ///         running totals, which scoring later divides by.
     event GameRoundWeight(uint32 indexed gameId, uint256 indexed round, uint256 up, uint256 down);
@@ -461,6 +453,8 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
     error AlreadySet();
     error NoPendingPrediction();
     error ClaimDelegatedAway();
+    error ClaimElsewhereAfterPredicting();
+    error FeeNotToOfficialRelayer();
     /// @notice setPredictorFee: a value above MAX_PREDICTOR_FEE_BPS.
     error InvalidPredictorFee();
     error InvalidReferral();
@@ -716,25 +710,21 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
         return ((bits >> capId) & 1 == 1) || caller == admin;
     }
 
-    function setOffchainBudget(uint256 newOffchain) external {
+    /// @notice The share of each round's residual (emission net of the dev fee)
+    ///         routed to the off-chain Merkle channel, in bps; the on-chain
+    ///         reward system gets the rest. Below 10000, so the on-chain gross
+    ///         stays >= 1 wei and the `_roundBudget[round] == 0` "unset"
+    ///         sentinel stays honest.
+    function setOffchainShareBps(uint256 bps) external {
         if (msg.sender != _holder(emissionSplitAuthority)) revert Unauthorized();
-        // Bounded by NEXT round's residual (the first round the dial applies to),
-        // matching the hub's setMerkleReserveRate bound exactly. The rate can
-        // fall later (a step or a fee raise), which is why the hub's gross
-        // yields rather than trusting a once-legal dial forever.
-        if (newOffchain >= ISatoriCore(satoriCore).residualNext()) revert BadInput();
+        if (bps >= 10000) revert BadInput();
         // Effective NEXT round: pin the current round's on-chain gross at the OLD
-        // dial before switching, so a change never rewrites the in-flight round —
-        // in lockstep with the hub's Merkle reserve, which likewise carries the old
-        // rate through this round. Both lanes then read the same dial per round.
+        // share before switching, in lockstep with the hub's Merkle reserve, which
+        // likewise carries the old share through this round.
         _ensureRoundBudget(_currentRound());
-        offchainBudget = newOffchain;
-        // Mirror the dial into core's Merkle reserve accumulator (Phase 2b). Core
-        // owns the authoritative per-lane ceiling; the Merkle contract never reads
-        // rewards. Reverts if the core is not yet wired — dialing pre-wiring is a
-        // deploy-order error, and nothing can mint before the core is set anyway.
-        ISatoriCore(satoriCore).setMerkleReserveRate(newOffchain);
-        emit OffchainBudgetSet(newOffchain, _currentRound(), msg.sender);
+        offchainShareBps = bps;
+        ISatoriCore(satoriCore).setMerkleReserveBps(bps);
+        emit OffchainShareSet(bps, _currentRound(), msg.sender);
     }
 
     /// @dev Snapshot BOTH the on-chain gross and the payable budget for `round`
@@ -1161,13 +1151,23 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
 
     /// @dev Auth + lockout check for `_claimFor` (SATORI mint). Returns the
     ///      current round so callers don't have to read it again.
-    function _checkClaimAuth(address owner, address caller) internal view returns (uint256 currentRound) {
+    ///      Unclaimed rewards count toward prediction power, so once the owner has
+    ///      predicted this round they may leave only to the owner, and a fee only to
+    ///      the official relayer: a self-chosen relayer taking the whole bucket as
+    ///      its "fee" would carry the same power to a second wallet.
+    function _checkClaimAuth(address owner, address caller, address recipient, address feeTo, uint256 fee)
+        internal view returns (uint256 currentRound)
+    {
         currentRound = _currentRound();
         address ownerDelegate = claimDelegateInfo[owner];
         if (caller != owner) {
-            if (ownerDelegate != caller) revert Unauthorized();
+            if (ownerDelegate != caller && (ownerDelegate != address(0) || recipient != owner)) revert Unauthorized();
         } else {
             if (ownerDelegate != address(0) && ownerDelegate != owner) revert ClaimDelegatedAway();
+        }
+        if (_unsettledPredictionCount[owner][uint32(currentRound)] > 0) {
+            if (recipient != owner) revert ClaimElsewhereAfterPredicting();
+            if (fee > 0 && feeTo != officialRelayer) revert FeeNotToOfficialRelayer();
         }
     }
 
@@ -1255,24 +1255,26 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
     }
 
     /**
-     * @notice Claim rewards for an owner to a recipient using claim delegation authorization
+     * @notice Claim `owner`'s rewards to `recipient`. `caller` is the owner's named
+     *         claimer (any recipient), or anyone when no claimer is named and
+     *         `recipient == owner`. A wallet that names itself opts out.
      */
     function claimFor(address owner, address caller, address recipient) external override onlyCore nonReentrant returns (uint256) {
         return _claimFor(owner, caller, recipient, address(0), 0);
     }
 
     /// @dev NOTE (audit F30 — accepted, working-as-intended): `recipient` is
-    ///      DELIBERATELY caller-chosen, not pinned to `owner`. Claim delegation is
-    ///      designed for delegating to your OWN other address — delegate wallet A's
-    ///      claim to wallet B you also control, so B directing A's rewards wherever
-    ///      is the intended point. The delegate is fully trusted with the reward
-    ///      stream, and it is consent-gated (only the owner sets/clears it via
-    ///      `delegateClaimAbility`, and while set the owner can't self-claim). Do
-    ///      NOT "fix" this by pinning the recipient to `owner` — it would break the
-    ///      multi-wallet use case.
+    ///      DELIBERATELY caller-chosen for the owner and its named claimer, not
+    ///      pinned to `owner`: locked wallets claim to a second wallet to get
+    ///      rewards they can spend, and a claimer directing the rewards is the point
+    ///      of naming one (consent-gated by `delegateClaimAbility`; while set the
+    ///      owner can't self-claim). Do NOT pin it to `owner` — that breaks both.
+    ///      Two limits only (`_checkClaimAuth`): a caller who is neither may claim
+    ///      only to `owner`, and after the owner predicts this round, nothing goes
+    ///      elsewhere (SatoriEngine#10).
     function _claimFor(address owner, address caller, address recipient, address feeTo, uint256 fee) internal returns (uint256) {
         if (recipient == address(0)) revert BadInput();
-        uint256 currentRound = _checkClaimAuth(owner, caller);
+        uint256 currentRound = _checkClaimAuth(owner, caller, recipient, feeTo, fee);
 
         // v5: no `_settleRewards(owner)` — eager credit at score time keeps
         // `unclaimedRewards[owner]` always current. The delegator-rate walk
@@ -2064,6 +2066,23 @@ contract SatoriRewards is ISatoriRewards, ReentrancyGuard, SatoriUUPS {
     ///         hub's flat burns. Lives here, with the admin and the other dials,
     ///         because the hub has no bytes to spare; the hub reads it.
     uint256 private _registrationFee;
+
+    /// See `setOffchainShareBps`. Appended.
+    uint256 public offchainShareBps;
+
+    /// @notice The one relayer that may be paid out of unclaimed rewards after the
+    ///         owner has predicted this round (`_checkClaimAuth`). Zero: none may.
+    ///         Anyone can still relay; this only decides who can be paid that way.
+    address public officialRelayer;
+    event OfficialRelayerSet(address indexed relayer, address indexed setter);
+
+    /// @notice Admin-only. Zero unsets it.
+    function setOfficialRelayer(address relayer) external {
+        if (msg.sender != admin) revert Unauthorized();
+        officialRelayer = relayer;
+        emit OfficialRelayerSet(relayer, msg.sender);
+    }
+
     uint256 public constant DEFAULT_REGISTRATION_FEE = 0.001 ether;
     event RegistrationFeeSet(uint256 fee, address indexed setter);
 

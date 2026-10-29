@@ -101,7 +101,7 @@ describe("Claim Feature", function () {
       // R3: Score R1
       await advanceToNextRound();
       await registry.setValue(stream1, 200);
-      await satori.connect(alice).predictMultipleWithPayloads([{ gameId: stream1, payload: pack1(UP) }]);
+      await satori.settlePrediction(alice.address, stream1); // score without predicting: a prediction this round would keep the claim at home
 
       // Claim reward to Bob's address
       const aliceBalanceBefore = await satori.balanceOf(alice.address);
@@ -155,7 +155,7 @@ describe("Claim Feature", function () {
       // R3: Score R1
       await advanceToNextRound();
       await registry.setValue(stream1, 200);
-      await satori.connect(alice).predictMultipleWithPayloads([{ gameId: stream1, payload: pack1(UP) }]);
+      await satori.settlePrediction(alice.address, stream1); // score without predicting: a prediction this round would keep the claim at home
 
       // Claim and check event
       const currentRound = await satori.getCurrentRound();
@@ -181,7 +181,7 @@ describe("Claim Feature", function () {
       // R3: Score R1
       await advanceToNextRound();
       await registry.setValue(stream1, 200);
-      await satori.connect(alice).predictMultipleWithPayloads([{ gameId: stream1, payload: pack1(UP) }]);
+      await satori.settlePrediction(alice.address, stream1); // score without predicting: a prediction this round would keep the claim at home
 
       // Claim once
       await satori.connect(alice)['claim(address)'](bob.address);
@@ -220,8 +220,8 @@ describe("Claim Feature", function () {
       // R4: Score R2
       await advanceToNextRound();
       await registry.setValue(stream1, 250);
-      // Predict again to trigger R2 scoring
-      await satori.connect(alice).predictMultipleWithPayloads([{ gameId: stream1, payload: pack1(UP) }]);
+      // Score R2 without predicting: a prediction this round would keep claims at home
+      await satori.settlePrediction(alice.address, stream1);
 
       // Now Alice has claimable rewards accumulated from multiple predictions
     });
@@ -348,7 +348,7 @@ describe("Claim Feature", function () {
       // R3: Score R1
       await advanceToNextRound();
       await registry.setValue(stream1, 200);
-      await satori.connect(bob).predictMultipleWithPayloads([{ gameId: stream1, payload: pack1(UP) }]); // Trigger R1 scoring
+      await satori.settlePrediction(bob.address, stream1); // score without predicting: a prediction this round would keep the claim at home
 
       // Bob claims his predictor share to Carol's address
       const carolBalanceBefore = await satori.balanceOf(carol.address);
@@ -376,7 +376,7 @@ describe("Claim Feature", function () {
       // R3: Score R1
       await advanceToNextRound();
       await registry.setValue(stream1, 200);
-      await satori.connect(bob).predictMultipleWithPayloads([{ gameId: stream1, payload: pack1(UP) }]); // Trigger R1 scoring
+      await satori.settlePrediction(bob.address, stream1); // score without predicting: a prediction this round would keep the claim at home
 
       // Pull-based model: Bob claims his predictor share to Carol;
       // Alice claims her delegator share herself.

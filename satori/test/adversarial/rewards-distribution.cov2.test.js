@@ -149,6 +149,7 @@ describe("rewards-distribution adversarial coverage (round 2)", function () {
 
     // Record round R as the baseline for the committed-budget window.
     const roundR = BigInt(await satori.getCurrentRound());
+    ON_CHAIN_GROSS = await onChainGrossNow(satori); // R's own gross: the rate steps every round's worth issued
 
     // R: dave is the SOLE predictor on A → he earns the whole round budget.
     await registry.setValue(A, 110);

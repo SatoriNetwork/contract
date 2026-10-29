@@ -8,7 +8,7 @@ import { Row, ActionState, shortAddress, fmtSatori, bpsToPercentStr } from './pr
 import { parseRatioWad, formatRatio, RATIO_DEFAULT, RATIO_NEVER_CHANGE } from '../lib/emissionStatus';
 
 // Admin panel: the rewards-admin's operational levers (fee schedule read-out, the
-// off-chain budget dial, airdrop loading, admin rotation), the Merkle root-publisher
+// off-chain share, airdrop loading, admin rotation), the Merkle root-publisher
 // actions, and the permissionless housekeeping calls. Each action is gated on-chain to
 // its own role; the tab is shown to the rewards admin, the emission holder, the
 // airdrop loader and the token's freeze authority (App.tsx, useTabProbes.ts).
@@ -95,8 +95,8 @@ export function AdminTab() {
   const onSetBudget = () => {
     const v = budgetInput.trim();
     if (!v) return;
-    wrap('budget', setBudgetAction, () => owner.setOffchainBudget(v),
-      `Off-chain dial set to ${v} SATORI/round (applies to future rounds)`);
+    wrap('budget', setBudgetAction, () => owner.setOffchainShare(v),
+      `Off-chain share set to ${v.replace(/%$/, '')}% (applies from next round)`);
     setBudgetInput('');
   };
   const onSetRegFee = () => {
@@ -157,11 +157,11 @@ export function AdminTab() {
       {/* Roles (read-only) */}
       <div className="card-themed p-3 text-xs space-y-1" data-testid="admin-roles">
         <div className="flex justify-between">
-          <span className="text-gray-500">Rewards admin (fee anchor, budget dial)</span>
+          <span className="text-gray-500">Rewards admin (fee anchor, reward split)</span>
           <span className="font-mono">{shortAddress(data.admin)}{owner.isOwner && <span className="text-green-500"> · you</span>}</span>
         </div>
         <div className="flex justify-between">
-          <span className="text-gray-500">Emission split (the on-chain/off-chain dial)</span>
+          <span className="text-gray-500">Emission split (the on-chain/off-chain share)</span>
           <span className="font-mono">
             {shortAddress(data.emissionSplitHolder)}
             {data.emissionSplitHolder === data.admin && <span className="text-gray-400"> · via admin</span>}
@@ -216,7 +216,7 @@ export function AdminTab() {
         />
         <Row
           title="Emission This Round"
-          subtitle={<>The protocol's per-round emission, from SatoriHub's schedule. It follows how much SATORI has been issued, not the calendar: 846.62 per round until 1,460 rounds-worth has been issued, then multiplied by the emission ratio (default &phi;&minus;1 &asymp; 0.618) each time another 730 rounds-worth at the current rate is issued. The fee and the off-chain dial are both slices of this figure &mdash; not of the token's 1,440 constitutional envelope, which the schedule never exceeds. Current round {formatElapsedRound(data.currentRound, deploymentRound)}.</>}
+          subtitle={<>The protocol's per-round emission, from SatoriHub's schedule. It follows how much SATORI has been issued, not the calendar: 846.62 on day 1, then multiplied by the emission ratio (default 0.999708, which is 1 &minus; 846.62/2,900,000: 0.0292% less) each time another round&rsquo;s worth at the current rate is issued, so at full pace it falls a little every round and lifetime emission approaches 2,900,000. A ratio of 1 stops the decline; above 1 raises it. The fee and the off-chain share are both slices of this figure &mdash; not of the token's 1,440 constitutional envelope, which the schedule never exceeds. Current round {formatElapsedRound(data.currentRound, deploymentRound)}.</>}
           summary={<span><strong>{fmtSatori(data.emissionRatePerRound)}</strong></span>}
           input={null} action={null} onSave={() => {}} saving={false} disabled readOnly
         />
@@ -240,9 +240,9 @@ export function AdminTab() {
           summary={<span data-testid="emission-ratio-current">{em ? <>&times;<strong>{formatRatio(em.ratioWad)}</strong></> : '—'}</span>}
           input={
             <div className="space-y-2">
-              <input type="text" inputMode="decimal" value={ratioInput} onChange={(e) => { setRatioInput(e.target.value); setRatioAction(null); }} placeholder="Multiplier (e.g. 0.618, 1, 2)" data-testid="input-emission-ratio" className="w-full bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded px-3 py-2 text-sm font-mono" disabled={busy !== null || !owner.isEmissionHolder} />
+              <input type="text" inputMode="decimal" value={ratioInput} onChange={(e) => { setRatioInput(e.target.value); setRatioAction(null); }} placeholder="Multiplier (e.g. 0.999708, 1, 1.0001)" data-testid="input-emission-ratio" className="w-full bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded px-3 py-2 text-sm font-mono" disabled={busy !== null || !owner.isEmissionHolder} />
               <div className="flex gap-2">
-                <button type="button" className={quickBtn} data-testid="btn-ratio-default" disabled={busy !== null || !owner.isEmissionHolder} onClick={() => { setRatioInput(RATIO_DEFAULT); setRatioAction(null); }}>0.618 (default)</button>
+                <button type="button" className={quickBtn} data-testid="btn-ratio-default" disabled={busy !== null || !owner.isEmissionHolder} onClick={() => { setRatioInput(RATIO_DEFAULT); setRatioAction(null); }}>0.999708 (default)</button>
                 <button type="button" className={quickBtn} data-testid="btn-ratio-never-change" disabled={busy !== null || !owner.isEmissionHolder} onClick={() => { setRatioInput(RATIO_NEVER_CHANGE); setRatioAction(null); }}>1.0 (never change)</button>
               </div>
               {ratioWad !== null && typeof ratioWad !== 'bigint' && <div className="text-xs text-red-600 dark:text-red-400">{ratioWad.err}</div>}
@@ -261,12 +261,12 @@ export function AdminTab() {
           saveLabel="Accrue protocol fee" saveTestId="btn-accrue-protocol-fee"
         />
         <Row
-          title="Off-chain Budget (dial)"
-          subtitle={<>SATORI per round routed to the off-chain Merkle channel. Must stay below next round's emission net of the platform fee &mdash; the contract rejects anything at or above it. The on-chain reward system gets the remainder. Applies to FUTURE rounds.<span className="block mt-1 text-gray-400">Lanes now, on-chain: {fmtSatori(data.onChainRewardCeiling)} · Merkle: {fmtSatori(data.merkleReserveCeiling)} SATORI claimable.</span>{data.emission && data.emission.dialEffective < data.emission.dial && <span className="block mt-1 text-amber-600 dark:text-amber-400" data-testid="dial-effective">The rate has stepped under this dial: the off-chain reserve accrues {fmtSatori(data.emission.dialEffective)}/round, not {fmtSatori(data.emission.dial)}.</span>}</>}
-          summary={<span><strong>{fmtSatori(data.offchainBudget)}</strong> <span className="text-xs text-gray-500">/round off-chain</span></span>}
-          input={<input type="text" value={budgetInput} onChange={(e) => setBudgetInput(e.target.value)} placeholder="Off-chain SATORI/round (e.g. 200)" className="w-full bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded px-3 py-2 text-sm font-mono" disabled={busy !== null} />}
+          title="Off-chain share"
+          subtitle={<>Percent of each round's emission, after the platform fee, routed to the off-chain Merkle channel; the on-chain reward system gets the rest. It follows the emission, so a step-down keeps the split. Below 100. Applies from the NEXT round.<span className="block mt-1 text-gray-400">{data.emission && <>Next round off-chain: {fmtSatori(data.emission.offchainNext)} SATORI. </>}Lanes now, on-chain: {fmtSatori(data.onChainRewardCeiling)} · Merkle: {fmtSatori(data.merkleReserveCeiling)} SATORI claimable.</span></>}
+          summary={<span><strong data-testid="offchain-share">{data.offchainShareBps / 100}%</strong> <span className="text-xs text-gray-500">off-chain</span></span>}
+          input={<input type="text" value={budgetInput} onChange={(e) => setBudgetInput(e.target.value)} placeholder="Off-chain percent (e.g. 50)" className="w-full bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded px-3 py-2 text-sm font-mono" disabled={busy !== null} />}
           action={budgetAction} onSave={onSetBudget} saving={busy === 'budget'} disabled={!budgetInput.trim() || !owner.isEmissionSplitHolder}
-          saveLabel="Set dial" saveTestId="btn-set-offchain-budget"
+          saveLabel="Set share" saveTestId="btn-set-offchain-share"
         />
         <Row
           title="Adapter registration fee"
@@ -351,7 +351,7 @@ export function AdminTab() {
         </>)}
         <Row
           title="Transfer Admin"
-          subtitle={<>Hand the rewards-admin role to a different wallet. The admin sets the off-chain dial, toggles capabilities, and can rotate itself. The airdrop loader is a separate role on the SatoriAirdrop contract and does not move with it. it can NOT change the platform fee or its recipient. After transfer you lose these actions. Current admin: <span className="font-mono">{shortAddress(data.admin)}</span>.</>}
+          subtitle={<>Hand the rewards-admin role to a different wallet. The admin sets the off-chain share, toggles capabilities, and can rotate itself. The airdrop loader is a separate role on the SatoriAirdrop contract and does not move with it. it can NOT change the platform fee or its recipient. After transfer you lose these actions. Current admin: <span className="font-mono">{shortAddress(data.admin)}</span>.</>}
           summary={<span className="font-mono text-xs">{shortAddress(data.admin)}</span>}
           input={<input type="text" value={adminInput} onChange={(e) => setAdminInput(e.target.value)} placeholder="New admin address (0x…)" className="w-full bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded px-3 py-2 text-sm font-mono" disabled={busy !== null} />}
           action={adminAction} onSave={onTransferAdmin} saving={busy === 'admin'} disabled={!adminInput.trim()}

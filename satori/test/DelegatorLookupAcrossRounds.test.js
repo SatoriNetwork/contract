@@ -63,9 +63,10 @@ describe("Delegator lookup across rounds", function () {
         await satori.transfer(carol.address, ethers.parseEther("100"));
         await satori.transfer(dave.address, ethers.parseEther("100"));
 
-        GROSS = (await satori.emissionRateNow()) - (await satori.devRateNow());
         await advanceRound();
     });
+    // Each round's own rate: the schedule steps every round's worth issued.
+    const grossNow = async () => (await satori.emissionRateNow()) - (await satori.devRateNow());
 
     it("delegator lookup and rate pool stay aligned across rounds after a mid-period receipt", async function () {
         // Setup: two streams so Bob can predict on different rounds. The
@@ -88,6 +89,7 @@ describe("Delegator lookup across rounds", function () {
         await time.increase(86400);
         await registry.setValue(s1, 100);
         await satori.transfer(carol.address, ethers.parseEther("50"));
+        const grossD = await grossNow();
         await satori.connect(bob).predictMultipleWithPayloads([{ gameId: s1, payload: pack1(UP) }]);
 
         // Day D+1: Bob predicts on s2. Pending activates → rate pool=150
@@ -98,6 +100,7 @@ describe("Delegator lookup across rounds", function () {
         await advanceRound();
         await registry.setValue(s1, 110);
         await registry.setValue(s2, 100);
+        const grossD1 = await grossNow();
         await satori.connect(bob).predictMultipleWithPayloads([{ gameId: s2, payload: pack1(UP) }]);
 
         // Settle both predictions.
@@ -138,7 +141,7 @@ describe("Delegator lookup across rounds", function () {
         const carolBefore = await satori.balanceOf(carol.address);
         await satori.connect(carol).claim();
         const carolReward = (await satori.balanceOf(carol.address)) - carolBefore;
-        expect(carolReward).to.be.closeTo(NET(((GROSS * 90n) / 100n) * 2n), RAW_TOLERANCE);
+        expect(carolReward).to.be.closeTo(NET((grossD * 90n) / 100n + (grossD1 * 90n) / 100n), RAW_TOLERANCE);
     });
 
     it("multiple receipts during a single period don't compound the over-credit", async function () {
@@ -163,6 +166,7 @@ describe("Delegator lookup across rounds", function () {
         await advanceRound();
         await registry.setValue(sid, 100);
         await satori.transfer(carol.address, ethers.parseEther("25"));
+        GROSS = await grossNow();
         await satori.connect(bob).predictMultipleWithPayloads([{ gameId: sid, payload: pack1(UP) }]);
 
         // Settle.

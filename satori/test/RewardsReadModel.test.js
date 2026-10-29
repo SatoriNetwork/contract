@@ -5,6 +5,7 @@ const { expect } = require("chai");
 const { deploySatoriFixture, pack1, voteFor } = require("./fixtures");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
+const { onChainGrossOf } = require("./helpers/onChainGross");
 
 const UP = 1;
 const nextRound = () => time.increase(86400);
@@ -98,7 +99,7 @@ describe("Rewards read model", function () {
     it("the round's first touch emits RoundBudgetFrozen with the frozen budget; later touches emit nothing", async function () {
       await nextRound();
       const round = await satori.getCurrentRound();
-      const budget = (await satori.emissionRateNow()) - (await satori.devRateNow()) - (await rewards.offchainBudget());
+      const budget = (await onChainGrossOf(satori, rewards));
       await expect(registry.setValue(game, 1)).to.emit(rewards, "RoundBudgetFrozen").withArgs(round, budget);
       await expect(satori.connect(bob).predictMultipleWithPayloads([{ gameId: game, payload: pack1(UP) }]))
         .to.not.emit(rewards, "RoundBudgetFrozen");

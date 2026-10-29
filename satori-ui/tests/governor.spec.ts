@@ -79,7 +79,7 @@ test.describe('Admin tab', () => {
     await expect(page.locator('[data-testid="admin-tab"]')).toBeVisible({ timeout: 15000 });
     await expect(page.locator('[data-testid="admin-roles"]')).toBeVisible();
     // A couple of the operational controls are present.
-    await expect(page.locator('[data-testid="btn-set-offchain-budget"]')).toBeVisible();
+    await expect(page.locator('[data-testid="btn-set-offchain-share"]')).toBeVisible();
     await expect(page.locator('[data-testid="btn-accrue-protocol-fee"]')).toBeVisible();
   });
 });

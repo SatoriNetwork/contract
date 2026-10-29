@@ -71,7 +71,6 @@ describe("Delegated-power snapshot timing", function () {
         await satori.transfer(carol.address, ethers.parseEther("100"));
         await satori.transfer(dave.address, ethers.parseEther("100"));
 
-        GROSS = (await satori.emissionRateNow()) - (await satori.devRateNow());
         await advanceRound();
     });
 
@@ -95,6 +94,7 @@ describe("Delegated-power snapshot timing", function () {
         await satori.transfer(carol.address, ethers.parseEther("50"));
 
         // Bob predicts. Snapshot reads _delegatePowerForRate = 100.
+        GROSS = (await satori.emissionRateNow()) - (await satori.devRateNow()); // this round's own rate
         await satori.connect(bob).predictMultipleWithPayloads([{ gameId: sid, payload: pack1(UP) }]);
 
         await advanceRound();
@@ -151,6 +151,8 @@ describe("Delegated-power snapshot timing", function () {
         // Eve receives 50 mid-day. delegatedPredictionPower grows to
         // 250 live, but _delegatePowerForRate stays at 200.
         await satori.transfer(eve.address, ethers.parseEther("50"));
+
+        GROSS = (await satori.emissionRateNow()) - (await satori.devRateNow()); // this round's own rate
 
         await satori.connect(bob).predictMultipleWithPayloads([{ gameId: sid, payload: pack1(UP) }]);
 
@@ -235,6 +237,7 @@ describe("Delegated-power snapshot timing", function () {
         // Eve predicts (on Carol's 150 of live delegated power, but
         // _delegatePowerForRate[eve] = 150 because the new period opens
         // at the live balance).
+        GROSS = (await satori.emissionRateNow()) - (await satori.devRateNow()); // this round's own rate
         await satori.connect(eve).predictMultipleWithPayloads([{ gameId: sid, payload: pack1(UP) }]);
 
         await advanceRound();

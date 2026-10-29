@@ -3,7 +3,7 @@ const { ethers } = require("hardhat");
 const { loadFixture } = require("@nomicfoundation/hardhat-network-helpers");
 const { deploySatoriFixture } = require("../fixtures");
 const {
-  ONE, BASE, PHI_INV, RATE_CAP, NO_STEP, T0,
+  ONE, BASE, DEFAULT_RATIO, RATE_CAP, NO_STEP, T0,
   stepRate, ladder, grossUp, rewardsSigner, issueTo, advanceRound,
 } = require("./emissionHelpers");
 
@@ -22,16 +22,16 @@ describe("SatoriRewardsLens.emissionStatus", function () {
     const st = await lens.emissionStatus();
     expect(st.rateNow).to.equal(BASE);
     expect(st.rateNext).to.equal(BASE);
-    expect(st.rateAfterStep).to.equal(stepRate(BASE, PHI_INV));
-    expect(st.ratioWad).to.equal(PHI_INV);
+    expect(st.rateAfterStep).to.equal(stepRate(BASE, DEFAULT_RATIO));
+    expect(st.ratioWad).to.equal(DEFAULT_RATIO);
     expect(st.stepsTaken).to.equal(0n);
     expect(st.issued).to.equal(BASE);
     expect(st.issuedProjected).to.equal(BASE);
     expect(st.nextStepAt).to.equal(T0);
     expect(st.stepsActive).to.equal(true);
     expect(st.holder).to.equal(await hub.emissionHolder());
-    expect(st.dial).to.equal(0n);
-    expect(st.dialEffective).to.equal(0n);
+    expect(st.offchainShareBps).to.equal(0n);
+    expect(st.offchainNext).to.equal(0n);
   });
 
   it("a crossing moves rateNext and the next rung, not this round's rate", async function () {
@@ -74,8 +74,7 @@ describe("SatoriRewardsLens.emissionStatus", function () {
   });
 
   it("issuedProjected is what banking the accrued reserve would count", async function () {
-    const dial = ethers.parseEther("100");
-    await rewards.connect(owner).setOffchainBudget(dial);
+    await rewards.connect(owner).setOffchainShareBps(5000);
     await advanceRound();
     await advanceRound();
     await advanceRound();
@@ -88,18 +87,21 @@ describe("SatoriRewardsLens.emissionStatus", function () {
     expect((await hub.emission()).issued).to.equal(st.issuedProjected);
   });
 
-  it("dialEffective yields to residualNext − 1 when a step lands under the dial", async function () {
-    const residual0 = await hub.residualNext();
-    await rewards.connect(owner).setOffchainBudget(residual0 - 1n);
+  it("offchainNext follows residualNext when a step lands under the share", async function () {
+    await rewards.connect(owner).setOffchainShareBps(5000);
+    const residual0 = await hub.residualNext(); // read after the set: its banking may step
     let st = await lens.emissionStatus();
-    expect(st.dial).to.equal(residual0 - 1n);
-    expect(st.dialEffective).to.equal(residual0 - 1n);
+    expect(st.offchainShareBps).to.equal(5000n);
+    expect(st.offchainNext).to.equal(residual0 * 5000n / 10000n);
 
-    await issueTo(hub, token, rw, T0);
+    await issueTo(hub, token, rw, (await hub.emission()).nextStepAt);
     st = await lens.emissionStatus();
     const residual1 = await hub.residualNext();
     expect(residual1).to.be.lt(residual0);
-    expect(st.dial).to.equal(residual0 - 1n);
-    expect(st.dialEffective).to.equal(residual1 - 1n);
+    expect(st.offchainShareBps).to.equal(5000n);
+    expect(st.offchainNext).to.equal(residual1 * 5000n / 10000n);
+    // What the lens reports is what the hub banks for that round.
+    await advanceRound();
+    expect((await hub.merkleReserveCeiling()) - (await hub.merkleReserveCumulative())).to.equal(st.offchainNext);
   });
 });

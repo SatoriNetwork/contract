@@ -307,6 +307,13 @@ async function main() {
       console.log(`\n  note: airdrop loader is ${loaderNow}, not the deployer — cannot move it from here.`);
     } else {
       const airdrop = await ethers.getContractAt("SatoriAirdrop", A.airdrop);
+      // The snapshot is loaded by this single key before the loader moves:
+      // after the move, each batch is a Safe signing round (load-airdrop.js).
+      if ((await airdrop.airdropLoadedTotal()) === 0n && !process.env.AIRDROP_LOAD_LATER) {
+        throw new Error("the airdrop is not loaded yet. Load it first with the deployer " +
+          "(LOAD=1 SIGNER_KEYS=$PRIVATE_KEY node scripts/load-airdrop.js <dir>/batch-*.json), " +
+          "or set AIRDROP_LOAD_LATER=1 to move the loader with an empty table.");
+      }
       steps.push({
         n: 3, label: `set airdrop loader to ${newAdmin}`,
         why: "one-step and immediate — loading the table is an operational job, so it follows the admin",

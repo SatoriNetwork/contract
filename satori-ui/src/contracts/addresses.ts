@@ -181,23 +181,23 @@ const CHAINS: Record<number, ChainConfig> = {
   // .wallets.env, so nothing here is secured; it exists to exercise the flow.
   [TESTNET_CHAIN_ID]: {
     chainName: 'Base Sepolia',
-    deploymentRound: 20749, // pinned to satori/deployments/baseSepolia.json (2026-10-23 D7 redeploy from humble, block 49048034)
+    deploymentRound: 20752, // pinned to satori/deployments/baseSepolia.json (2026-10-26 D8 redeploy from humble, block 50459587)
     // Rehearsal holder-voting governor: 256-block activation window. The
     // VOTING_PERIOD is 604800s (7 days), read off chain; the 2026-09-25 governor
-    // was 7 days too, despite an older note here saying 30 minutes. Redeployed 2026-10-23 (D7).
-    holderGovernor: '0xaCfd8a5622A9314F790C3dB871334843bF300148',
-    token: '0x7Dd4F6EF7FE534e4962f975cffe93D19d9B891E1',
-    // SatoriAirdrop ships with the D7 stack; nonzero shows the airdrop panel.
-    airdrop: '0xf8482f9640A7A2bb4Ab372DE677E8a82eBEC04A4',
-    engine: '0x90C5Bc6f0322900ebAA12bb382Db44be7bc2e240',
-    hub: '0x17719B7B1A630dECBc5B7FFDdEd14ffb24120183',
-    registry: '0x95989fc59B0Ed1c323Af14d9139cD05F0379F556',
-    voting: '0xD6cB62d0f07EF38642f096D9B48b5421B4d3Cc44',
-    rewards: '0xF353eb4843E3B8822dd3fE88e638B02C456749BE',
-    games: '0x05096F2caB4D6E806604caDc2F78A8563be74783',
-    bounties: '0xd6C17bCD81F78cb133E2C86770B1ee07F52A00a7',
-    lens: '0x877DD8bD95E1301E283CACF31F0ec60401dB746a',
-    // The D7 stack DOES deploy a merkle proxy (0x20d398d45A3cC6D6A73a2381294E801736E120aB),
+    // was 7 days too, despite an older note here saying 30 minutes. Redeployed 2026-10-26 (D8).
+    holderGovernor: '0x7F201943C6F5b3574459302D8d780b2A81eE2f94',
+    token: '0xe6A4b12Eae75795E4D427706dc67c1392f75D54A',
+    // SatoriAirdrop ships with the D8 stack; nonzero shows the airdrop panel.
+    airdrop: '0x5BF17B223D623CdbD37E3497b95c911e954a3E65',
+    engine: '0x438Ca7a87b4D384b57f27c0829C06Ef1F1f90A60',
+    hub: '0x97D53d240e3dcfC6569d7B4001b03062681f4818',
+    registry: '0xcE4278b73dFE00772B485697FD1E97Bb0669c87f',
+    voting: '0xb2679d77D96be59E2FA3F1e8BB575f669d5150DE',
+    rewards: '0x618138368f9Fc69585907d576DEA5C89F1C798D1',
+    games: '0x4AD128bF49841d8e970dC36E1D1e43b36a79B612',
+    bounties: '0x84085c5BDDaD8B8937EF3c36B9179713E2755b50',
+    lens: '0x5404db175634ef5e83B23B6f9BD1836b040A47Dd', // 2026-10-27: new lens after the D8 share upgrade
+    // The D8 stack DOES deploy a merkle proxy (0xeCc7f1d5Df7aCBD7D1b0615490A88d14CA2B1F1c),
     // but the merkle lane has never been wired or exercised on a rehearsal
     // stack. Left at the ZERO address deliberately, exactly as before: a dapp
     // that reverts is better than one silently reading a root nobody published.

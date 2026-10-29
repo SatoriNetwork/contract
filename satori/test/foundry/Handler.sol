@@ -257,7 +257,7 @@ contract Handler is Test {
     uint256 public callCount_setEmissionRatio;
     uint256 public callCount_syncEmission;
     uint256 public callCount_bumpIssued;
-    uint256 public callCount_setOffchainBudget;
+    uint256 public callCount_setOffchainShare;
     uint256 public callCount_merkleMint;
 
     bytes32 internal _reserveCumulativeSlot;
@@ -1081,18 +1081,12 @@ contract Handler is Test {
         try satori.delegateClaimAbility(target) { callCount_delegateClaim++; } catch {}
     }
 
-    /// Claim on behalf of an owner via the claim-delegate path. Requires
-    /// `owner` to have delegated claim authority to `caller` first; otherwise
-    /// the try/catch absorbs the revert.
+    /// Claim on behalf of an owner, to the owner: allowed for anyone when the
+    /// owner names no claimer, and for the named claimer; otherwise the
+    /// try/catch absorbs the revert.
     function claimFor(uint256 callerSeed, uint256 ownerSeed) external trackIssued {
         address caller = _actor(callerSeed);
         address owner = _actor(ownerSeed);
-        // Route through the core's claimFor(owner, recipient): the underlying
-        // SatoriRewards.claimFor is now `onlyCore`, so it can no longer be
-        // called directly off the rewards contract. The core resolves
-        // msg.sender (caller) as the claim-delegate authority and forwards;
-        // the try/catch absorbs the revert when `owner` never delegated claim
-        // authority to `caller`.
         vm.prank(caller);
         try satori.claimFor(owner, owner) {} catch {}
     }
@@ -1347,7 +1341,7 @@ contract Handler is Test {
         uint256 pick = seed % 8;
         uint256 ratio = pick == 0 ? bound(seed, 1, 1e9) // dust: 0 reverts
             : pick <= 2 ? 1e18
-            : pick == 3 ? satori.PHI_INV()
+            : pick == 3 ? satori.DEFAULT_EMISSION_RATIO()
             : pick == 4 ? 2e18
             : pick == 5 ? bound(seed, 1e18 + 1, 3e18)
             : bound(seed, 1e17, 3e18);
@@ -1360,8 +1354,8 @@ contract Handler is Test {
     }
 
     /// Stands in for issuance a fuzz sequence is too short to earn: real scoring
-    /// adds at most about one round's rate per round, and the first threshold
-    /// is FLAT_ROUNDS rounds away. The hub lets rewards report only what its
+    /// adds at most about one round's rate per round, so a short sequence takes
+    /// only a few of the per-round steps. The hub lets rewards report only what its
     /// priced rounds allow and the token only what its envelope allows, so the
     /// bump first warps far enough for both, then prices the rounds skipped.
     function bumpIssued(uint256 amountSeed) external trackIssued {
@@ -1397,13 +1391,11 @@ contract Handler is Test {
         try satori.noteIssued(amount) { callCount_bumpIssued++; } catch {}
     }
 
-    function setOffchainBudget(uint256 seed) external trackIssued {
-        uint256 res = satori.residualNext();
-        if (res == 0) return;
+    function setOffchainShare(uint256 seed) external trackIssued {
         address holder = rewards.emissionSplitAuthority();
         if (holder == address(0)) holder = rewards.admin();
         vm.prank(holder);
-        try rewards.setOffchainBudget(res * (seed % 100) / 100) { callCount_setOffchainBudget++; } catch {}
+        try rewards.setOffchainShareBps(seed % 10000) { callCount_setOffchainShare++; } catch {}
     }
 
     function merkleMint(uint256 actorSeed, uint256 amountSeed) external trackIssued {

@@ -27,6 +27,7 @@ const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
 const { deploySatoriFixtureNoFee, pack1, voteFor } = require("../fixtures");
+const { onChainGrossOf } = require("../helpers/onChainGross");
 
 const UP = 1;
 const DEFAULT_ID = 1;
@@ -37,7 +38,7 @@ const DEFAULT_ID = 1;
 // after the fee — even "NoFee" fixtures carve it out; deploySatoriFixtureNoFee
 // only zeroes the rewards-level bps fee.
 // SatoriRewards._onChainGrossNow / _computeRoundBudget:
-//   gross   = emissionRateNow() − devRateNow() − offchainBudget
+//   gross   = residual − residual × offchainShareBps / 10000 (residual = emissionRateNow() − devRateNow())
 //   payable = gross
 // The payable budget IS the gross now: the first-predictor bonus was removed and
 // its reservation went with it, so the whole on-chain gross is distributable to
@@ -47,9 +48,7 @@ const DEFAULT_ID = 1;
 // outer constitutional ENVELOPE, not the rate: the hub mints under it at its own
 // schedule, so sizing a payout from it over-states the pool by the difference.
 async function roundBudget(satori, rewards) {
-  return (await satori.emissionRateNow())
-    - (await satori.devRateNow())
-    - (await rewards.offchainBudget());
+  return (await onChainGrossOf(satori, rewards));
 }
 
 async function advanceRound() {
@@ -124,7 +123,6 @@ describe("default-stream COVERAGE 2: cursor gaps, multi-producer conservation, g
   // numerators reconstruct the denominator exactly.
   it("keeps Σ participating-game payouts <= budget with the default counted once", async function () {
     const { satori, voting, registry, rewards, signers, lens } = await setup();
-    const BUDGET = await roundBudget(satori, rewards);
     const [owner, alice, bob, carol, dan, erin] = signers;
     for (const u of [alice, bob, carol, dan, erin]) await satori.transfer(u.address, ethers.parseEther("20"));
 
@@ -144,6 +142,9 @@ describe("default-stream COVERAGE 2: cursor gaps, multi-producer conservation, g
     // her) and is paid out of dan's weight.
     await advanceRound();
     const r1 = await satori.getCurrentRound();
+    // R1's own budget, read in R1: the rate steps every round's worth issued.
+    const BUDGET = await roundBudget(satori, rewards);
+    const residualR1 = (await satori.emissionRateNow()) - (await satori.devRateNow());
     await registry.setValue(a, 100);
     await registry.setValue(b, 100);
     await satori.connect(alice).predictMultipleWithPayloads([{ gameId: a, payload: pack1(UP) }]);
@@ -190,9 +191,7 @@ describe("default-stream COVERAGE 2: cursor gaps, multi-producer conservation, g
 
     // Conservation: the sum of all R1 participating-game payouts cannot exceed
     // the round budget. The bound is the REAL post-dev-fee residual.
-    expect(BUDGET, "budget must be the post-dev-fee residual").to.equal(
-      (await satori.emissionRateNow()) - (await satori.devRateNow())
-    );
+    expect(BUDGET, "budget must be the post-dev-fee residual").to.equal(residualR1);
     expect(BUDGET).to.be.lt(await satori.ROUND_REWARD_BUDGET());
     expect(paid).to.be.lte(BUDGET);
     expect(paid, "the round must actually have paid the three winners").to.be.gt(0n);

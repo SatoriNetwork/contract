@@ -10,7 +10,7 @@
  *     and some without -> the marketing-wallet fallback (the constructor-set
  *     immutable marketing recipient) skim,
  *   - some users DELEGATE prediction power to a delegate who predicts for them,
- *   - the off-chain dial is set > 0 (setOffchainBudget) so a Merkle reserve
+ *   - the off-chain share is set > 0 (setOffchainShareBps) so a Merkle reserve
  *     accrues, AND a Merkle root is published and claimed,
  *   - the airdrop table is loaded, finalized and claimed MID-RUN,
  *   - a bounty is funded (external ERC20) + staked so the bounty path is live.
@@ -64,6 +64,8 @@ const { burnedTotal } = require("../helpers/burned");
 const { TEST_PLATFORM_FEE_RECIPIENT, TEST_MARKETING_FEE_RECIPIENT, deployMerkleProxied } = require("../next/splitFixture");
 
 const E = (n) => ethers.parseEther(String(n));
+// The reserve a share banks per round at next round's residual.
+const perAt = async (satori, bps) => ((await satori.residualNext()) * bps) / 10000n;
 const UP = 1;
 const ROUND = 86400; // 24h round cadence
 
@@ -112,6 +114,12 @@ async function streamIdFrom(tx, satori) {
     }
   });
   return satori.interface.parseLog(ev).args.streamId;
+}
+
+/** Holds the emission rate (ratio 1.0), so every round here runs at the genesis rate. */
+async function holdRate(hub) {
+  await hub.connect(await ethers.getSigner(await hub.emissionHolder())).setEmissionRatio(10n ** 18n);
+  if ((await hub.emissionRateNext()) !== (await hub.emissionRateNow())) throw new Error("a step was already pending");
 }
 
 describe("CROSS-FEATURE break hunt — all new features live at once", function () {
@@ -185,7 +193,10 @@ describe("CROSS-FEATURE break hunt — all new features live at once", function 
     // SCHEDULE TIE — a priced round splits its residual between the on-chain
     // allowance and the reserve, so their sum covers every priced round and
     // never a round still to come. Holds only while the rate and fee are
-    // constant, which the first check pins.
+    // constant, which the first check pins. The default schedule steps every
+    // round's worth issued, so setup holds the rate with the emission lever
+    // (ratio 1.0, a configuration the protocol supports): this hunt is on the
+    // features, not the schedule.
     const curRound = await satori.getCurrentRound();
     expect(
       (await satori.emissionRateNow()) - (await satori.devRateNow()),
@@ -258,6 +269,7 @@ describe("CROSS-FEATURE break hunt — all new features live at once", function 
     bounties = f.bounties;
     owner = f.owner;
     [, alice, bob, carol, dave, eve, frank, grace, heidi, publisher] = f.signers;
+    await holdRate(f.hub);
 
     // ---- Deploy + wire a fresh SatoriMerkle (fixture does not include one).
     // owner is the satori deployer, so it may call setSatoriMerkle (write-once,
@@ -285,7 +297,7 @@ describe("CROSS-FEATURE break hunt — all new features live at once", function 
     lastReserve = 0n;
     // The schedule tie's lower bound counts every priced round at the full
     // residual, which needs the dial at 0 for any round banked but not priced yet.
-    expect(await rewards.offchainBudget()).to.equal(0n);
+    expect(await rewards.offchainShareBps()).to.equal(0n);
     lanes0 = (await hub.onChainAllowance()) + (await hub.merkleReserveCumulative());
     priced0 = await hub.onChainPricedRound();
     residual0 = (await satori.emissionRateNow()) - (await satori.devRateNow());
@@ -322,9 +334,9 @@ describe("CROSS-FEATURE break hunt — all new features live at once", function 
   });
 
   it("step 1 — set dial > 0 (reserve starts accruing) and load airdrop + fund a bounty", async function () {
-    // ---- The DIAL. 200 SATORI/round to the off-chain (Merkle) lane, effective
-    // from the next round.
-    await rewards.connect(owner).setOffchainBudget(E(200));
+    // ---- The DIAL. A quarter of each round to the off-chain (Merkle) lane,
+    // effective from the next round.
+    await rewards.connect(owner).setOffchainShareBps(2500);
     await INV("after-dial-set");
 
     // ---- AIRDROP table loaded and finalized mid-setup. Claims are open from
@@ -527,13 +539,14 @@ describe("CROSS-FEATURE break hunt — all new features live at once", function 
   });
 
   it("step 5 — MOVE the dial mid-run, then run another full round with all lines", async function () {
-    // Re-dial the off-chain budget UP. Effective-next-round: the in-flight round
-    // keeps the OLD 200 rate (its reserve is already due, and the view already
-    // projects it), and the new rate applies from the NEXT round only.
+    // Re-dial the off-chain share UP. Effective-next-round: the in-flight round
+    // keeps the OLD 25% (its reserve is already due, and the view already
+    // projects it), and the new share applies from the NEXT round only.
     const ceilBefore = await satori.merkleReserveCeiling();
-    await rewards.connect(owner).setOffchainBudget(E(400));
+    const PER = await perAt(satori, 5000n);
+    await rewards.connect(owner).setOffchainShareBps(5000);
     const bankedBase = await satori.merkleReserveCeiling();
-    expect(bankedBase, "in-flight round not rewritten at the new 400 rate").to.equal(ceilBefore);
+    expect(bankedBase, "in-flight round not rewritten at the new 50% share").to.equal(ceilBefore);
     expect(await hub.merkleReserveCumulative(), "in-flight round banked at the OLD rate").to.equal(
       bankedBase
     );
@@ -541,12 +554,12 @@ describe("CROSS-FEATURE break hunt — all new features live at once", function 
 
     // Each later round's reserve is due from its start, at the NEW rate.
     await advanceRound();
-    expect(await satori.merkleReserveCeiling() - bankedBase, "first round at the NEW 400 rate").to.equal(
-      E(400)
+    expect(await satori.merkleReserveCeiling() - bankedBase, "first round at the NEW share").to.equal(
+      PER
     );
     await advanceRound();
     const ceilAfter = await satori.merkleReserveCeiling();
-    expect(ceilAfter - bankedBase, "two rounds at the NEW 400 rate").to.equal(E(800));
+    expect(ceilAfter - bankedBase, "two rounds at the NEW share").to.equal(2n * PER);
     await INV("after-round-at-new-rate");
 
     // Fresh round with a referral predictor + a marketing-fallback predictor to
@@ -652,6 +665,7 @@ describe("CROSS-FEATURE targeted attacks — sharp-edge boundaries", function ()
 
   async function freshStack() {
     const f = await deploySatoriFixtureNoFee();
+    await holdRate(f.hub); // see the SCHEDULE TIE note above
     const merkle = await deployMerkleProxied(f.signers[9].address, f.token.target); // publisher = signers[9]
     await f.satori.connect(f.owner).setSatoriMerkle(await merkle.getAddress());
     await merkle.setSatoriCore(await f.satori.getAddress());
@@ -700,10 +714,9 @@ describe("CROSS-FEATURE targeted attacks — sharp-edge boundaries", function ()
     const roomBefore = (await satori.onChainRewardCeiling()) - (await satori.onChainMinted());
     expect(roomBefore, "alice's credit was reported").to.be.gte(earned);
 
-    // NOW crank the dial to just under the ceiling and let the reserve balloon.
-    // DERIVED from the hub: the dial is bounded by next round's residual.
-    const dial = (await satori.residualNext()) - 1n;
-    await rewards.connect(owner).setOffchainBudget(dial);
+    // NOW crank the share to its ceiling and let the reserve balloon.
+    const dial = await perAt(satori, 9999n);
+    await rewards.connect(owner).setOffchainShareBps(9999);
     const dialRound = await satori.getCurrentRound();
     const reserveBefore = await hub.merkleReserveCumulative();
     for (let i = 0; i < 40; i++) await advanceRound();
@@ -746,13 +759,14 @@ describe("CROSS-FEATURE targeted attacks — sharp-edge boundaries", function ()
       await freshStack();
     const [, alice, voter, bob] = signers;
 
-    // dial 360/round, effective next round; each round's reserve is due from its
-    // start, so two advances -> reserve == 360*2 == 720 exactly.
-    await rewards.connect(owner).setOffchainBudget(E(360));
+    // half of each round, effective next round; each round's reserve is due
+    // from its start, so two advances -> reserve == 2 rounds exactly.
+    const per = await perAt(satori, 5000n);
+    await rewards.connect(owner).setOffchainShareBps(5000);
     await advanceRound();
     await advanceRound();
     const reserve = await satori.merkleReserveCeiling();
-    expect(reserve).to.equal(E(720));
+    expect(reserve).to.equal(2n * per);
 
     // Publish a merkle root that claims the ENTIRE reserve to alice.
     await merkle.connect(publisher).setMerkleRoot(leafOf(alice.address, reserve));
@@ -818,7 +832,7 @@ describe("CROSS-FEATURE targeted attacks — sharp-edge boundaries", function ()
     const { satori, rewards, registry, owner, signers } = await freshStack();
     const [, alice, bob, carol, voter] = signers;
 
-    await rewards.connect(owner).setOffchainBudget(E(100)); // dial live
+    await rewards.connect(owner).setOffchainShareBps(1000); // dial live
 
     await satori.transfer(alice.address, E(40));
     await satori.transfer(voter.address, E(20));
@@ -861,9 +875,8 @@ describe("CROSS-FEATURE targeted attacks — sharp-edge boundaries", function ()
     const { satori, token, hub, rewards, airdrop, owner, signers } = await freshStack();
     const [, alice] = signers;
 
-    // Max the dial so the on-chain lane is squeezed hard: the dial is bounded by
-    // next round's residual.
-    await rewards.connect(owner).setOffchainBudget((await satori.residualNext()) - 1n);
+    // Max the share so the on-chain lane is squeezed hard.
+    await rewards.connect(owner).setOffchainShareBps(9999);
     // Load and finalize an airdrop, then run the maxed dial for years
     // so the reserve squeezes the on-chain lane hard.
     await airdrop.connect(owner).loadAirdropBatch([alice.address], [E(5000)]);
@@ -919,7 +932,7 @@ describe("CROSS-FEATURE targeted attacks — sharp-edge boundaries", function ()
       await freshStack();
     const [, delegator, delegate, refDest, voter] = signers;
 
-    await rewards.connect(owner).setOffchainBudget(E(120)); // dial live -> reserve accrues
+    await rewards.connect(owner).setOffchainShareBps(1500); // dial live -> reserve accrues
 
     await satori.transfer(delegator.address, E(60)); // lends power
     await satori.transfer(delegate.address, E(10));
@@ -976,36 +989,38 @@ describe("CROSS-FEATURE targeted attacks — sharp-edge boundaries", function ()
     const r0 = await satori.getCurrentRound();
     expect(await satori.merkleReserveCeiling()).to.equal(0n); // dormant, never dialed
 
-    // Leg A: dial 300, effective the NEXT round; each round's reserve is due from
-    // its start -> two advances bank 600, and the round it was set in adds nothing.
-    await rewards.connect(owner).setOffchainBudget(E(300));
+    // Leg A: 40%, effective the NEXT round; each round's reserve is due from
+    // its start -> two advances bank two rounds, and the round it was set in adds nothing.
+    const perA = await perAt(satori, 4000n);
+    await rewards.connect(owner).setOffchainShareBps(4000);
     expect(await satori.merkleReserveCeiling(), "leg A: not effective the round it was set in").to.equal(0n);
     await advanceRound();
     await advanceRound();
     let ceil = await satori.merkleReserveCeiling();
-    expect(ceil, "leg A: 300 * 2 rounds").to.equal(E(600));
+    expect(ceil, "leg A: 2 rounds").to.equal(2n * perA);
 
     // Leg B: dial back to 0. Banks the outstanding leg-A accrual, then dormant.
-    await rewards.connect(owner).setOffchainBudget(0);
+    await rewards.connect(owner).setOffchainShareBps(0);
     const banked = await satori.merkleReserveCeiling();
     // Advance 5 DORMANT rounds — reserve MUST NOT grow (rate 0).
     for (let i = 0; i < 5; i++) await advanceRound();
     expect(await satori.merkleReserveCeiling(), "dormant rounds add nothing").to.equal(banked);
 
-    // Leg C: dial 100. It must accrue ONLY from the NEXT round onward, never
+    // Leg C: 15%. It must accrue ONLY from the NEXT round onward, never
     // back-count the 5 dormant rounds, nor the round it is set in.
-    await rewards.connect(owner).setOffchainBudget(E(100));
+    const perC = await perAt(satori, 1500n);
+    await rewards.connect(owner).setOffchainShareBps(1500);
     expect(await satori.merkleReserveCeiling(), "re-enable does not back-count").to.equal(banked);
     await advanceRound();
     expect(
       await satori.merkleReserveCeiling(),
-      "one round at the new 100 rate, from banked base"
-    ).to.equal(banked + E(100));
+      "one round at the new share, from banked base"
+    ).to.equal(banked + perC);
     await advanceRound();
     expect(
       await satori.merkleReserveCeiling(),
-      "two rounds at the new 100 rate, from banked base"
-    ).to.equal(banked + E(200));
+      "two rounds at the new share, from banked base"
+    ).to.equal(banked + 2n * perC);
 
     // The merkle lane can mint at most the banked+accrued ceiling — never the
     // dormant rounds it skipped. three-lane decomposition holds throughout.
@@ -1027,14 +1042,15 @@ describe("CROSS-FEATURE targeted attacks — sharp-edge boundaries", function ()
     const { satori, hub, owner, signers, merkle, rewards, airdrop, publisher } = await freshStack();
     const [, alice] = signers;
 
-    await rewards.connect(owner).setOffchainBudget(E(200));
+    const per = await perAt(satori, 2500n);
+    await rewards.connect(owner).setOffchainShareBps(2500);
     // GAP: advance several rounds with NO touch so the reserve is only projected
     // at read time, not banked to storage. The dial is effective from the NEXT
     // round and each round's reserve is due from its start: 7 advances, 7 rounds.
     for (let i = 0; i < 7; i++) await advanceRound();
 
     const viewCeil = await satori.merkleReserveCeiling();
-    expect(viewCeil).to.equal(E(1400));
+    expect(viewCeil).to.equal(7n * per);
 
     // Claim EXACTLY the view ceiling — must succeed to the wei (view == enforced).
     await merkle.connect(publisher).setMerkleRoot(leafOf(alice.address, viewCeil));

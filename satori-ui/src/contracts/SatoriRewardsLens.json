@@ -88,12 +88,12 @@
             },
             {
               "internalType": "uint256",
-              "name": "dial",
+              "name": "offchainShareBps",
               "type": "uint256"
             },
             {
               "internalType": "uint256",
-              "name": "dialEffective",
+              "name": "offchainNext",
               "type": "uint256"
             }
           ],

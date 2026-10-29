@@ -3,21 +3,28 @@ const { ethers } = require("hardhat");
 const { loadFixture } = require("@nomicfoundation/hardhat-network-helpers");
 const { deploySatoriFixtureNoFee } = require("../fixtures");
 const {
-  ONE, BASE, PHI_INV, STEP_ROUNDS, FLAT_ROUNDS, NO_STEP, T0,
+  ONE, BASE, DEFAULT_RATIO, STEP_ROUNDS, FLAT_ROUNDS, NO_STEP, T0,
   ladder, rewardsSigner, issueTo, issueBelow,
   currentRound, atRound, advanceRound, eventsNamed,
 } = require("./emissionHelpers");
 
-// docs/issues/emission-issuance-indexed-schedule.md §2 — verified by script there.
+// Owner ruling 2026-10-27: a step every round's worth from day 1, by
+// 1 − BASE/2,900,000. Rows 1-5 and the lifetime were computed by an independent
+// script (Python integers, the same truncation), not by the helper they check.
 const SPEC_LADDER = [
-  { rate: 523241111301513906395n, next: 1618033988749894848077170n },
-  { rate: 323380791095602323633n, next: 1854101966249684544329260n },
-  { rate: 199860320205911582521n, next: 1999999999999999999569590n },
-  { rate: 123520470889690740962n, next: 2090169943749474240471850n },
-  { rate: 76339849316220841466n,  next: 2145898033750315454742030n },
+  { rate: 846374740795178811870n, next: 1692996643192295042287n },
+  { rate: 846127651349250231867n, next: 2539124294541545274154n },
+  { rate: 845880634038265367141n, next: 3385004928579810641295n },
+  { rate: 845633688841165244149n, next: 4230638617420975885444n },
+  { rate: 845386815736897037273n, next: 5076025433157872922717n },
 ];
-const LIFETIME = 2236067977499789695432590n;
-const TAIL = 999999999999999999023770n;
+// The default ratio truncates a non-zero rate to 0 wei after 139,139 steps;
+// the last threshold, genesis included, is the lifetime total: 2.9M less dust.
+const STEPS_TO_ZERO = 139139;
+const LIFETIME = 2899999999999993357738267n;
+const TAIL = 2899153378097596241507850n;
+// A deliberately tiny ratio, to reach exhaustion in a handful of steps.
+const TINY = 10n ** 15n;
 
 describe("SatoriHub — issuance-indexed emission schedule", function () {
   this.timeout(600000);
@@ -38,12 +45,12 @@ describe("SatoriHub — issuance-indexed emission schedule", function () {
       const e = await hub.emission();
       expect(e.issued).to.equal(BASE);
       expect(e.issued).to.equal(await token.totalRewardsMinted());
-      expect(e.nextStepAt).to.equal(1236067977499789696408820n);
+      expect(e.nextStepAt).to.equal(BASE); // the genesis round's worth
       expect(e.nextStepAt).to.equal(FLAT_ROUNDS * BASE);
       expect(e.rate).to.equal(BASE);
       expect(e.prevRate).to.equal(BASE);
       expect(e.from).to.equal(dep);
-      expect(e.ratioWad).to.equal(PHI_INV);
+      expect(e.ratioWad).to.equal(DEFAULT_RATIO);
       expect(e.stepsTaken).to.equal(0n);
       expect(e.banked).to.equal(0n);
     });
@@ -52,7 +59,7 @@ describe("SatoriHub — issuance-indexed emission schedule", function () {
       expect(await hub.STEP_ROUNDS()).to.equal(STEP_ROUNDS);
       expect(await hub.FLAT_ROUNDS()).to.equal(FLAT_ROUNDS);
       expect(await hub.NO_STEP()).to.equal(NO_STEP);
-      expect(await hub.PHI_INV()).to.equal(PHI_INV);
+      expect(await hub.DEFAULT_EMISSION_RATIO()).to.equal(DEFAULT_RATIO);
       expect(await hub.emissionAuthority()).to.equal(ethers.ZeroAddress);
       expect(await hub.emissionHolder()).to.equal(await rewards.admin());
     });
@@ -99,24 +106,29 @@ describe("SatoriHub — issuance-indexed emission schedule", function () {
         expect(REF[i].rate, `step ${i + 1} rate`).to.equal(SPEC_LADDER[i].rate);
         expect(REF[i].next, `step ${i + 1} next`).to.equal(SPEC_LADDER[i].next);
       }
-      expect(REF.length).to.equal(99);
-      expect(REF[98]).to.deep.equal({ rate: 0n, next: NO_STEP });
-      expect(REF[97].next).to.equal(LIFETIME);
+      const full = ladder(DEFAULT_RATIO, BASE, T0, STEPS_TO_ZERO + 1);
+      expect(full.length).to.equal(STEPS_TO_ZERO);
+      expect(full[STEPS_TO_ZERO - 1]).to.deep.equal({ rate: 0n, next: NO_STEP });
+      expect(full[STEPS_TO_ZERO - 2].next).to.equal(LIFETIME);
       let tail = 0n;
-      for (const row of REF.slice(0, 98)) tail += STEP_ROUNDS * row.rate;
+      for (const row of full.slice(0, -1)) tail += STEP_ROUNDS * row.rate;
       expect(tail).to.equal(TAIL);
       expect(T0 + tail).to.equal(LIFETIME);
+      const twoPointNine = ethers.parseEther("2900000");
+      expect(twoPointNine - LIFETIME).to.be.lt(ONE / 100000n); // under 0.00001 SATORI short
     });
 
-    it("holds the base rate while issued < the first threshold", async function () {
-      const { tx, issued } = await issueBelow(hub, token, rw, T0);
+    it("genesis issued IS the first threshold, so the first report steps; nothing more until the next", async function () {
+      expect((await hub.emission()).issued).to.equal(T0);
+      const first = await issueTo(hub, token, rw, T0);
+      await expect(first.tx).to.emit(hub, "EmissionStepped");
+      const { tx, issued } = await issueBelow(hub, token, rw, SPEC_LADDER[0].next);
       await expect(tx).to.not.emit(hub, "EmissionStepped");
       const e = await hub.emission();
       expect(e.issued).to.equal(issued);
-      expect(e.issued).to.be.lt(T0);
-      expect(e.rate).to.equal(BASE);
-      expect(e.stepsTaken).to.equal(0n);
-      expect(await hub.emissionRateNext()).to.equal(BASE);
+      expect(e.issued).to.be.lt(SPEC_LADDER[0].next);
+      expect(e.rate).to.equal(SPEC_LADDER[0].rate);
+      expect(e.stepsTaken).to.equal(1n);
     });
 
     it("the crossing tx leaves this round's rate alone; the next round pays step 1", async function () {
@@ -136,12 +148,12 @@ describe("SatoriHub — issuance-indexed emission schedule", function () {
       const e = await hub.emission();
       expect(e.prevRate).to.equal(BASE);
       expect(e.from).to.equal(cur + 1n);
-      expect(e.nextStepAt).to.equal(1618033988749894848077170n);
+      expect(e.nextStepAt).to.equal(SPEC_LADDER[0].next);
       expect(e.stepsTaken).to.equal(1n);
 
       await advanceRound();
-      expect(await hub.emissionRateNow()).to.equal(523241111301513906395n);
-      expect(await hub.devRateNow()).to.equal((523241111301513906395n * bps) / 10000n);
+      expect(await hub.emissionRateNow()).to.equal(SPEC_LADDER[0].rate);
+      expect(await hub.devRateNow()).to.equal((SPEC_LADDER[0].rate * bps) / 10000n);
     });
 
     it("walks rows 1-5 of the default ladder to the wei", async function () {
@@ -159,8 +171,9 @@ describe("SatoriHub — issuance-indexed emission schedule", function () {
 
     it("one bump across three thresholds compounds three times, in one event, next round", async function () {
       const cur = await currentRound(token);
-      const target = ethers.parseEther("1900000"); // past row 2's threshold, short of row 3's
-      const { tx, issued } = await issueTo(hub, token, rw, target);
+      // past row 2's threshold, short of row 3's
+      const { tx, issued } = await issueTo(hub, token, rw, SPEC_LADDER[1].next);
+      expect(issued).to.be.lt(SPEC_LADDER[2].next);
       const rc = await tx.wait();
       const ev = eventsNamed(rc, hub, "EmissionStepped");
       expect(ev.length).to.equal(1);
@@ -177,7 +190,9 @@ describe("SatoriHub — issuance-indexed emission schedule", function () {
 
     it("caps one bump at 32 steps; syncEmission applies the rest", async function () {
       const cur = await currentRound(token);
-      const { tx, issued } = await issueTo(hub, token, rw, ethers.parseEther("3000000"));
+      // 70 thresholds crossed: 32 + 32 + 6.
+      const { tx, issued } = await issueBelow(hub, token, rw, REF[69].next);
+      expect(issued).to.be.gte(REF[68].next);
       await expect(tx).to.emit(hub, "EmissionStepped")
         .withArgs(32n, REF[31].rate, REF[31].next, issued, cur + 1n, 0n);
       expect((await hub.emission()).stepsTaken).to.equal(32n);
@@ -185,23 +200,24 @@ describe("SatoriHub — issuance-indexed emission schedule", function () {
       await expect(hub.connect(stranger).syncEmission()).to.emit(hub, "EmissionStepped")
         .withArgs(64n, REF[63].rate, REF[63].next, issued, cur + 1n, 0n);
       await expect(hub.connect(stranger).syncEmission()).to.emit(hub, "EmissionStepped")
-        .withArgs(96n, REF[95].rate, REF[95].next, issued, cur + 1n, 0n);
-      await expect(hub.connect(stranger).syncEmission()).to.emit(hub, "EmissionStepped")
-        .withArgs(99n, 0n, NO_STEP, issued, cur + 1n, 0n);
+        .withArgs(70n, REF[69].rate, REF[69].next, issued, cur + 1n, 0n);
       await expect(hub.connect(stranger).syncEmission()).to.not.emit(hub, "EmissionStepped");
 
       expect(await hub.emissionRateNow()).to.equal(BASE);
       await advanceRound();
-      expect(await hub.emissionRateNow()).to.equal(0n);
+      expect(await hub.emissionRateNow()).to.equal(REF[69].rate);
     });
 
-    it("exhausts to rate 0 with NO_STEP, after which nothing steps and the ceiling stops", async function () {
-      await issueTo(hub, token, rw, LIFETIME);
-      for (let i = 0; i < 4; i++) await hub.syncEmission();
+    it("exhausts to rate 0 with NO_STEP (a tiny ratio, to get there), after which nothing steps and the ceiling stops", async function () {
+      await hub.connect(await ethers.getSigner(await hub.emissionHolder())).setEmissionRatio(TINY);
+      const tiny = ladder(TINY, BASE, T0);
+      const last = tiny[tiny.length - 1];
+      expect(last).to.deep.equal({ rate: 0n, next: NO_STEP });
+      await issueTo(hub, token, rw, tiny[tiny.length - 2].next);
       const e = await hub.emission();
       expect(e.rate).to.equal(0n);
       expect(e.nextStepAt).to.equal(NO_STEP);
-      expect(e.stepsTaken).to.equal(99n);
+      expect(e.stepsTaken).to.equal(BigInt(tiny.length));
 
       await advanceRound();
       const c = await hub.emissionCeiling();

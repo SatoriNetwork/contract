@@ -1,7 +1,7 @@
 import { JsonRpcProvider, Log, formatEther } from 'ethers';
 import type Database from 'better-sqlite3';
 import { Config } from './config';
-import { engineIface, bountiesIface, rewardsIface, registryIface, gamesIface, votingIface, TOPICS } from './abi';
+import { engineIface, bountiesIface, rewardsIface, registryIface, gamesIface, votingIface, hubIface, legacyRewardsIface, TOPICS } from './abi';
 import { deleteFromBlock, getMeta, setMeta } from './db';
 
 // The scan algorithm is a server-side port of the dapp's proven
@@ -59,7 +59,10 @@ export interface IndexerState {
 ///    pool, rate and liveness are folds; bounty_funded is dropped and refilled.
 /// v14: PredictionMade's multiplier and weight are stored (prediction_made is
 ///    dropped and refilled), and NamedCounterMoved / GameRoundWeight are indexed.
-const EVENT_SCHEMA_VERSION = '14';
+/// v15: the off-chain split is a share (OffchainShareSet) and each round's
+///    reserve is read from the hub's MerkleReserveBanked (offchain_share and
+///    reserve_banked, both new and backfilled).
+const EVENT_SCHEMA_VERSION = '15';
 
 export class Indexer {
   private db: Database.Database;
@@ -236,12 +239,14 @@ export class Indexer {
           ]],
           fromBlock: cursor, toBlock: chunkEnd,
         }),
+        // The hub rides on the rewards request: one getLogs takes both addresses.
         this.provider.getLogs({
-          address: this.cfg.addresses.rewards,
+          address: this.cfg.addresses.hub ? [this.cfg.addresses.rewards, this.cfg.addresses.hub] : this.cfg.addresses.rewards,
           topics: [[
             TOPICS.referralPaid, TOPICS.referralSet,
             TOPICS.rewardSplit, TOPICS.delegatorRewardsAccrued, TOPICS.rewardsClaimed,
-            TOPICS.roundBudgetFrozen, TOPICS.offchainBudgetSet,
+            TOPICS.roundBudgetFrozen, TOPICS.offchainBudgetSet, TOPICS.offchainShareSet,
+            TOPICS.merkleReserveBanked,
             TOPICS.predictionDelegated, TOPICS.predictionUndelegated, TOPICS.delegatePowerSynced,
             TOPICS.gameRoundWeight,
           ]],
@@ -326,6 +331,12 @@ export class Indexer {
     const offchainBudget = this.db.prepare(
       'INSERT OR REPLACE INTO offchain_budget (block, log_index, tx, round_set, budget_wei) VALUES (?,?,?,?,?)');
     for (const r of b.offchainBudget) offchainBudget.run(...r);
+    const offchainShare = this.db.prepare(
+      'INSERT OR REPLACE INTO offchain_share (block, log_index, tx, round_set, bps) VALUES (?,?,?,?,?)');
+    for (const r of b.offchainShare) offchainShare.run(...r);
+    const reserveBanked = this.db.prepare(
+      'INSERT OR REPLACE INTO reserve_banked (block, log_index, tx, from_round, through_round, per_round_wei, cumulative_wei) VALUES (?,?,?,?,?,?,?)');
+    for (const r of b.reserveBanked) reserveBanked.run(...r);
     const delegation = this.db.prepare(
       'INSERT OR REPLACE INTO delegation (block, log_index, tx, kind, delegator, delegate, power_wei, activation_round, new_delegate_power) VALUES (?,?,?,?,?,?,?,?,?)');
     for (const r of b.delegation) delegation.run(...r);
@@ -416,6 +427,8 @@ interface DecodedBatch {
   ledger: unknown[][];
   roundBudget: unknown[][];
   offchainBudget: unknown[][];
+  offchainShare: unknown[][];
+  reserveBanked: unknown[][];
   delegation: unknown[][];
   voted: unknown[][];
   gameApproved: unknown[][];
@@ -423,7 +436,7 @@ interface DecodedBatch {
 }
 const emptyBatch = (): DecodedBatch => ({
   scored: [], made: [], funded: [], poolState: [], cleaned: [], referral: [], referralSet: [],
-  ledger: [], roundBudget: [], offchainBudget: [], delegation: [],
+  ledger: [], roundBudget: [], offchainBudget: [], offchainShare: [], reserveBanked: [], delegation: [],
   voided: [], unrecoverable: [], displaced: [],
   streamCreated: [], namedAdapterSet: [], namedStreamCreated: [],
   gameCreated: [], gameNameUpdated: [], gameAuthorityTransferred: [],
@@ -438,7 +451,8 @@ const countBatch = (b: DecodedBatch) =>
   b.gameCreated.length + b.gameNameUpdated.length + b.gameAuthorityTransferred.length +
   b.streakThreshold.length + b.curveConfig.length + b.namedCounter.length + b.roundWeight.length +
   b.nameUpdated.length + b.providerChanged.length + b.referralSet.length +
-  b.ledger.length + b.roundBudget.length + b.offchainBudget.length + b.delegation.length +
+  b.ledger.length + b.roundBudget.length + b.offchainBudget.length + b.offchainShare.length +
+  b.reserveBanked.length + b.delegation.length +
   b.voted.length + b.gameApproved.length + b.voteMoved.length;
 
 function decodeInto(
@@ -571,8 +585,15 @@ function decodeInto(
       const a = rewardsIface.decodeEventLog('RoundBudgetFrozen', log.data, log.topics);
       batch.roundBudget.push([...head, Number(a.round), a.budget.toString()]);
     } else if (t0 === TOPICS.offchainBudgetSet) {
-      const a = rewardsIface.decodeEventLog('OffchainBudgetSet', log.data, log.topics);
+      const a = legacyRewardsIface.decodeEventLog('OffchainBudgetSet', log.data, log.topics);
       batch.offchainBudget.push([...head, Number(a.roundSet), a.newOffchainBudget.toString()]);
+    } else if (t0 === TOPICS.offchainShareSet) {
+      const a = rewardsIface.decodeEventLog('OffchainShareSet', log.data, log.topics);
+      batch.offchainShare.push([...head, Number(a.roundSet), Number(a.bps)]);
+    } else if (t0 === TOPICS.merkleReserveBanked) {
+      const a = hubIface.decodeEventLog('MerkleReserveBanked', log.data, log.topics);
+      batch.reserveBanked.push([...head, Number(a.fromRound), Number(a.throughRoundExclusive),
+        a.perRound.toString(), a.cumulative.toString()]);
     } else if (t0 === TOPICS.predictionDelegated) {
       const a = rewardsIface.decodeEventLog('PredictionDelegated', log.data, log.topics);
       batch.delegation.push([...head, 'delegated', String(a.delegator).toLowerCase(), String(a.delegate).toLowerCase(),

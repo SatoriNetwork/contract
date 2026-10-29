@@ -25,7 +25,7 @@ const CONSUMED = {
   SatoriRewards: [
     'ReferralPaid', 'ReferralSet', 'RewardSplit', 'DelegatorRewardsAccrued', 'RewardsClaimed',
     'RoundBudgetFrozen', 'PredictionDelegated', 'PredictionUndelegated', 'DelegatePowerSynced',
-    'ClaimDelegated', 'ClaimUndelegated', 'OffchainBudgetSet', 'GameRoundWeight',
+    'ClaimDelegated', 'ClaimUndelegated', 'OffchainShareSet', 'GameRoundWeight',
   ],
   SatoriVoting: ['Voted', 'GameApprovedSet', 'VotesMoved'],
   SatoriRegistry: [
@@ -34,6 +34,7 @@ const CONSUMED = {
   ],
   SatoriGames: ['GameCreated', 'GameNameUpdated', 'GameAuthorityTransferred'],
   SatoriAirdrop: ['AirdropAllocated', 'AirdropClaimed'],
+  SatoriHub: ['MerkleReserveBanked'],
 };
 
 const ARTIFACTS = path.join(__dirname, '..', 'artifacts', 'contracts');

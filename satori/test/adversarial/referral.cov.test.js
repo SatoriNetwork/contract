@@ -78,8 +78,12 @@ describe("Referral — adversarial coverage", function () {
 
   // Drive a single delegate prediction to a win and return the gameId scored.
   // `predictor` predicts UP; the registry value rises so UP wins.
+  // The on-chain gross of the round winOneRound predicts in, read in that round:
+  // the rate steps every round's worth issued.
+  let wonRoundGross;
   async function winOneRound(predictor, gameId, settler) {
     await registry.setValue(gameId, 100);
+    wonRoundGross = await onChainGrossNow(satori);
     await satori
       .connect(predictor)
       .predictMultipleWithPayloads([{ gameId, payload: pack1(UP) }]);
@@ -221,7 +225,7 @@ describe("Referral — adversarial coverage", function () {
       // fee), so `raw` pins to it exactly. Read from the chain — this was the
       // 1152 literal, i.e. 1440 - 288, which held only while emission was flat.
       const raw = net + carolCut;
-      expect(raw).to.equal(await onChainGrossNow(satori));
+      expect(raw).to.equal(wonRoundGross);
       // Conservation: nothing is created or lost, the budget is exactly split
       // between the earner's net and the referral's diverted cut.
       expect(net).to.equal(raw - carolCut);

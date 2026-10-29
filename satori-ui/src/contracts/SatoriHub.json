@@ -327,6 +327,18 @@
         {
           "indexed": false,
           "internalType": "uint256",
+          "name": "perRound",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "fromRound",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
           "name": "throughRoundExclusive",
           "type": "uint256"
         }
@@ -340,7 +352,7 @@
         {
           "indexed": false,
           "internalType": "uint256",
-          "name": "newRate",
+          "name": "bps",
           "type": "uint256"
         },
         {
@@ -356,7 +368,7 @@
           "type": "uint256"
         }
       ],
-      "name": "MerkleReserveRateSet",
+      "name": "MerkleReserveShareSet",
       "type": "event"
     },
     {
@@ -462,6 +474,19 @@
     },
     {
       "inputs": [],
+      "name": "DEFAULT_EMISSION_RATIO",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
       "name": "DEFAULT_STREAM_ID",
       "outputs": [
         {
@@ -515,19 +540,6 @@
     {
       "inputs": [],
       "name": "NO_STEP",
-      "outputs": [
-        {
-          "internalType": "uint256",
-          "name": "",
-          "type": "uint256"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [],
-      "name": "PHI_INV",
       "outputs": [
         {
           "internalType": "uint256",
@@ -2027,11 +2039,11 @@
       "inputs": [
         {
           "internalType": "uint256",
-          "name": "newRate",
+          "name": "bps",
           "type": "uint256"
         }
       ],
-      "name": "setMerkleReserveRate",
+      "name": "setMerkleReserveBps",
       "outputs": [],
       "stateMutability": "nonpayable",
       "type": "function"

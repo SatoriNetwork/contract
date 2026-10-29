@@ -5,7 +5,7 @@ import "./Conservation.invariant.t.sol";
 
 /// The Conservation suite again, with the action mix narrowed to the emission
 /// levers and the paths that commit, bank or mint against them: under the full
-/// handler surface a sequence rarely crosses a step threshold.
+/// handler surface a sequence rarely takes more than a few steps.
 contract EmissionInvariantTest is ConservationInvariantTest {
     function setUp() public override {
         super.setUp();
@@ -13,7 +13,7 @@ contract EmissionInvariantTest is ConservationInvariantTest {
         s[0] = Handler.setEmissionRatio.selector;
         s[1] = Handler.bumpIssued.selector;
         s[2] = Handler.syncEmission.selector;
-        s[3] = Handler.setOffchainBudget.selector;
+        s[3] = Handler.setOffchainShare.selector;
         s[4] = Handler.merkleMint.selector;
         s[5] = Handler.advanceTime.selector;
         s[6] = Handler.predict.selector;
@@ -43,7 +43,7 @@ contract EmissionInvariantTest is ConservationInvariantTest {
                 " banks=", vm.toString(handler.ghostReserveBanks()),
                 " merkleMints=", vm.toString(handler.callCount_merkleMint()),
                 " ratioSets=", vm.toString(handler.callCount_setEmissionRatio()),
-                " dials=", vm.toString(handler.callCount_setOffchainBudget())
+                " dials=", vm.toString(handler.callCount_setOffchainShare())
             )
         );
     }

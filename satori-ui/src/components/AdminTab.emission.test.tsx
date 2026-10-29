@@ -33,14 +33,14 @@ beforeEach(() => {
       rootPublisher: ZERO, offchainReporter: ZERO, merkleWired: false,
       devFeeBpsMin: 500, devFeeBpsMax: 2500, pendingDevFeeBps: 0, platformFeeBps: 1500,
       protocolFeePerRound: E(127), platformFeeRecipient: ADMIN, emissionRatePerRound: E(846.62),
-      currentRound: 3, offchainBudget: BigInt(0), onChainRewardCeiling: BigInt(0), merkleReserveCeiling: BigInt(0), registrationFee: BigInt(1000000000000000),
+      currentRound: 3, offchainShareBps: 5000, onChainRewardCeiling: BigInt(0), merkleReserveCeiling: BigInt(0), registrationFee: BigInt(1000000000000000),
       defaultStreamInitialized: true, airdropLoadedTotal: BigInt(0), airdropCap: E(1100000), airdropLoadingFinalized: false,
       airdropPointsHere: true, freezeAuthority: ADMIN,
       emission: {
-        rateNow: E(846.62), rateNext: E(846.62), rateAfterStep: E(523.24),
-        ratioWad: BigInt('618033988749894848'), stepsTaken: 0,
-        issued: E(900000), issuedProjected: E(900000), nextStepAt: E(1236067.98),
-        stepsActive: true, holder: ADMIN, dial: BigInt(0), dialEffective: BigInt(0),
+        rateNow: E(846.62), rateNext: E(846.62), rateAfterStep: E(846.37),
+        ratioWad: BigInt('999708061412966511'), stepsTaken: 0,
+        issued: E(900000), issuedProjected: E(900000), nextStepAt: E(900846.62),
+        stepsActive: true, holder: ADMIN, offchainShareBps: 5000, offchainNext: BigInt(0),
       },
     },
   });
@@ -48,19 +48,19 @@ beforeEach(() => {
 
 it('reads out the schedule and says 0 is not allowed', () => {
   render(<AdminTab />);
-  expect(screen.getByTestId('emission-ratio-current').textContent).toBe('×0.618');
+  expect(screen.getByTestId('emission-ratio-current').textContent).toBe('×0.999708');
   const st = screen.getByTestId('emission-schedule-status').textContent!;
   expect(st).toMatch(/Issued so far: 900,000/);
-  expect(st).toMatch(/Next step at: 1,236,067.98 issued/);
-  expect(st).toMatch(/Rate after next step: 523.24\/round/);
+  expect(st).toMatch(/Next step at: 900,846.62 issued/);
+  expect(st).toMatch(/Rate after next step: 846.37\/round/);
   expect(screen.getByTestId('emission-ratio-zero-note').textContent).toMatch(/0 is not allowed/);
 });
 
-it('the default quick button sends exactly phi - 1', async () => {
+it('the default quick button sends exactly the default ratio', async () => {
   render(<AdminTab />);
   fireEvent.click(screen.getByTestId('btn-ratio-default'));
   fireEvent.click(screen.getByTestId('btn-set-emission-ratio'));
-  await waitFor(() => expect(mockSetRatio).toHaveBeenCalledWith('0.618033988749894848'));
+  await waitFor(() => expect(mockSetRatio).toHaveBeenCalledWith('0.999708061412966511'));
 });
 
 it('the never-change button sends 1; typing 0 disables the save', async () => {

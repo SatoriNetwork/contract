@@ -158,7 +158,7 @@ contract SatoriMerkle is ReentrancyGuard, SatoriUUPS {
     ///         Idempotent (re-claiming a fully-paid root mints 0 → reverts
     ///         `NothingToClaim`) and monotonic (a lower entitlement can never
     ///         underflow — it simply has nothing to claim). Mints only to
-    ///         `msg.sender`, through the core's shared cap; CEI-ordered, and
+    ///         the leaf's account, through the core's shared cap; CEI-ordered, and
     ///         `rewardMint` is plain ERC20 with no claimer callback
     ///         (nonReentrant is belt-and-braces).
     ///
@@ -175,11 +175,22 @@ contract SatoriMerkle is ReentrancyGuard, SatoriUUPS {
     ///         instead of this contract inventing a softer signal for the same
     ///         "nothing available" fact.
     function claimMerkle(uint256 lifetimeEntitlement, bytes32[] calldata proof) external nonReentrant {
+        _claimMerkle(msg.sender, lifetimeEntitlement, proof);
+    }
+
+    /// @notice Claim `account`'s Merkle drop on its behalf. Anyone may call it:
+    ///         the proof binds the amount to `account`, and the tokens go to
+    ///         `account`, never to the caller.
+    function claimMerkle(address account, uint256 lifetimeEntitlement, bytes32[] calldata proof) external nonReentrant {
+        _claimMerkle(account, lifetimeEntitlement, proof);
+    }
+
+    function _claimMerkle(address account, uint256 lifetimeEntitlement, bytes32[] calldata proof) private {
         // OZ StandardMerkleTree leaf: double-hashed abi.encode(account, amount).
-        bytes32 leaf = keccak256(bytes.concat(keccak256(abi.encode(msg.sender, lifetimeEntitlement))));
+        bytes32 leaf = keccak256(bytes.concat(keccak256(abi.encode(account, lifetimeEntitlement))));
         if (!MerkleProof.verify(proof, merkleRoot, leaf)) revert InvalidProof();
 
-        uint256 already = alreadyMintedTo[msg.sender];
+        uint256 already = alreadyMintedTo[account];
         if (lifetimeEntitlement <= already) revert NothingToClaim(); // monotonic; no underflow
         uint256 claimable = lifetimeEntitlement - already;
 
@@ -190,9 +201,9 @@ contract SatoriMerkle is ReentrancyGuard, SatoriUUPS {
         uint256 available = ceiling > minted ? ceiling - minted : 0;
         if (available > 0 && claimable > available) claimable = available;
 
-        alreadyMintedTo[msg.sender] = already + claimable; // cursor moves by what is PAID (CEI)
-        ISatoriCore(satoriCore).rewardMint(msg.sender, claimable); // capped by the lane's banked reserve
-        emit MerkleClaimed(msg.sender, lifetimeEntitlement, claimable);
+        alreadyMintedTo[account] = already + claimable; // cursor moves by what is PAID (CEI)
+        ISatoriCore(satoriCore).rewardMint(account, claimable); // capped by the lane's banked reserve
+        emit MerkleClaimed(account, lifetimeEntitlement, claimable);
     }
 
     // ========== Proxy plumbing (appended — append-only layout) ==========

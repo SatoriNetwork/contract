@@ -49,7 +49,6 @@ describe("[gap] minting — moving-cap catch-up over many quiet rounds", functio
     const rewardsSigner = await asRewards(rewards);
     const recipient = signers[5].address;
     const deploymentRound = await satori.deploymentRound();
-    const GROSS = await hub.onChainGrossNow();
 
     // Price the gap, then report and mint the whole catch-up lump in ONE call
     // each, with both boundaries exact. `rounds` is how many rounds the one
@@ -65,6 +64,9 @@ describe("[gap] minting — moving-cap catch-up over many quiet rounds", functio
       ).to.be.revertedWithCustomError(satori, "BudgetExceeded");
 
       const room0 = await allowanceRoom(hub, token);
+      // The freeze prices every untouched round at the gross live NOW: the rate
+      // steps every round's worth issued, so it is read here, not at deploy.
+      const GROSS = await hub.onChainGrossNow();
       await hub.connect(rewardsSigner).freezeRoundGross(cur);
       const lump = await allowanceRoom(hub, token);
       expect(lump - room0).to.equal(GROSS * rounds);
@@ -95,7 +97,7 @@ describe("[gap] minting — moving-cap catch-up over many quiet rounds", functio
       await expect(
         hub.connect(rewardsSigner).noteIssued(1n)
       ).to.be.revertedWithCustomError(hub, "BudgetExceeded");
-      return { rounds, lump };
+      return { rounds, lump, GROSS };
     }
 
     // Only genesis has been minted, and all of it is the general lane's share
@@ -114,7 +116,7 @@ describe("[gap] minting — moving-cap catch-up over many quiet rounds", functio
     expect(first.rounds).to.equal(roundsElapsed1);
     // The lump also carries the deploy round's bootstrap overlap: genesis paid
     // that round and its first touch priced it again.
-    expect(first.lump).to.equal(GROSS * roundsElapsed1);
+    expect(first.lump).to.equal(first.GROSS * roundsElapsed1);
 
     // -- SECOND big idle gap: jump another ~37 rounds; the catch-up repeats. --
     await time.increase(ROUND * 37);
@@ -123,7 +125,7 @@ describe("[gap] minting — moving-cap catch-up over many quiet rounds", functio
     // The newly-unlocked allowance is exactly the rounds that elapsed during
     // the second idle gap, at the on-chain gross.
     expect(second.rounds).to.equal(roundsElapsed2 - roundsElapsed1);
-    expect(second.lump).to.equal(GROSS * (roundsElapsed2 - roundsElapsed1));
+    expect(second.lump).to.equal(second.GROSS * (roundsElapsed2 - roundsElapsed1));
   });
 
   it("draining the catch-up lump in pieces shares one accumulated allowance (cumulative across calls, large multiple)", async function () {

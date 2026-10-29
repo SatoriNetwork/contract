@@ -13,7 +13,7 @@ const SIMPLE3 = "createSimpleDataStream(string,address,uint24)";
 const E = (n) => ethers.parseEther(String(n));
 
 const RESERVE_ANCHORS = {
-  MerkleReserveRateSet: "cumulativeAtFromRound",
+  MerkleReserveShareSet: "cumulativeAtFromRound",
   MerkleReserveBanked: "cumulative",
   EmissionStepped: "reserveCumulative",
 };
@@ -92,17 +92,16 @@ describe("Emission read model — issued and the Merkle reserve rebuild from log
     }
   });
 
-  it("a silent bank before a fee raise under a capped dial still folds exactly", async function () {
+  it("a silent bank before a fee raise under the deepest share still folds exactly", async function () {
     const merkleLane = sink;
     await hub.connect(owner).setSatoriMerkle(merkleLane.address);
-    const residual = (await hub.emissionRateNow()) - (await hub.devRateNow());
-    await rewards.connect(owner).setOffchainBudget(residual - 1n);
+    await rewards.connect(owner).setOffchainShareBps(9999);
     for (let i = 0; i < 5; i++) await advanceRound();
-    await hub.connect(sink).syncEmission();         // banks at the old effective dial
+    await hub.connect(sink).syncEmission();         // banks at the old residual
     await expectFolds("after the early bank");
     await atRound(token, (await token.deploymentRound()) + 30n);   // the fee dial's gap counts from genesis
     await token.connect(owner).proposeDevFeeBps(2500);
-    await token.connect(owner).acceptDevFeeBps();   // residual - 1 falls under the dial
+    await token.connect(owner).acceptDevFeeBps();   // the residual the share splits falls
     await advanceRound();
     const rw = await rewardsSigner(rewards);
     const banks = async (label, send) => {
@@ -119,11 +118,12 @@ describe("Emission read model — issued and the Merkle reserve rebuild from log
   });
 
   it("an emission step folds exactly", async function () {
-    await rewards.connect(owner).setOffchainBudget(E(100));
+    await rewards.connect(owner).setOffchainShareBps(5000);
     await advanceRound();
     // Real reports cannot reach a threshold inside the envelope; the harness moves the counter.
+    const steps0 = (await hub.emission()).stepsTaken; // banking on the way here may already have stepped
     await issueTo(hub, token, null, (await hub.emission()).nextStepAt);
-    expect((await hub.emission()).stepsTaken).to.equal(1n);
+    expect((await hub.emission()).stepsTaken).to.equal(steps0 + 1n);
     await expectFolds("after the step");
   });
 });

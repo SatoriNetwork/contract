@@ -284,10 +284,10 @@ contract SatoriRewardsLens {
         /// False at ratio 1e18 (steps short-circuit) or once emission has ended.
         bool stepsActive;
         address holder;
-        uint256 dial;
-        /// The off-chain dial the hub reserve actually accrues next round:
-        /// `min(dial, residualNext − 1)`, mirroring `SatoriHub._effDial`.
-        uint256 dialEffective;
+        /// The off-chain share in bps, and what it banks next round, as
+        /// `SatoriHub._reservePerRound` computes it.
+        uint256 offchainShareBps;
+        uint256 offchainNext;
     }
 
     /// @notice The emission schedule in one read, for the dapp's admin and
@@ -312,9 +312,8 @@ contract SatoriRewardsLens {
             ? st.issued + Math.ceilDiv((ceil - cum) * 10000, 10000 - _token().devFeeBps())
             : st.issued;
         st.holder = hub.emissionHolder();
-        st.dial = rewards.offchainBudget();
-        uint256 res = hub.residualNext();
-        st.dialEffective = Math.min(st.dial, res == 0 ? 0 : res - 1);
+        st.offchainShareBps = rewards.offchainShareBps();
+        st.offchainNext = hub.residualNext() * st.offchainShareBps / 10000;
     }
 
     /// @notice Whether a stream exists — was `SatoriHub.streamExists`.

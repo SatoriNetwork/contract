@@ -166,5 +166,12 @@
     "offset": 0,
     "type": "t_bool",
     "shape": "bool/1"
+  },
+  {
+    "label": "_merkleReserveBps",
+    "slot": "25",
+    "offset": 0,
+    "type": "t_uint256",
+    "shape": "uint256/32"
   }
 ]

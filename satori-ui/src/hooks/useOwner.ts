@@ -21,10 +21,9 @@ const ZERO = '0x0000000000000000000000000000000000000000';
 // and they went stale.
 //
 // What DOES move is the emission itself, in SatoriHub, and it moves with how
-// much SATORI has been issued, not with the date: 846.62 per round until 1460
-// rounds-worth has been issued, then multiplied by the admin-set ratio (default
-// phi - 1) each time another 730 rounds-worth at the current rate is issued,
-// never above 1440. That is a separate thing from the fee, and the fee is a
+// much SATORI has been issued, not with the date: 846.62 on day 1, then multiplied by
+// the admin-set ratio (default 1 − 846.62/2,900,000, i.e. −0.0292%) each time
+// another round's worth at the current rate is issued, never above 1440. That is a separate thing from the fee, and the fee is a
 // percentage of it throughout.
 
 export interface OwnerData {
@@ -54,10 +53,10 @@ export interface OwnerData {
   /// from; there are no tiers any more, so it is just the deploy anchor.
   feeScheduleStartRound: number;
   currentRound: number;
-  // Off-chain reward channel — the budget dial + the Merkle claim channel.
-  offchainBudget: bigint;             // wei routed off-chain each round (0..<residual)
+  // Off-chain reward channel — the split + the Merkle claim channel.
+  offchainShareBps: number;           // share of each round's residual routed off-chain (0..9999)
   onChainRewardCeiling: bigint;       // cumulative wei the on-chain lane may mint (reported - reserve)
-  merkleReserveCeiling: bigint;       // cumulative wei the Merkle lane may mint (accrued dial)
+  merkleReserveCeiling: bigint;       // cumulative wei the Merkle lane may mint (accrued share)
   registrationFee: bigint;            // wei burned to register a community stream or game adapter
   merkleWired: boolean;               // satoriMerkle set on the core
   merkleRoot: string;                 // current published root (bytes32)
@@ -68,7 +67,7 @@ export interface OwnerData {
   // `rewards.admin` was split (2026-09-14): two jobs with real blast radius got
   // their own slots. ZERO means the slot is unset and `admin` still holds the
   // job — so these are reported RESOLVED, as the address that can actually act.
-  emissionSplitHolder: string;   // holds setOffchainBudget (the dial)
+  emissionSplitHolder: string;   // holds setOffchainShareBps (the split)
   airdropHolder: string;         // SatoriAirdrop.airdropAuthority — loadAirdropBatch / finalizeAirdropLoading
   airdropLoadedTotal: bigint;    // SatoriAirdrop.airdropLoadedTotal — sum of every loaded allocation
   // The token's mint ceiling for the airdrop; loading refuses past it.
@@ -153,18 +152,20 @@ export function useOwner() {
         ? 0
         : Number((perRound * BigInt(10000)) / emission);
 
-      // Off-chain reward channel. The dial + lane ceilings are always present on
+      // Off-chain reward channel. The split + lane ceilings are always present on
       // a wired core; the Merkle-contract reads are guarded (it may be unwired).
-      let offchainBudget = BigInt(0), onChainRewardCeiling = BigInt(0), merkleReserveCeiling = BigInt(0);
+      let offchainShareBps = 0, onChainRewardCeiling = BigInt(0), merkleReserveCeiling = BigInt(0);
       let registrationFee = BigInt(0);
       let merkleWired = false, merkleRoot = ethers.ZeroHash, rootPublisher = ZERO;
       try {
-        [offchainBudget, onChainRewardCeiling, merkleReserveCeiling] = await Promise.all([
-          contracts.cached.round.rewards.offchainBudget(),
+        let shareRaw: bigint;
+        [shareRaw, onChainRewardCeiling, merkleReserveCeiling] = await Promise.all([
+          contracts.cached.round.rewards.offchainShareBps(),
           contracts.cached.live.satori.onChainRewardCeiling(),   // moves with every scored win
           contracts.cached.round.satori.merkleReserveCeiling(),
         ]);
-      } catch (e) { console.warn('dial reads failed:', e); }
+        offchainShareBps = Number(shareRaw);
+      } catch (e) { console.warn('split reads failed:', e); }
       try { registrationFee = BigInt(await contracts.cached.round.rewards.registrationFee()); }
       catch (e) { console.warn('registration fee read failed:', e); }
       try {
@@ -261,7 +262,7 @@ export function useOwner() {
         pendingDevFeeBps: Number(pendingDevFeeBpsRaw),
         feeScheduleStartRound: Number(deploymentRound),
         currentRound: Number(currentRound),
-        offchainBudget, onChainRewardCeiling, merkleReserveCeiling, registrationFee,
+        offchainShareBps, onChainRewardCeiling, merkleReserveCeiling, registrationFee,
         merkleWired, merkleRoot, rootPublisher,
         offchainReporter,
         emissionSplitHolder,
@@ -348,25 +349,17 @@ export function useOwner() {
   }, [contracts, run]);
 
   /// Gated on `rewards.emissionSplitAuthority` (falling back to `admin` while
-  /// that slot is unset). Set the off-chain budget dial in SATORI:
-  /// the slice of each round's emission routed to the Merkle channel. Must be
-  /// strictly below next round's residual (`SatoriHub.residualNext()`), the
-  /// same bound SatoriRewards.setOffchainBudget enforces, since the dial takes
-  /// effect next round.
-  const setOffchainBudget = useCallback(async (amountSatori: string) => {
+  /// that slot is unset). Set the off-chain share as a percent of each round's
+  /// emission net of the dev fee; below 100, the bound
+  /// SatoriRewards.setOffchainShareBps enforces. Takes effect next round.
+  const setOffchainShare = useCallback(async (percent: string) => {
     if (!contracts) return { ok: false as const, error: 'Not connected' };
-    let wei: bigint;
-    try { wei = ethers.parseEther(amountSatori.trim()); }
-    catch { return { ok: false as const, error: 'Enter a SATORI amount, e.g. 200' }; }
-    if (wei < BigInt(0)) return { ok: false as const, error: 'Must be >= 0' };
-    const residual = BigInt(await contracts.reads.hub.residualNext());
-    if (wei >= residual) {
-      return {
-        ok: false as const,
-        error: `Must be strictly less than ${ethers.formatEther(residual)} (next round's emission net of the platform fee)`,
-      };
+    const t = percent.trim().replace(/%$/, '');
+    const p = Number(t);
+    if (!/^\d+(\.\d{1,2})?$/.test(t) || !(p >= 0 && p < 100)) {
+      return { ok: false as const, error: 'Enter a percent from 0 to 99.99, e.g. 50' };
     }
-    return run(() => contracts.rewards.setOffchainBudget(wei));
+    return run(() => contracts.rewards.setOffchainShareBps(Math.round(p * 100)));
   }, [contracts, run]);
 
   /// Rewards-admin-gated. What registering a community stream or game adapter
@@ -580,7 +573,7 @@ export function useOwner() {
     setDustTarget,
     initializeDefaultStream,
     accrueProtocolFee,
-    setOffchainBudget,
+    setOffchainShare,
     setRegistrationFee,
     setEmissionRatio,
     setGameApproved,

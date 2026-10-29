@@ -49,9 +49,11 @@ contract SatoriHub is IEngineGateway, ISatoriCore, IMerkleLaneView, ITransferHoo
     // each time `emission.issued` (the token's accrued total: genesis, every
     // general-lane commit and the banked Merkle reserve, plus the fee the token
     // booked on them) crosses `nextStepAt`,
-    // the rate is multiplied by `ratioWad` (default φ−1, clamped at
-    // ROUND_REWARD_BUDGET) and the next threshold moves STEP_ROUNDS × the new
-    // rate further out. The first threshold is FLAT_ROUNDS × base.
+    // the rate is multiplied by `ratioWad` (clamped at ROUND_REWARD_BUDGET) and
+    // the next threshold moves STEP_ROUNDS × the new rate further out. The first
+    // threshold is FLAT_ROUNDS × base. Defaults (owner ruling 2026-10-27): one
+    // round's worth each, and a ratio of 1 − base/2,900,000, so at full pace the
+    // rate falls 0.0292% a round and lifetime emission approaches 2,900,000.
     //
     // Every rate change lands at round cur+1 through `_setRateNextRound`, so a
     // round is never split between two rates: SatoriRewards' round-budget
@@ -62,13 +64,13 @@ contract SatoriHub is IEngineGateway, ISatoriCore, IMerkleLaneView, ITransferHoo
     /// MUST equal `SatoriToken.INITIAL_MINT` (lockstep test).
     uint256 public constant BASE_EMISSION_PER_ROUND = 846621902397116230417;
 
-    /// (φ−1) as 18-decimal fixed point: the default step ratio.
-    uint256 public constant PHI_INV = 618033988749894848;
+    /// 1 − BASE_EMISSION_PER_ROUND / 2,900,000, truncated to 18 decimals.
+    uint256 public constant DEFAULT_EMISSION_RATIO = 999708061412966511;
     /// Floor on the admin-set emission ratio (0.001 as 18-decimal fixed point).
     uint256 internal constant MIN_EMISSION_RATIO = 1e15;
 
-    uint256 public constant STEP_ROUNDS = 730;
-    uint256 public constant FLAT_ROUNDS = 1460;
+    uint256 public constant STEP_ROUNDS = 1;
+    uint256 public constant FLAT_ROUNDS = 1;
     uint256 private constant MAX_STEPS_PER_BUMP = 32;
     uint256 public constant NO_STEP = type(uint128).max;
     uint32  public constant DEFAULT_STREAM_ID = 1;
@@ -84,6 +86,8 @@ contract SatoriHub is IEngineGateway, ISatoriCore, IMerkleLaneView, ITransferHoo
     uint256 public onChainMinted;
     uint256 public merkleMinted;
     uint256 public merkleReserveCumulative;
+    /// Retired: the old absolute dial. Unread; never reuse the slot, a live
+    /// proxy still holds a value in it. The share is `_merkleReserveBps`.
     uint256 internal _merkleReserveRate;
     uint256 internal _merkleReserveLastRound;
 
@@ -99,16 +103,15 @@ contract SatoriHub is IEngineGateway, ISatoriCore, IMerkleLaneView, ITransferHoo
     event VoteLockGovernorSet(address indexed governor);
     event VoteLockGovernorFrozen();
     event ChildSyncFailed(address indexed child, address indexed from, address indexed to, uint256 value);
-    /// The reserve from `fromRound` grows by `min(newRate, residual - 1)` per round
-    /// (`_effDial`): rounds before `fromRound` read the bare cumulative, which
-    /// already banks the old rate through them.
-    event MerkleReserveRateSet(uint256 newRate, uint256 fromRound, uint256 cumulativeAtFromRound);
+    /// From `fromRound` the reserve grows by `bps` of each round's residual.
+    event MerkleReserveShareSet(uint256 bps, uint256 fromRound, uint256 cumulativeAtFromRound);
     event MerkleSet(address indexed merkle);
     event EmissionRatioSet(uint256 ratioWad, uint256 nextStepAt, address indexed setter);
     event EmissionStepped(uint256 stepsTaken, uint256 newRate, uint256 nextStepAt, uint256 issued, uint256 fromRound, uint256 reserveCumulative);
     event EmissionAuthorityChanged(address indexed from, address indexed to);
     event EmissionIssued(uint256 added, uint256 issued);
-    event MerkleReserveBanked(uint256 cumulative, uint256 throughRoundExclusive);
+    /// Rounds [fromRound, throughRoundExclusive) each banked `perRound`.
+    event MerkleReserveBanked(uint256 cumulative, uint256 perRound, uint256 fromRound, uint256 throughRoundExclusive);
 
     error Unauthorized();
     error BadInput();
@@ -206,11 +209,11 @@ contract SatoriHub is IEngineGateway, ISatoriCore, IMerkleLaneView, ITransferHoo
             rate: uint128(BASE_EMISSION_PER_ROUND),
             prevRate: uint128(BASE_EMISSION_PER_ROUND),
             from: uint64(dep),
-            ratioWad: uint64(PHI_INV),
+            ratioWad: uint64(DEFAULT_EMISSION_RATIO),
             stepsTaken: 0,
             banked: 0
         });
-        emit EmissionRatioSet(PHI_INV, FLAT_ROUNDS * BASE_EMISSION_PER_ROUND, address(0));
+        emit EmissionRatioSet(DEFAULT_EMISSION_RATIO, FLAT_ROUNDS * BASE_EMISSION_PER_ROUND, address(0));
         emit EmissionIssued(emission.issued, emission.issued);
         // Anchor the upgrade gate in PROXY STORAGE (not the re-bakeable `token`
         // immutable), matching the five children so a hub upgrade can't migrate
@@ -299,7 +302,7 @@ contract SatoriHub is IEngineGateway, ISatoriCore, IMerkleLaneView, ITransferHoo
     function noteIssued(uint256 general) external {
         if (msg.sender != address(rewards)) revert Unauthorized();
         uint256 due;
-        if (_merkleReserveRate != 0) due = _bankReserve(getCurrentRound() + 1);
+        if (_merkleReserveBps != 0) due = _bankReserve(getCurrentRound() + 1);
         if (due + general != 0) {
             uint256 generalTotal = _accrue(due + general);
             if (generalTotal - merkleReserveCumulative > onChainAllowance) revert BudgetExceeded();
@@ -316,16 +319,13 @@ contract SatoriHub is IEngineGateway, ISatoriCore, IMerkleLaneView, ITransferHoo
     }
 
     /// The on-chain gross a fresh round is priced at: the residual after the
-    /// senior fee, net of the dial. THE DIAL YIELDS rather than underflowing:
-    /// its bound is checked at set time against a residual that can shrink
-    /// later (a step or a fee raise), and this sits on the predict path.
-    /// Floors at 1 wei while any emission remains, because `budget == 0` is
-    /// SatoriRewards' "unset" sentinel.
+    /// senior fee, less the reserve share. The share is below 10000 bps, so this
+    /// is at least 1 wei while any emission remains, because `budget == 0` is
+    /// SatoriRewards' "unset" sentinel. Must split the residual exactly as
+    /// `_reservePerRound` does: the two lanes sum to it with no slack.
     function onChainGrossNow() public view returns (uint256) {
         uint256 residual = _residual(emissionRateNow());
-        if (residual == 0) return 0;
-        uint256 dial = _merkleReserveRate;
-        return dial >= residual ? 1 : residual - dial;
+        return residual - residual * _merkleReserveBps / 10000;
     }
 
     /// Prices `round` once, on its first touch (SatoriRewards._ensureRoundBudget):
@@ -527,7 +527,7 @@ contract SatoriHub is IEngineGateway, ISatoriCore, IMerkleLaneView, ITransferHoo
         }
     }
 
-    /// Banks reserve rounds [last, endExclusive) at the effective dial and
+    /// Banks reserve rounds [last, endExclusive) at the share and
     /// returns the change in the cumulative, which the caller reports as
     /// earned. Never clamped: a banked reserve is reported, and nothing
     /// reported can be taken back.
@@ -535,34 +535,31 @@ contract SatoriHub is IEngineGateway, ISatoriCore, IMerkleLaneView, ITransferHoo
         uint256 last = _merkleReserveLastRound;
         if (endExclusive <= last) return 0;
         _merkleReserveLastRound = endExclusive;
-        if (_merkleReserveRate == 0) return 0;
-        uint256 add = _effDial() * (endExclusive - last);
+        if (_merkleReserveBps == 0) return 0;
+        uint256 per = _reservePerRound();
+        uint256 add = per * (endExclusive - last);
         if (add == 0) return 0;
         uint256 next = merkleReserveCumulative + add;
         merkleReserveCumulative = next;
-        emit MerkleReserveBanked(next, endExclusive);
+        emit MerkleReserveBanked(next, per, last, endExclusive);
         return add;
     }
 
-    /// The reserve yields to residual−1 when the rate falls under the dial,
-    /// mirroring the 1-wei on-chain gross floor in `onChainGrossNow`: the two
-    /// lanes then still sum to the residual.
-    function _effDial() internal view returns (uint256) {
-        uint256 d = _merkleReserveRate;
-        uint256 res = _residual(emission.rate);
-        uint256 lim = res == 0 ? 0 : res - 1;
-        return d < lim ? d : lim;
+    /// Reads `emission.rate`, the rate every round being banked ran at: each
+    /// rate change banks through its round first (`_setRateNextRound`).
+    function _reservePerRound() internal view returns (uint256) {
+        return _residual(emission.rate) * _merkleReserveBps / 10000;
     }
 
-    /// Effective NEXT round, in lockstep with SatoriRewards.setOffchainBudget's
-    /// gross freeze: the old dial is banked through the current round first.
-    function setMerkleReserveRate(uint256 newRate) external {
+    /// Effective NEXT round, in lockstep with SatoriRewards.setOffchainShareBps's
+    /// gross freeze: the old share is banked through the current round first.
+    function setMerkleReserveBps(uint256 bps) external {
         if (msg.sender != address(rewards)) revert Unauthorized();
         uint256 cur = getCurrentRound();
         _issue(_bankReserve(cur + 1));
-        if (newRate >= residualNext()) revert BadInput();
-        _merkleReserveRate = newRate;
-        emit MerkleReserveRateSet(newRate, cur + 1, merkleReserveCumulative);
+        if (bps >= 10000) revert BadInput();
+        _merkleReserveBps = bps;
+        emit MerkleReserveShareSet(bps, cur + 1, merkleReserveCumulative);
     }
 
     /// What the merkle lane may mint once the due reserve is banked: exactly
@@ -572,7 +569,7 @@ contract SatoriHub is IEngineGateway, ISatoriCore, IMerkleLaneView, ITransferHoo
         uint256 end = getCurrentRound() + 1;
         uint256 last = _merkleReserveLastRound;
         uint256 cum = merkleReserveCumulative;
-        return end > last ? cum + _effDial() * (end - last) : cum;
+        return end > last ? cum + _reservePerRound() * (end - last) : cum;
     }
 
     /// This round's dev slice: `devFeeBps` of the round's emission.
@@ -984,7 +981,10 @@ contract SatoriHub is IEngineGateway, ISatoriCore, IMerkleLaneView, ITransferHoo
         // SATORI, and from its unclaimed rewards when a lock (a prediction this or
         // last round, or a delegation) blocks the transfer. The lock is never
         // lowered for it: the relayer is the user's choice, so that would let a
-        // user move funds past the lock to a second wallet named as relayer.
+        // user move funds past the lock to a second wallet named as relayer. For
+        // the same reason, once the user has predicted this round a fee out of
+        // unclaimed rewards goes only to rewards' `officialRelayer`
+        // (SatoriRewards._checkClaimAuth).
         RelayAction a = RelayAction(r.action);
         if (a == RelayAction.Claim) {
             rewards.claimWithFee(r.user, abi.decode(r.data, (address)), msg.sender, r.fee);
@@ -1076,6 +1076,10 @@ contract SatoriHub is IEngineGateway, ISatoriCore, IMerkleLaneView, ITransferHoo
 
     /// Set by `freezeVoteLockGovernor`; the pointer cannot move after. Appended.
     bool public voteLockGovernorFrozen;
+
+    /// The Merkle reserve's share of each round's residual, in bps (< 10000).
+    /// Appended.
+    uint256 internal _merkleReserveBps;
 
     /// Upgrade authority = the token's governor, read from PROXY STORAGE
     /// (`satoriToken`, set once at init) so a hub upgrade compiled with a

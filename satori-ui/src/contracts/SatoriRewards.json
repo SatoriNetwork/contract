@@ -344,7 +344,7 @@
         {
           "indexed": false,
           "internalType": "uint256",
-          "name": "newOffchainBudget",
+          "name": "bps",
           "type": "uint256"
         },
         {
@@ -360,7 +360,7 @@
           "type": "address"
         }
       ],
-      "name": "OffchainBudgetSet",
+      "name": "OffchainShareSet",
       "type": "event"
     },
     {
@@ -1267,7 +1267,7 @@
     },
     {
       "inputs": [],
-      "name": "offchainBudget",
+      "name": "offchainShareBps",
       "outputs": [
         {
           "internalType": "uint256",
@@ -1702,11 +1702,11 @@
       "inputs": [
         {
           "internalType": "uint256",
-          "name": "newOffchain",
+          "name": "bps",
           "type": "uint256"
         }
       ],
-      "name": "setOffchainBudget",
+      "name": "setOffchainShareBps",
       "outputs": [],
       "stateMutability": "nonpayable",
       "type": "function"

@@ -36,11 +36,11 @@ describe("SatoriRewards — the admin split", function () {
       // The whole point of the zero-fallback: a live proxy upgraded to this
       // implementation keeps working with no migration and no window in which a
       // job has no holder.
-      await expect(rewards.connect(owner).setOffchainBudget(1n)).to.not.be.reverted;
+      await expect(rewards.connect(owner).setOffchainShareBps(1n)).to.not.be.reverted;
     });
 
     it("a stranger still holds nothing", async function () {
-      await expect(rewards.connect(stranger).setOffchainBudget(1n))
+      await expect(rewards.connect(stranger).setOffchainShareBps(1n))
         .to.be.revertedWithCustomError(rewards, "Unauthorized");
     });
   });
@@ -50,9 +50,9 @@ describe("SatoriRewards — the admin split", function () {
       await rewards.connect(owner).setEmissionSplitAuthority(dialer.address);
       expect(await rewards.emissionSplitAuthority()).to.equal(dialer.address);
 
-      await expect(rewards.connect(dialer).setOffchainBudget(1n)).to.not.be.reverted;
+      await expect(rewards.connect(dialer).setOffchainShareBps(1n)).to.not.be.reverted;
       // THE POINT. The operator can no longer move the largest economic lever.
-      await expect(rewards.connect(owner).setOffchainBudget(2n))
+      await expect(rewards.connect(owner).setOffchainShareBps(2n))
         .to.be.revertedWithCustomError(rewards, "Unauthorized");
       // ...and still holds everything that was not carved out.
       await expect(rewards.connect(owner).setCapabilities(0n)).to.not.be.reverted;
@@ -61,8 +61,8 @@ describe("SatoriRewards — the admin split", function () {
     it("setting a slot back to zero returns the job to admin", async function () {
       await rewards.connect(owner).setEmissionSplitAuthority(dialer.address);
       await rewards.connect(dialer).setEmissionSplitAuthority(ethers.ZeroAddress);
-      await expect(rewards.connect(owner).setOffchainBudget(1n)).to.not.be.reverted;
-      await expect(rewards.connect(dialer).setOffchainBudget(2n))
+      await expect(rewards.connect(owner).setOffchainShareBps(1n)).to.not.be.reverted;
+      await expect(rewards.connect(dialer).setOffchainShareBps(2n))
         .to.be.revertedWithCustomError(rewards, "Unauthorized");
     });
   });
@@ -98,11 +98,12 @@ describe("SatoriRewards — the admin split", function () {
     it("a carved-out dial holder changes the on-chain gross exactly as admin did", async function () {
       const residual = await onChainGrossNow(satori);
       await rewards.connect(owner).setEmissionSplitAuthority(dialer.address);
-      await rewards.connect(dialer).setOffchainBudget(residual / 2n);
-      expect(await rewards.offchainBudget()).to.equal(residual / 2n);
-      // And the bound is the contract's, not the holder's: still refused at the
-      // residual, whoever is asking.
-      await expect(rewards.connect(dialer).setOffchainBudget(residual))
+      await rewards.connect(dialer).setOffchainShareBps(5000);
+      expect(await rewards.offchainShareBps()).to.equal(5000n);
+      expect(residual).to.be.gt(0n);
+      // And the bound is the contract's, not the holder's: still refused at
+      // 100%, whoever is asking.
+      await expect(rewards.connect(dialer).setOffchainShareBps(10000))
         .to.be.revertedWithCustomError(rewards, "BadInput");
     });
   });

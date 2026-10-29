@@ -3,6 +3,7 @@ const { anyValue } = require("@nomicfoundation/hardhat-chai-matchers/withArgs");
 const { deploySatoriFixture, pack1, voteFor } = require("./fixtures");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
+const { onChainGrossOf } = require("./helpers/onChainGross");
 
 async function getStreamIdFromTx(tx, satoriContract) {
   const receipt = await tx.wait();
@@ -56,6 +57,9 @@ describe("Referral Commission", function () {
 
   // Drives a winning prediction for `predictor` on stream1, returns the gross
   // reward amount the predictor would have received (computes claimable, claims, returns delta).
+  // The on-chain gross of the first (the paying) round earnAndClaim predicts in,
+  // read in that round: the rate steps every round's worth issued.
+  let earnRoundGross;
   async function earnAndClaim(predictor, claimer = predictor, recipient = null) {
     if (recipient === null) recipient = claimer.address;
 
@@ -64,6 +68,7 @@ describe("Referral Commission", function () {
     // a prediction would also revert `Locked` — predicting transfer-locks the
     // predictor's balance and voting burns from it.)
     await registry.setValue(stream1, 100);
+    earnRoundGross = await onChainGrossOf(satori, rewards);
     await satori.connect(predictor).predictMultipleWithPayloads([{ gameId: stream1, payload: pack1(UP) }]);
 
     await advanceToNextRound();
@@ -72,7 +77,8 @@ describe("Referral Commission", function () {
 
     await advanceToNextRound();
     await registry.setValue(stream1, 200);
-    await satori.connect(predictor).predictMultipleWithPayloads([{ gameId: stream1, payload: pack1(UP) }]);
+    // Score without predicting this round, so the tests may claim elsewhere.
+    await satori.settlePrediction(predictor.address, stream1);
   }
 
   describe("setReferral", function () {
@@ -163,7 +169,7 @@ describe("Referral Commission", function () {
       // two properties the comment claimed was asserted anywhere.
       //
       // The independent anchor is the ROUND BUDGET, read live off the token's own
-      // dev rate: onChainGross = emissionRateNow − devRateNow − offchainBudget.
+      // dev rate: onChainGross = residual − residual × offchainShareBps / 10000.
       // Nothing is reserved out of it any more (the first-predictor bonus is
       // gone), so the whole gross IS the single skimmable pool Alice — the only
       // predictor of the only weighted, predicted game — wins. Exactly one of the
@@ -171,10 +177,7 @@ describe("Referral Commission", function () {
       // A/B/C walk needs two later values), so exactly one round pays.
       // From the HUB's schedule, not the token's 1440 — that is the outer
       // envelope, not the rate.
-      const onChainGross = (await satori.emissionRateNow())
-                         - (await satori.devRateNow())
-                         - (await rewards.offchainBudget());
-      const roundPool = onChainGross; // the SKIMMABLE base
+      const roundPool = earnRoundGross; // the SKIMMABLE base
       expect(roundPool).to.be.gt(0n);
 
       // (a) The cut is a genuine floored 5% of the SKIMMED BASE — the base coming

@@ -23,8 +23,8 @@
 //                is a real fault. These exit non-zero.
 //   STATE      — true at genesis and legitimately changes afterwards. Reported
 //                with the value, never asserted. Reading them is the point:
-//                "offchainBudget is 10" is exactly the kind of thing that is
-//                nobody's bug and everybody's problem (LAUNCH_CHECKLIST E2).
+//                "offchainShareBps is 10" (not the 50% launch split) is exactly
+//                the kind of thing that is nobody's bug and everybody's problem.
 const hre = require("hardhat");
 const fs = require("fs");
 const path = require("path");
@@ -171,9 +171,9 @@ async function main() {
     // the counter starts at INITIAL_MINT and only rises, the first rate
     // segment starts at the deploy round, and until the rate first moves
     // (`from` still the deploy round) nothing is banked and both rates are base.
-    ["emission schedule constants (730 / 1460 / φ−1)", async () =>
-      (await hub.STEP_ROUNDS()) === 730n && (await hub.FLAT_ROUNDS()) === 1460n &&
-      (await hub.PHI_INV()) === 618033988749894848n],
+    ["emission schedule constants (1 / 1 / 1 − base/2.9M)", async () =>
+      (await hub.STEP_ROUNDS()) === 1n && (await hub.FLAT_ROUNDS()) === 1n &&
+      (await hub.DEFAULT_EMISSION_RATIO()) === 999708061412966511n],
     ["emission.issued >= INITIAL_MINT", async () =>
       (await hub.emission()).issued >= (await token.INITIAL_MINT())],
     ["emission.from >= deploymentRound", async () =>
@@ -307,7 +307,7 @@ async function main() {
     }),
     await safe("emission.ratioWad", async () => {
       const r = (await hub.emission()).ratioWad;
-      return ethers.formatEther(r) + (r === (await hub.PHI_INV()) ? `  ${DIM}(default φ−1)${OFF}` :
+      return ethers.formatEther(r) + (r === (await hub.DEFAULT_EMISSION_RATIO()) ? `  ${DIM}(default)${OFF}` :
         r === ethers.WeiPerEther ? `  ${DIM}(1.0: steps off)${OFF}` : "");
     }),
     await safe("emission.stepsTaken / from", async () => {
@@ -317,8 +317,8 @@ async function main() {
   ];
 
   // Two values that are nobody's bug and everybody's problem if wrong at launch.
-  let offchainBudget = null;
-  try { offchainBudget = await rewards.offchainBudget(); } catch { /* older stack */ }
+  let offchainShareBps = null;
+  try { offchainShareBps = await rewards.offchainShareBps(); } catch { /* older stack */ }
   const caps = [];
   try {
     for (let c = 0; c <= 7; c++) {   // eight capabilities, 0..7
@@ -364,9 +364,8 @@ async function main() {
 
   console.log(`\n  state (reported, not asserted):`);
   for (const [k, v] of state) console.log(`    ${DIM}${k.padEnd(24)}${OFF} ${v}`);
-  console.log(`    ${DIM}${"offchainBudget".padEnd(24)}${OFF} ` +
-    (offchainBudget === null ? `${DIM}unavailable${OFF}` : `${offchainBudget}` +
-      (offchainBudget > 0n ? `  ${YEL}<- must be 0 at mainnet launch (E2)${OFF}` : "")));
+  console.log(`    ${DIM}${"offchainShareBps".padEnd(24)}${OFF} ` +
+    (offchainShareBps === null ? `${DIM}unavailable${OFF}` : `${offchainShareBps}  ${DIM}(launch default 5000 = 50%)${OFF}`));
   console.log(`    ${DIM}${"capabilities ON".padEnd(24)}${OFF} ` +
     (caps.length ? caps.join(", ") : "none") +
     (caps.length ? `  ${DIM}(progressive rollout — expected to grow after launch)${OFF}` : ""));

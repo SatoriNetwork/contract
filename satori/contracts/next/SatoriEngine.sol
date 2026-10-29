@@ -449,9 +449,9 @@ contract SatoriEngine is ISatoriEngineView, ISatoriEngineNamed, SatoriUUPS {
     // setters; b ≥ 0 only ever lifts the top, so it never breaks monotonicity.
     //
     // NOTE (audit C-6 — accepted, operational): these take effect IMMEDIATELY,
-    // unlike the protocol's other economic dials. `SatoriRewards.setOffchainBudget`
+    // unlike the protocol's other economic dials. `SatoriRewards.setOffchainShareBps`
     // pins the in-flight round (`_ensureRoundBudget`) before changing, the hub's
-    // `setMerkleReserveRate` carries the old rate through the current round, and
+    // `setMerkleReserveBps` carries the old share through the current round, and
     // every emission rate change (a step, whatever `setEmissionRatio` set) lands
     // at round cur+1 — the curve dials are the only ones without that treatment. So a mid-round change
     // splits the round: predictors before and after it are priced on different

@@ -520,18 +520,41 @@ export function roundBudget(db: Database.Database, round: number) {
   return { round, budgetWei: row?.budgetWei ?? null, frozenAtBlock: row?.block ?? null };
 }
 
-/// The off-chain (Merkle lane) emission dial in force for `round`: the latest
-/// OffchainBudgetSet made in an EARLIER round, since a change applies from the
-/// round after the one it was set in. 0 when none was ever set (the contract's
-/// default). `history` is every change, oldest first.
+/// The off-chain (Merkle lane) budget for `round`, in wei. Under the share
+/// (OffchainShareSet, set in an earlier round) it is what the hub banked for the
+/// round (MerkleReserveBanked); before the share existed, the absolute dial
+/// (OffchainBudgetSet) in force for it. `budgetWei` is null while a round under a
+/// nonzero share has not been banked yet: nothing can know it before then.
+/// `source` says which rule answered; the histories are every change, oldest first.
 export function offchainBudget(db: Database.Database, round: number) {
-  const row = db.prepare(
+  const banked = db.prepare(
+    'SELECT per_round_wei AS perRoundWei, block FROM reserve_banked WHERE from_round <= ? AND through_round > ? ORDER BY block DESC, log_index DESC LIMIT 1'
+  ).get(round, round) as { perRoundWei: string; block: number } | undefined;
+  const share = db.prepare(
+    'SELECT bps, round_set AS roundSet, block FROM offchain_share WHERE round_set < ? ORDER BY round_set DESC, block DESC, log_index DESC LIMIT 1'
+  ).get(round) as { bps: number; roundSet: number; block: number } | undefined;
+  const dial = db.prepare(
     'SELECT budget_wei AS budgetWei, round_set AS roundSet, block FROM offchain_budget WHERE round_set < ? ORDER BY round_set DESC, block DESC, log_index DESC LIMIT 1'
   ).get(round) as { budgetWei: string; roundSet: number; block: number } | undefined;
   const history = db.prepare(
     'SELECT round_set AS roundSet, budget_wei AS budgetWei, block, tx FROM offchain_budget ORDER BY block ASC, log_index ASC'
   ).all();
-  return { round, budgetWei: row?.budgetWei ?? '0', setInRound: row?.roundSet ?? null, block: row?.block ?? null, history };
+  const shareHistory = db.prepare(
+    'SELECT round_set AS roundSet, bps, block, tx FROM offchain_share ORDER BY block ASC, log_index ASC'
+  ).all();
+  let budgetWei: string | null;
+  let source: 'banked' | 'share' | 'pending' | 'dial';
+  if (banked) { budgetWei = banked.perRoundWei; source = 'banked'; }
+  else if (share && share.bps === 0) { budgetWei = '0'; source = 'share'; }
+  else if (share) { budgetWei = null; source = 'pending'; }
+  else { budgetWei = dial?.budgetWei ?? '0'; source = 'dial'; }
+  return {
+    round, budgetWei, source,
+    shareBps: share?.bps ?? null,
+    setInRound: (share ?? dial)?.roundSet ?? null,
+    block: banked?.block ?? (share ?? dial)?.block ?? null,
+    history, shareHistory,
+  };
 }
 
 /// Who this account delegates to (null when it does not), and the inbound power

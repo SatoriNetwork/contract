@@ -601,7 +601,7 @@ describe("Reward Manipulation Tests", function () {
 
       await advanceRound();
       await registry.setValue(stream1, 1200);
-      await satori.connect(alice).predictMultipleWithPayloads([{ gameId: stream1, payload: pack1(UP) }]);
+      await satori.settlePrediction(alice.address, stream1); // score without predicting, so the claim may go elsewhere
 
       // Bob claims Alice's rewards to himself via claimFor
       const bobBalanceBefore = await satori.balanceOf(bob.address);
@@ -625,7 +625,7 @@ describe("Reward Manipulation Tests", function () {
 
       await advanceRound();
       await registry.setValue(stream1, 1200);
-      await satori.connect(alice).predictMultipleWithPayloads([{ gameId: stream1, payload: pack1(UP) }]);
+      await satori.settlePrediction(alice.address, stream1); // score without predicting, so the claim may go elsewhere
 
       // Bob claims Alice's rewards to Carol via claimFor
       const carolBalanceBefore = await satori.balanceOf(carol.address);

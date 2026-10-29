@@ -153,6 +153,9 @@ describe("Per-predictor fee rate (item 3)", function () {
     const marketing = await rewards.marketingFeeRecipient();
     // DELTA from HERE, not the absolute bucket.
     const mktBefore = await rewards.unclaimedRewards(marketing);
+    // The predicted round's own gross: the rate steps every round's worth issued.
+    GROSS = (await satori.emissionRateNow()) - (await satori.devRateNow());
+    HALF = GROSS / 2n;
     await satori.connect(bob).predictMultipleWithPayloads([{ gameId: sid, payload: pack1(UP) }]);
 
     await advanceRound();

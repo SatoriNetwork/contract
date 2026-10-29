@@ -1,24 +1,25 @@
 /**
  * BUDGET-SPLIT DIAL (Phase 1) — the on-chain reward slice scales with
- * `SatoriRewards.offchainBudget`.
+ * `SatoriRewards.offchainShareBps`.
  *
- * onChainGross = emissionRateNow − devRateNow − offchainBudget. The senior dev
- * fee (a flat 15% of the emission) is carved out first, leaving the RESIDUAL —
- * and the on-chain game budget is that residual less the dial. The whole on-chain
+ * onChainGross = residual − residual × offchainShareBps / 10000, where the
+ * residual is emissionRateNow − devRateNow: the senior dev fee (a flat 15% of
+ * the emission) is carved out first, and the on-chain game budget is the
+ * residual less the off-chain share. The whole on-chain
  * slice is payable to predictors: the first-predictor bonus reservation and
  * the value-provider cut are both gone, and the platform fee moved to the
  * immutable token (off-budget here; see test/next/DevFee.test.js).
  * Conservation: every round, the predictor pool == onChainGross exactly.
- * offchainBudget=0 gives gross == the residual; these tests exercise
- * offchainBudget > 0, setting the dial to RESIDUAL − targetGross.
+ * offchainShareBps=0 gives gross == the residual; these tests exercise
+ * offchainShareBps > 0.
  *
  * Every figure here is DERIVED from the hub's live rate. The file used to be
  * written in terms of 1440/288/1152 — the emission is the hub's schedule now and
  * decays, so a literal round budget is a value that silently goes stale.
  *
  * The dial is read exactly ONCE per round (frozen at the round's first touch), so
- * a mid-round change never rewrites an in-flight round. It's floored strictly
- * below the residual so the on-chain gross is >= 1 wei.
+ * a mid-round change never rewrites an in-flight round. It's bounded below
+ * 10000 bps so the on-chain gross is >= 1 wei.
  */
 
 const { expect } = require("chai");
@@ -46,11 +47,14 @@ async function streamIdFrom(tx, satori) {
   return satori.interface.parseLog(ev).args.streamId;
 }
 
-describe("Budget-split dial (Phase 1) — on-chain slice scales with offchainBudget", function () {
+describe("Budget-split dial (Phase 1) — on-chain slice scales with offchainShareBps", function () {
   let satori, rewards, registry, lens;
   let owner, alice, bob, platform;
   // The per-round emission net of the dev fee: the whole of what the dial splits.
+  // The rate steps every round's worth issued, so it is read in the round it
+  // pays for.
   let RESIDUAL;
+  const residualNow = async () => (await satori.emissionRateNow()) - (await satori.devRateNow());
 
   beforeEach(async function () {
     // Zero-platform-fee stack so the on-chain slice math is exactly gross − bonus.
@@ -60,12 +64,12 @@ describe("Budget-split dial (Phase 1) — on-chain slice scales with offchainBud
     alice = fix.signers[1];
     bob = fix.signers[2];
     // The rewards admin / platform-fee recipient is the fixture owner, so the
-    // setOffchainBudget authority (msg.sender == admin) is owner.
+    // setOffchainShareBps authority (msg.sender == admin) is owner.
     platform = owner;
     await satori.transfer(alice.address, E(100));
     await satori.transfer(bob.address, E(100));
-    RESIDUAL = (await satori.emissionRateNow()) - (await satori.devRateNow());
     await advanceRound();
+    RESIDUAL = await residualNow();
   });
 
   // A solo predictor earns the WHOLE on-chain slice: the predictor pool IS the
@@ -76,11 +80,13 @@ describe("Budget-split dial (Phase 1) — on-chain slice scales with offchainBud
   // marketing. So the slice is conserved EXACTLY as:
   // alice_claimed + marketing_bucket == gross.
   // Returns both halves so callers can assert that exact conservation.
-  // Takes the TARGET GROSS and works the dial back from it, rather than taking a
-  // dial figure that only means something against a fixed round budget.
-  async function soloTotalAtGross(gross) {
-    await rewards.connect(platform).setOffchainBudget(RESIDUAL - gross); // effective NEXT round (current round stays at the old dial)
+  // The on-chain gross a share leaves, worked out independently of the hub.
+  const grossAt = (bps) => RESIDUAL - (RESIDUAL * bps) / 10000n;
+
+  async function soloTotalAtShare(bps) {
+    await rewards.connect(platform).setOffchainShareBps(bps); // effective NEXT round (current round stays at the old share)
     await advanceRound();                         // step into the round the new dial governs
+    RESIDUAL = await residualNow();
     const sid = await streamIdFrom(await satori[SIMPLE3]("S", owner.address, 1440), satori);
     await registry.setValue(sid, 100);            // first touch → gross frozen at the new dial
     await satori.connect(alice).vote(sid, VOTE);
@@ -95,49 +101,53 @@ describe("Budget-split dial (Phase 1) — on-chain slice scales with offchainBud
     return { claimed, marketing };
   }
 
-  it("dial set to half the residual → the on-chain slice is half (whole gross payable, 5% pool cut to marketing)", async function () {
-    const gross = RESIDUAL / 2n;
-    const { claimed, marketing } = await soloTotalAtGross(gross);
+  it("share set to half → the on-chain slice is half (whole gross payable, 5% pool cut to marketing)", async function () {
+    const { claimed, marketing } = await soloTotalAtShare(5000n);
+    const gross = grossAt(5000n);
+    expect(gross).to.equal(RESIDUAL - RESIDUAL / 2n);
     // Conservation: alice's net claim + the skimmed marketing bucket == the gross.
     expect(claimed + marketing).to.equal(gross);
     // The skim is 5% of the pool, and the pool is now the FULL gross.
     expect(marketing).to.be.closeTo(gross / 20n, RAW_TOLERANCE);
   });
 
-  it("dial set to three quarters of the residual → the on-chain slice is a quarter", async function () {
-    const gross = RESIDUAL / 4n;
-    const { claimed, marketing } = await soloTotalAtGross(gross);
+  it("share set to three quarters → the on-chain slice is a quarter", async function () {
+    const { claimed, marketing } = await soloTotalAtShare(7500n);
+    const gross = grossAt(7500n);
     // Conservation: alice's net claim + the skimmed marketing bucket == the gross.
     expect(claimed + marketing).to.equal(gross);
     // The skim is 5% of the pool, and the pool is now the FULL gross.
     expect(marketing).to.be.closeTo(gross / 20n, RAW_TOLERANCE);
   });
 
-  it("functional true zero at the 1-wei floor (dial = RESIDUAL − 1): no revert, the whole 1-wei gross is the payout", async function () {
-    await rewards.connect(platform).setOffchainBudget(RESIDUAL - 1n); // effective NEXT round: gross = 1 wei (dev fee carved out)
-    await advanceRound();                                               // step into the round the dial governs
+  it("the largest share (9999 bps): no revert, the whole remaining gross is the payout", async function () {
+    await rewards.connect(platform).setOffchainShareBps(9999); // effective NEXT round
+    await advanceRound();                                       // step into the round the share governs
+    RESIDUAL = await residualNow();
+    const gross = grossAt(9999n);
+    expect(gross).to.be.gte(1n);
     const sid = await streamIdFrom(await satori[SIMPLE3]("S", owner.address, 1440), satori);
-    await registry.setValue(sid, 100);            // must NOT revert at gross 1 wei
+    await registry.setValue(sid, 100);            // must NOT revert at the smallest gross
     await satori.connect(alice).vote(sid, VOTE);
     await satori.connect(alice).predictMultipleWithPayloads([{ gameId: sid, payload: pack1(UP) }]);
     await advanceRound(); await registry.setValue(sid, 110);
     await advanceRound(); await registry.setValue(sid, 120);
-    await expect(satori.settlePrediction(alice.address, sid)).to.not.be.reverted; // 1-wei budget collapses cleanly
-    // The gross IS 1 wei and the whole of it is payable (no bonus reservation,
-    // no provider cut), so the sole predictor takes exactly 1 wei — the 5%
-    // referral skim of 1 wei rounds to 0, leaving nothing for marketing.
-    expect((await lens.getTotalClaimableRewards(alice.address))[0]).to.equal(1n);
-    expect(await rewards.unclaimedRewards(await rewards.marketingFeeRecipient())).to.equal(0n);
+    await expect(satori.settlePrediction(alice.address, sid)).to.not.be.reverted;
+    // The whole gross is payable (no bonus reservation, no provider cut), so the
+    // sole predictor's claimable plus the 5% referral skim is exactly the gross.
+    const claimable = (await lens.getTotalClaimableRewards(alice.address))[0];
+    const marketing = await rewards.unclaimedRewards(await rewards.marketingFeeRecipient());
+    expect(claimable + marketing).to.equal(gross);
   });
 
   it("the freeze holds: a mid-round dial change does not rewrite the current round", async function () {
-    await rewards.connect(platform).setOffchainBudget(0);          // gross == the residual
+    await rewards.connect(platform).setOffchainShareBps(0);        // gross == the residual
     const sid = await streamIdFrom(await satori[SIMPLE3]("S", owner.address, 1440), satori);
     await registry.setValue(sid, 100);                             // freezes the full residual for round R
     await satori.connect(alice).vote(sid, VOTE);
     await satori.connect(alice).predictMultipleWithPayloads([{ gameId: sid, payload: pack1(UP) }]);
     // mid-round R: crank the dial to two thirds — must NOT touch round R (already frozen).
-    await rewards.connect(platform).setOffchainBudget((RESIDUAL * 2n) / 3n);
+    await rewards.connect(platform).setOffchainShareBps(6667);
     await advanceRound(); await registry.setValue(sid, 110);       // R+1 freezes the reduced gross
     await advanceRound(); await registry.setValue(sid, 120);
     await satori.settlePrediction(alice.address, sid);
@@ -155,12 +165,12 @@ describe("Budget-split dial (Phase 1) — on-chain slice scales with offchainBud
     expect(marketing).to.be.closeTo(RESIDUAL / 20n, RAW_TOLERANCE);
   });
 
-  it("setOffchainBudget: admin-only and floored strictly below emissionRate − devRate", async function () {
-    await expect(rewards.connect(alice).setOffchainBudget(0))
+  it("setOffchainShareBps: admin-only and bounded below 10000", async function () {
+    await expect(rewards.connect(alice).setOffchainShareBps(0))
       .to.be.revertedWithCustomError(rewards, "Unauthorized");
-    await expect(rewards.connect(platform).setOffchainBudget(RESIDUAL))     // gross would be 0
+    await expect(rewards.connect(platform).setOffchainShareBps(10000))    // gross would be 0
       .to.be.revertedWithCustomError(rewards, "BadInput");
-    await expect(rewards.connect(platform).setOffchainBudget(RESIDUAL - 1n)).to.not.be.reverted;
-    expect(await rewards.offchainBudget()).to.equal(RESIDUAL - 1n);
+    await expect(rewards.connect(platform).setOffchainShareBps(9999)).to.not.be.reverted;
+    expect(await rewards.offchainShareBps()).to.equal(9999n);
   });
 });

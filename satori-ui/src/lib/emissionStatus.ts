@@ -12,8 +12,9 @@ export interface EmissionStatus {
   nextStepAt: bigint;
   stepsActive: boolean;
   holder: string;
-  dial: bigint;
-  dialEffective: bigint;
+  offchainShareBps: number;
+  /// What the off-chain share banks next round, in wei.
+  offchainNext: bigint;
 }
 
 export function toEmissionStatus(r: any): EmissionStatus {
@@ -28,13 +29,13 @@ export function toEmissionStatus(r: any): EmissionStatus {
     nextStepAt: BigInt(r.nextStepAt),
     stepsActive: Boolean(r.stepsActive),
     holder: String(r.holder),
-    dial: BigInt(r.dial),
-    dialEffective: BigInt(r.dialEffective),
+    offchainShareBps: Number(r.offchainShareBps),
+    offchainNext: BigInt(r.offchainNext),
   };
 }
 
-/// SatoriHub.PHI_INV — the deploy-time step multiplier.
-export const RATIO_DEFAULT = '0.618033988749894848';
+/// SatoriHub.DEFAULT_EMISSION_RATIO — the deploy-time step multiplier.
+export const RATIO_DEFAULT = '0.999708061412966511';
 export const RATIO_NEVER_CHANGE = '1';
 const RATIO_MAX = (BigInt(1) << BigInt(64)) - BigInt(1);
 
@@ -43,7 +44,7 @@ const RATIO_MAX = (BigInt(1) << BigInt(64)) - BigInt(1);
 export function parseRatioWad(s: string): bigint | { err: string } {
   const t = s.trim();
   if (!/^\d+(\.\d{1,18})?$/.test(t) && !/^\.\d{1,18}$/.test(t)) {
-    return { err: 'Enter a multiplier like 0.618, 1 or 2 (up to 18 decimals)' };
+    return { err: 'Enter a multiplier like 0.999708, 1 or 1.0001 (up to 18 decimals)' };
   }
   const wad = ethers.parseUnits(t.startsWith('.') ? `0${t}` : t, 18);
   if (wad === BigInt(0)) return { err: '0 is not allowed: the hub rejects it. Use a tiny multiplier to wind emission down' };
@@ -51,9 +52,10 @@ export function parseRatioWad(s: string): bigint | { err: string } {
   return wad;
 }
 
-/// "0.618" for φ−1, "1", "2": four places, trailing zeros dropped.
+/// "0.999708" for the default, "1", "1.0001": six places, trailing zeros dropped.
+/// Fewer would show the default as 0.9997, a different decline.
 export function formatRatio(wad: bigint): string {
-  const s = Number(ethers.formatUnits(wad, 18)).toFixed(4);
+  const s = Number(ethers.formatUnits(wad, 18)).toFixed(6);
   if (wad > BigInt(0) && Number(s) === 0) return ethers.formatUnits(wad, 18);
   return s.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
 }

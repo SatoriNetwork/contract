@@ -108,9 +108,9 @@
       "signature": "event ClaimUndelegated(address indexed delegator)",
       "topic": "0x819163f94693dd691e2295d9180610ee441a2394b6a5314edfe6043eb8bfb3d7"
     },
-    "OffchainBudgetSet": {
-      "signature": "event OffchainBudgetSet(uint256 newOffchainBudget, uint256 roundSet, address indexed setter)",
-      "topic": "0x032c04a6e8c878762fe1b67bd12c7b6fc609f2b6349dbff1102dced8e5c0658b"
+    "OffchainShareSet": {
+      "signature": "event OffchainShareSet(uint256 bps, uint256 roundSet, address indexed setter)",
+      "topic": "0x8cc2577ccf58768690db5d2e2eb3f2f61c5e0704c34180b7a7ad7bfed70e02de"
     },
     "GameRoundWeight": {
       "signature": "event GameRoundWeight(uint32 indexed gameId, uint256 indexed round, uint256 up, uint256 down)",
@@ -179,6 +179,12 @@
     "AirdropClaimed": {
       "signature": "event AirdropClaimed(address indexed user, uint256 amount)",
       "topic": "0x650e45f04ef8a0c267b2f78d983913f69ae3a353b2b32de5429307522be0ab55"
+    }
+  },
+  "SatoriHub": {
+    "MerkleReserveBanked": {
+      "signature": "event MerkleReserveBanked(uint256 cumulative, uint256 perRound, uint256 fromRound, uint256 throughRoundExclusive)",
+      "topic": "0xe1b25a85049cad0e8fc8c9f9654da92e970cd8b0997db3e5865b0b1381234f4e"
     }
   }
 }

@@ -158,7 +158,9 @@ describe("Delegator delta-claim (no halt on pending rounds)", function () {
       const own = (await satori.balanceOf(bob.address))
                 + (await rewards.unclaimedRewards(bob.address));
       const total = await rewards.getPredictionPower(bob.address);
-      splits.push({ own, total });
+      // ...and the round's own gross: the rate steps every round's worth issued.
+      const gross = (await satori.emissionRateNow()) - (await satori.devRateNow());
+      splits.push({ own, total, gross });
     };
     await advanceRound();
     await registry.setValue(quickId, 100);
@@ -205,12 +207,13 @@ describe("Delegator delta-claim (no halt on pending rounds)", function () {
 
     // Each of the two scored rounds paid the WHOLE on-chain gross: bob predicted
     // the only game that joined that round's denominator.
-    const gross = (await satori.emissionRateNow()) - (await satori.devRateNow());
     const feeBps = BigInt(await rewards.effectivePredictorFee(bob.address));
     const net = (x) => x - (x * 500n) / 10000n; // the 5% eager referral skim
     let aliceExpected = 0n, bobExpected = 0n;
     expect(splits.length).to.equal(2);
-    for (const { own, total } of splits) {
+    let pool = 0n;
+    for (const { own, total, gross } of splits) {
+      pool += net(gross);
       const delegatedReward = (gross * (total - own)) / total;
       const bonus = (delegatedReward * feeBps) / 10000n;
       aliceExpected += net(delegatedReward - bonus);
@@ -219,7 +222,7 @@ describe("Delegator delta-claim (no halt on pending rounds)", function () {
     expect(aliceGained).to.be.closeTo(aliceExpected, RAW_TOLERANCE);
     expect(bobGained).to.be.closeTo(bobExpected, RAW_TOLERANCE);
     // Conservation: nothing beyond the two scored rounds' net pool is minted.
-    expect(aliceGained + bobGained).to.be.closeTo(net(gross) * 2n, RAW_TOLERANCE);
+    expect(aliceGained + bobGained).to.be.closeTo(pool, RAW_TOLERANCE);
     expect(aliceGained).to.be.gt(bobGained);
   });
 });

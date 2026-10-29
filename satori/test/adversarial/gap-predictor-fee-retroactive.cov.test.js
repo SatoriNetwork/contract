@@ -129,6 +129,9 @@ describe("GAP: predictor fee read fresh at score time → retroactive skim", fun
     // eagerly at settle -- so the snapshot has to precede the predict, not the
     // claims.
     const mktStart = await rewards.unclaimedRewards(await rewards.marketingFeeRecipient());
+    // The predicted round's own gross: the rate steps every round's worth issued.
+    GROSS = (await satori.emissionRateNow()) - (await satori.devRateNow());
+    HALF = GROSS / 2n;
     await satori.connect(bob).predictMultipleWithPayloads([{ gameId: sid, payload: pack1(UP) }]);
 
     // At predict time Bob is unset → delegators see the visible 10% default.

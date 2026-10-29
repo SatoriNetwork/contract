@@ -3,8 +3,8 @@ import { parseRatioWad, formatRatio, RATIO_DEFAULT, RATIO_NEVER_CHANGE } from '.
 const ONE = BigInt('1000000000000000000');
 
 describe('parseRatioWad', () => {
-  it('the quick buttons send exactly PHI_INV and 1e18', () => {
-    expect(parseRatioWad(RATIO_DEFAULT)).toBe(BigInt('618033988749894848'));
+  it('the quick buttons send exactly DEFAULT_EMISSION_RATIO and 1e18', () => {
+    expect(parseRatioWad(RATIO_DEFAULT)).toBe(BigInt('999708061412966511'));
     expect(parseRatioWad(RATIO_NEVER_CHANGE)).toBe(ONE);
   });
 
@@ -27,7 +27,8 @@ describe('parseRatioWad', () => {
 
 describe('formatRatio', () => {
   it('drops trailing zeros without eating integer zeros', () => {
-    expect(formatRatio(BigInt('618033988749894848'))).toBe('0.618');
+    expect(formatRatio(BigInt('999708061412966511'))).toBe('0.999708');
+    expect(formatRatio(BigInt('500000000000000000'))).toBe('0.5');
     expect(formatRatio(ONE)).toBe('1');
     expect(formatRatio(ONE * BigInt(10))).toBe('10');
     expect(formatRatio(BigInt(0))).toBe('0');

@@ -5,7 +5,7 @@ import "../interfaces/ISatoriCore.sol";
 
 /**
  * @title MockRewardsMinter
- * @notice Test-only helper that calls `core.rewardMint` / `core.setMerkleReserveRate`.
+ * @notice Test-only helper that calls `core.rewardMint` / `core.setMerkleReserveBps`.
  *         Used UNWIRED (never a child) to prove the hub's authorization gate
  *         rejects a non-rewards caller (`Unauthorized`). On-chain over-issue cap
  *         tests now inject by impersonating the REAL rewards child directly
@@ -17,7 +17,7 @@ contract MockRewardsMinter {
     }
 
     function setReserveRate(address core, uint256 rate) external {
-        ISatoriCore(core).setMerkleReserveRate(rate);
+        ISatoriCore(core).setMerkleReserveBps(rate);
     }
 
     function freeze(address core, uint256 round) external returns (uint256) {

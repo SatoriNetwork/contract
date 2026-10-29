@@ -4,7 +4,7 @@ import { useContracts } from './useContracts';
 import { useGames } from './useGames';
 import { multicallRead } from '../utils/multicall';
 import { isProfane } from '../utils/profanity';
-import { payoutForStream, payableBudget } from '../lib/roundPayout';
+import { payoutForStream } from '../lib/roundPayout';
 import { getCurrentRound, getNamedAdapterId } from '../lib/chainValues';
 import { earningGames } from '../lib/round';
 import { indexerStreams, indexerRoundBudget, recentlyWrittenStream } from '../utils/indexerClient';
@@ -66,8 +66,8 @@ export function useStreamList() {
   const [liveEligibleIds, setLiveEligibleIds] = useState<Set<number>>(new Set());
   const [govVotesByStream, setGovVotesByStream] = useState<Map<number, bigint>>(new Map());
   const [govTotal, setGovTotal] = useState<bigint>(BigInt(0));
-  /// The round's REAL payable budget, after the dev fee, the off-chain dial and
-  /// the first-predictor bonus. Starts at 0 so a pre-load render never shows
+  /// The round's REAL payable budget, after the dev fee and the off-chain
+  /// share. Starts at 0 so a pre-load render never shows
   /// the 1440 envelope as a payout; set on first read.
   const [budget, setBudget] = useState<number>(0);
   const [totalCount, setTotalCount] = useState(0);
@@ -274,15 +274,10 @@ export function useStreamList() {
       ]);
       // What the round actually has to give out: the budget it froze on its first
       // touch (RoundBudgetFrozen), which is what scoring pays from. Before
-      // anything touches the round, project it from the hub's issuance-indexed
-      // emission rate less the dev fee and the off-chain dial, exactly as the
-      // freeze will.
+      // anything touches the round, it is the hub's onChainGrossNow(), the
+      // figure the freeze will store.
       const frozenBudget = await indexerRoundBudget(Number(currentRound));
-      const [emissionRateRaw, devRateRaw, offchainRaw] = frozenBudget != null ? [] : await Promise.all([
-        contracts.cached.round.satori.emissionRateNow(),
-        contracts.cached.round.satori.devRateNow(),
-        contracts.cached.round.rewards.offchainBudget(),
-      ]);
+      const grossRaw = frozenBudget != null ? null : await contracts.cached.round.satori.onChainGrossNow();
       setTotalCount(Number(count));
       const eligibleGameIds: number[] = (earningRaw ?? []).map((g: any) => Number(g));
 
@@ -305,11 +300,7 @@ export function useStreamList() {
         });
       }
       setGovTotal(BigInt(govTotalRaw ?? 0));
-      setBudget(frozenBudget != null ? Number(ethers.formatEther(frozenBudget)) : payableBudget(
-        Number(ethers.formatEther(emissionRateRaw ?? 0)),
-        Number(ethers.formatEther(devRateRaw ?? 0)),
-        Number(ethers.formatEther(offchainRaw ?? 0)),
-      ));
+      setBudget(Number(ethers.formatEther(frozenBudget ?? grossRaw ?? 0)));
 
       // Page through getGameWeights until exhausted. This ONE walk replaces both
       // getRankedGames and getEligibleGames, which are gone from the contract:

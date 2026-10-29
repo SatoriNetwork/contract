@@ -44,6 +44,7 @@ const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { time, loadFixture } = require("@nomicfoundation/hardhat-network-helpers");
 const { deploySatoriFixture, pack1 , warmUpStreak, voteFor } = require("../fixtures");
+const { onChainGrossOf } = require("../helpers/onChainGross");
 
 const UP = 1;
 
@@ -266,15 +267,13 @@ describe("claim-rewards.cov B: claimable view matches recipient+referral minted 
     // fail, and blind to the exact escape A_rewards.md:139 forbids (crediting the
     // earner the full amount AND paying the referral on top). So the gross is
     // anchored on the ROUND BUDGET, read live off the token's own dev rate:
-    // onChainGross = emissionRateNow - devRateNow - offchainBudget, ALL of which
+    // onChainGross = residual - residual * offchainShareBps / 10000, ALL of which
     // is now distributable to predictors: the first-predictor bonus reservation
     // and the value-provider cut were both removed, so the whole on-chain gross
     // is the single skimmable pool that alice — the sole predictor — wins.
     // From the HUB's schedule. The token's 1440 is the outer envelope, not the
     // rate — sizing a pool from it over-states the round.
-    const onChainGross = (await satori.emissionRateNow())
-                       - (await satori.devRateNow())
-                       - (await rewards.offchainBudget());
+    const onChainGross = (await onChainGrossOf(satori, rewards));
     const roundPool = onChainGross; // the SKIMMED base == the whole gross
     const gross = roundPool;
     expect(roundPool).to.be.gt(0n); // the anchor itself must be non-trivial
@@ -442,9 +441,7 @@ describe("claim-rewards.cov C: claimFor referral attribution is owner-scoped", f
     // pinned above. Anchor it on the round budget instead.
     // From the HUB's schedule. The token's 1440 is the outer envelope, not the
     // rate — sizing a pool from it over-states the round.
-    const onChainGross = (await satori.emissionRateNow())
-                       - (await satori.devRateNow())
-                       - (await rewards.offchainBudget());
+    const onChainGross = (await onChainGrossOf(satori, rewards));
     // No first-predictor bonus and no value-provider cut any more: the whole
     // on-chain gross is the skimmable pool alice wins as sole predictor.
     const roundPool = onChainGross;
