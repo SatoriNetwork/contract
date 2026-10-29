@@ -141,14 +141,14 @@ function txBuilderBatch({ chainId, safe, name, calls, createdAt = Date.now() }) 
 
 /// The tree PLATFORM_FEE_RECIPIENT must be, as deploy-splitters.js builds it:
 /// A, with no authority, paying C 60% and B 40%, each a two-slot splitter
-/// paying its two payees 50/50. C's and B's authorities, and B's low rotation
+/// paying its two payees 50/50. C's and B's authorities, and B's 60% rotation
 /// threshold, decide who can move a branch's share of the fee, so they are part
 /// of the tree too. The token makes A permanent, so deploy.js checks the tree
 /// before the token exists (M05).
 const FEE_TREE = {
   top: [6000n, 4000n], leaf: [5000n, 5000n], bps: 10000n,
   // Rotation thresholds in bps; 0 means the contract's default (90%).
-  threshold: { A: 0n, C: 0n, B: 1000n },
+  threshold: { A: 0n, C: 0n, B: 6000n },
 };
 const SPLITTER_ABI = [
   "function slotCount() view returns (uint256)", "function totalShares() view returns (uint256)",

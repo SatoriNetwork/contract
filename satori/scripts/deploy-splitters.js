@@ -42,10 +42,9 @@
 //        unchangeable by anyone, for any reason, forever — while C and B can
 //        still each move their OWN slot within it.
 //   C  authority = SPLITTER_AUTHORITY_C,  threshold = default (90%)
-//   B  authority = SPLITTER_AUTHORITY_B,  threshold = 10%
-//        B's low threshold lets a single leaf move B's slot in A without
-//        waiting on its co-recipient. Both leaves are trusted parties, and B
-//        carries the smaller 40% branch.
+//   B  authority = SPLITTER_AUTHORITY_B,  threshold = 60%
+//        Above either leaf's 50%, so moving B's slot in A takes both leaves
+//        (owner, 2026-10-29; it was 10%, which let either leaf move it alone).
 //
 // The two authorities are SEPARATE ENV VARS on purpose: `authority` is per-node
 // state on the contract (constructor arg -> `authority`), so each branch can be
@@ -56,8 +55,8 @@
 // rotation to the node's own threshold (below).
 //
 // Note the consequence of a threshold at or below 50%: a holder of a minority of
-// the branch can redirect all of that branch's income, alone and for good. That is chosen
-// here, not overlooked — see rotationThresholdBps in the contract.
+// the branch can redirect all of that branch's income, alone and for good. Neither
+// branch is set that low — see rotationThresholdBps in the contract.
 const { ethers, network } = require("hardhat");
 // On a live network every read that follows a write is eventually consistent — a
 // receipt is not a read barrier. Here that lands harder than anywhere else in the
@@ -75,7 +74,7 @@ const [TOP_C_SHARE, TOP_B_SHARE] = FEE_TREE.top;   // A -> C, A -> B
 const LEAF_SHARE = FEE_TREE.leaf[0];               // each leaf recipient
 
 const DEFAULT_THRESHOLD = FEE_TREE.threshold.C; // 0 == "use the contract default" (9000 = 90%)
-const B_THRESHOLD       = FEE_TREE.threshold.B; // 10%
+const B_THRESHOLD       = FEE_TREE.threshold.B; // 60%
 
 function requireAddr(name) {
   const v = (process.env[name] || "").trim();

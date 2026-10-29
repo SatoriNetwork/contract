@@ -161,7 +161,7 @@ describe("deploy-lib", function () {
       await c.waitForDeployment();
       return c.getAddress();
     }
-    async function tree({ bThreshold = 1000, cAuth = authC } = {}) {
+    async function tree({ bThreshold = 6000, cAuth = authC } = {}) {
       const c = await split(cAuth, [p[0], p[1]], [5000, 5000]);
       const b = await split(authB, [p[2], p[3]], [5000, 5000], bThreshold);
       const a = await split(Z, [c, b], [6000, 4000]);
@@ -219,7 +219,7 @@ describe("deploy-lib", function () {
       const t = await tree({ cAuth: eoa });
       expect((await checkFeeTree(ethers.provider, t.a, t.file, 31337)).problems.join(" ")).to.match(/C's authority/);
       const u = await tree({ bThreshold: 9000 });
-      expect((await checkFeeTree(ethers.provider, u.a, null, 31337)).problems.join(" ")).to.match(/B's rotation threshold is 9000, not 1000/);
+      expect((await checkFeeTree(ethers.provider, u.a, null, 31337)).problems.join(" ")).to.match(/B's rotation threshold is 9000, not 6000/);
     });
 
     it("holds the tree to the operator's own PAYEE and SPLITTER_AUTHORITY inputs when there is no file", async function () {
