@@ -70,7 +70,7 @@ async function loadRates(satori, token) {
   // The reserve-rate dial is bounded STRICTLY BELOW the residual general lane.
   BPS = await token.devFeeBps();
   const initial = await token.INITIAL_MINT();
-  GEN_GENESIS = (initial * (10000n - (await token.DEV_FEE_BPS_DEFAULT()))) / 10000n;
+  GEN_GENESIS = (initial * (10000n - (await token.devFeeBps()))) / 10000n;
   DEV_GENESIS = initial - GEN_GENESIS;
 }
 const feeOn = (general) => (general * BPS + (10000n - BPS) - 1n) / (10000n - BPS);

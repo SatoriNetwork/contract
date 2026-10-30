@@ -104,17 +104,14 @@ describe("SatoriToken (constitution)", function () {
       expect(await token.totalSupply()).to.equal(INITIAL_MINT);
     });
 
-    it("announces every genesis slot and the genesis fee rate, so the read model rebuilds from logs", async function () {
+    it("announces every genesis slot, so the read model rebuilds from logs", async function () {
       const SatoriToken = await ethers.getContractFactory("SatoriToken");
       const t = await SatoriToken.connect(deployer).deploy(governor.address, devRecipient.address, HOME);
       const rc = await t.deploymentTransaction().wait();
       const logs = rc.logs.map((l) => { try { return t.interface.parseLog(l); } catch { return null; } }).filter(Boolean);
       const slots = logs.filter((p) => p.name === "AuthoritySet").map((p) => [p.args[0], p.args[1], p.args[2]]);
-      expect(slots).to.deep.equal(["fee", "upgrade", "wiring", "appoint", "freeze"]
+      expect(slots).to.deep.equal(["upgrade", "wiring", "appoint", "freeze"]
         .map((s) => [s, ethers.ZeroAddress, governor.address]));
-      const fee = logs.filter((p) => p.name === "DevFeeBpsSet");
-      expect(fee.length).to.equal(1);
-      expect([fee[0].args[0], fee[0].args[1]]).to.deep.equal([0n, DEV_BPS]);
       const accrued = logs.filter((p) => p.name === "RewardsAccrued");
       expect(accrued.length).to.equal(1);
       expect(accrued[0].args[2] + accrued[0].args[3]).to.equal(INITIAL_MINT);
@@ -860,7 +857,7 @@ describe("SatoriToken (constitution)", function () {
       // What is given up is the power to REASSIGN the slots — nothing else.
       for (const call of [
         token.connect(governor).setWiringAuthority(alice.address),
-        token.connect(governor).setFeeAuthority(alice.address),
+        token.connect(governor).setUpgradeAuthority(alice.address),
         token.connect(governor).setRootAuthority(alice.address),
         token.connect(governor).renounceRootAuthority(),
       ]) {

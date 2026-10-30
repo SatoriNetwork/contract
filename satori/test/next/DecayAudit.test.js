@@ -181,38 +181,6 @@ describe("Decay audit — rate falls under a standing share", function () {
     });
   }
 
-  it("a fee raise under a standing share never shrinks the banked reserve, and all of it still claims", async function () {
-    await advanceRound();
-    await rewards.connect(owner).setOffchainShareBps(SHARE);
-    await atRound(token, (await token.deploymentRound()) + 30n);   // the fee dial's gap counts from genesis
-    await hub.syncEmission();
-    const banked = await hub.merkleReserveCumulative();
-    const feeBooked = await token.devFeeAccrued();
-    await token.connect(owner).proposeDevFeeBps(2500);
-    await token.connect(owner).acceptDevFeeBps();
-    expect(await token.devFeeAccrued(), "the raise rebooks nothing already reported").to.equal(feeBooked);
-    expect(await hub.merkleReserveCumulative()).to.equal(banked);
-    bps = await token.devFeeBps();
-    await advanceRound();
-
-    const rc = await (await hub.syncEmission()).wait();
-    const logged = rc.logs.filter((l) => l.address === hub.target)
-      .map((l) => { try { return hub.interface.parseLog(l); } catch { return null; } })
-      .filter((p) => p && p.name === "MerkleReserveBanked");
-    const grown = banked + part(residualOf(await hub.emissionRateNow()));   // the share of the new residual
-    expect(logged.length).to.equal(1);
-    expect(logged[0].args.throughRoundExclusive).to.equal((await currentRound(token)) + 1n);
-    expect(logged[0].args.cumulative).to.equal(grown);
-    expect(await hub.merkleReserveCumulative()).to.equal(grown);
-    await expectBooksHold();
-
-    const huge = (await hub.emissionCeiling()) * 10n;
-    await merkle.connect(publisher).setMerkleRoot(leafOf(alice.address, huge));
-    await merkle.connect(alice).claimMerkle(huge, []);
-    expect(await token.balanceOf(alice.address)).to.equal(grown);
-    await expectBooksHold();
-  });
-
   it("after an automatic step under the deepest share: both lanes split the new residual, pre-step credit still claims", async function () {
     await satori.transfer(alice.address, ethers.parseEther("100"));
     await satori.transfer(bob.address, ethers.parseEther("100"));

@@ -4,6 +4,63 @@ const { ethers } = require("ethers");
 
 const BASE_MAINNET = 8453;
 
+// Uniswap V3's own factory per chain; UNISWAP_V3_FACTORY overrides it.
+const UNISWAP_V3_FACTORY = { [BASE_MAINNET]: "0x33128a8fC17869897dcE68Ed026d694621f6FDfD" };
+// Chainlink's L2 sequencer uptime feed per chain; SEQUENCER_UPTIME_FEED overrides it.
+const SEQUENCER_UPTIME_FEED = { [BASE_MAINNET]: "0xBCF85224fc0756B9Fa45aA7892530B47e10b6433" };
+// The gasless relayer whose fee claims may take after a prediction; OFFICIAL_RELAYER overrides it.
+const OFFICIAL_RELAYER = { [BASE_MAINNET]: "0xD858162928c4e4b3e1131FeD62923F5D20924c58" };
+// The SatoriMerkle root publisher per chain; ROOT_PUBLISHER (deploy) and NEW_ROOT_PUBLISHER (handoff) override it.
+const ROOT_PUBLISHER = { [BASE_MAINNET]: "0xa0d45248752a3C36B03304fE5D150D04D93e811d" };
+// The marketing fee recipient per chain; MARKETING_FEE_RECIPIENT overrides it.
+const MARKETING_FEE_RECIPIENT = { [BASE_MAINNET]: "0x20A66Ac1c19283AE18063ddabdbC53a0af2a3139" };
+// The deploy key per chain (the scripts refuse any other signer there), and the
+// rewards admin handoff.js leaves in place; NEW_ADMIN overrides the admin.
+const DEPLOYER = { [BASE_MAINNET]: "0x6224b76DC960C42e542f02af2Cd42F385A2B199A" };
+const NEW_ADMIN = { [BASE_MAINNET]: "0x6224b76DC960C42e542f02af2Cd42F385A2B199A" };
+// The token's root (GOVERNOR) per chain: a Safe deploy-safe.js creates from
+// these inputs, so it can be created at the same address on any other chain.
+// Base mainnet: Safe #2, wallets 46 and 47, 1-of-2.
+const ROOT_SAFE = {
+  [BASE_MAINNET]: {
+    owners: "0xa5Ab1941012dEdd0d87AF283845bB367190bdc6F,0x969038F6E7223657C4F7AF82dda37A26ec4234d1",
+    threshold: "1",
+    saltNonce: "0",
+    address: "0x18DDEA3eE56a24aCF0745d588C178b7C5Cbdb4c5",
+  },
+};
+// Who holds root and the other token slots on this chain after handoff.js
+// (Base mainnet: Safe #1), and whether the outgoing root Safe burns its SATORI.
+const NEW_GOVERNOR = { [BASE_MAINNET]: "0xaCEa49E019ae0c5f3AC8BF2018CdCCAF245f17E6" };
+const BURN_ROOT_BALANCE = { [BASE_MAINNET]: true };
+// The fee-splitter inputs per chain (deploy-splitters.js); the same-named env vars override them.
+const SPLITTER_INPUTS = {
+  [BASE_MAINNET]: {
+    PAYEE_1: "0x7bDE68999a3825f7109068bc598BA347EE9d47b9",              // wallet 31
+    PAYEE_2: "0xaCEa49E019ae0c5f3AC8BF2018CdCCAF245f17E6",              // the governor Safe
+    PAYEE_3: "0x969038F6E7223657C4F7AF82dda37A26ec4234d1",              // wallet 47
+    PAYEE_4: "0x3Bc1B1A9C69460D94AeDb63E0b2641631593D58A",              // wallet 48
+    SPLITTER_AUTHORITY_C: "0xaCEa49E019ae0c5f3AC8BF2018CdCCAF245f17E6", // the governor Safe
+    SPLITTER_AUTHORITY_B: "0xd50974D1C2EE6AB61da64E8329e8cFC8E3A9b06E", // wallet 49
+  },
+};
+// A chain's preset address is final there: an environment value (say a testnet
+// one left in .env) must match it or be empty. Without a preset, the environment.
+function presetOr(name, preset) {
+  const env = (process.env[name] || "").trim();
+  if (!preset) return env;
+  if (env && env.toLowerCase() !== preset.toLowerCase()) {
+    throw new Error(`${name} is ${env} in the environment, but this chain's preset is ${preset}; unset it or make it match`);
+  }
+  return preset;
+}
+async function requireDeployer(provider, deployer) {
+  const want = DEPLOYER[Number((await provider.getNetwork()).chainId)];
+  if (want && want.toLowerCase() !== deployer.address.toLowerCase()) {
+    throw new Error(`the deployer on this chain is ${want}, not ${deployer.address}`);
+  }
+}
+
 // Safe 1.4.1, at the same addresses on every chain the token targets
 // (deploy-safe.js verifies them on chain before using them).
 const SAFE = {
@@ -43,6 +100,7 @@ const same = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
 function rootPolicy({ chainId, governor, deployer, safe, local }) {
   const onBase = Number(chainId) === BASE_MAINNET;
   const problems = [];
+  const advisories = [];
   if (same(governor, deployer)) {
     problems.push(onBase
       ? "GOVERNOR is the deployer. On Base the token's root must be the association's Safe: the root is in the " +
@@ -53,7 +111,7 @@ function rootPolicy({ chainId, governor, deployer, safe, local }) {
     problems.push(`GOVERNOR ${governor} is not a Safe. On Base the token's root must be the association's Safe.`);
   } else {
     if (Number(safe.threshold) < 2) {
-      problems.push(`GOVERNOR is a ${safe.threshold}-of-${safe.owners.length} Safe; root needs at least two signatures.`);
+      advisories.push(`GOVERNOR is a ${safe.threshold}-of-${safe.owners.length} Safe: any one owner alone is root.`);
     }
     if (safe.owners.some((o) => same(o, deployer))) {
       problems.push("the deployer is an owner of the GOVERNOR Safe; the deploy key must not be part of root.");
@@ -70,8 +128,8 @@ function rootPolicy({ chainId, governor, deployer, safe, local }) {
         "would have no root. Use a Safe from deploy-safe.js, unrotated, and pass its SAFE_SALT_NONCE.");
     }
   }
-  if (onBase) return { errors: problems, warnings: [] };
-  return { errors: [], warnings: local ? [] : problems };
+  if (onBase) return { errors: problems, warnings: advisories };
+  return { errors: [], warnings: local ? [] : [...problems, ...advisories] };
 }
 
 /// Whether a rerun may take over a token that already exists (M06). The token
@@ -268,6 +326,6 @@ function validateInputs(env) {
 }
 
 module.exports = {
-  BASE_MAINNET, SAFE, predictSafe, rootPolicy, adoption, delegationCalls, delegated,
+  BASE_MAINNET, UNISWAP_V3_FACTORY, SEQUENCER_UPTIME_FEED, OFFICIAL_RELAYER, ROOT_PUBLISHER, MARKETING_FEE_RECIPIENT, DEPLOYER, NEW_ADMIN, requireDeployer, SPLITTER_INPUTS, presetOr, ROOT_SAFE, NEW_GOVERNOR, BURN_ROOT_BALANCE, SAFE, predictSafe, rootPolicy, adoption, delegationCalls, delegated,
   encodeMultiSend, txBuilderBatch, txBuilderChecksum, validateInputs, FEE_TREE, checkFeeTree,
 };

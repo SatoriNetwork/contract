@@ -31,7 +31,7 @@ beforeEach(() => {
     data: {
       admin: ADMIN, emissionSplitHolder: ADMIN, emissionHolder: ADMIN, airdropHolder: ZERO,
       rootPublisher: ZERO, offchainReporter: ZERO, merkleWired: false,
-      devFeeBpsMin: 500, devFeeBpsMax: 2500, pendingDevFeeBps: 0, platformFeeBps: 1500,
+      platformFeeBps: 1500,
       protocolFeePerRound: E(127), platformFeeRecipient: ADMIN, emissionRatePerRound: E(846.62),
       currentRound: 3, offchainShareBps: 5000, onChainRewardCeiling: BigInt(0), merkleReserveCeiling: BigInt(0), registrationFee: BigInt(1000000000000000),
       defaultStreamInitialized: true, airdropLoadedTotal: BigInt(0), airdropCap: E(1100000), airdropLoadingFinalized: false,

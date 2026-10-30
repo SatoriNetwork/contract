@@ -288,42 +288,6 @@ describe("Issued counter — what counts toward the emission steps", function ()
     expect(await hub.emissionRateNext()).to.equal(second.rate);
   });
 
-  it("a fee-bps raise under a standing share never underflows and never lowers the counter", async function () {
-    await wireMerkle();
-    await rewards.connect(owner).setOffchainShareBps(9999);
-    for (let i = 0; i < 31; i++) await advanceRound();   // past the fee's 30-round change gap (DEV_FEE_CHANGE_GAP_ROUNDS, counted from genesis)
-    await hub.syncEmission();
-
-    const cum = await hub.merkleReserveCumulative();
-    const take = (cum * 9n) / 10n;
-    await merkle.connect(publisher).setMerkleRoot(leafOf(alice.address, take));
-    await merkle.connect(alice).claimMerkle(take, []);
-    const mm = await hub.merkleMinted();
-    expect(mm).to.be.gt(0n);
-
-    await token.connect(owner).proposeDevFeeBps(2500);
-    await token.connect(owner).acceptDevFeeBps();
-    expect(await token.devFeeBps()).to.equal(2500n);
-    await advanceRound();
-
-    const rw = await rewardsSigner(rewards);
-    const issued0 = await issuedOf(hub);
-    await expect(hub.connect(sink).syncEmission()).to.not.be.reverted;
-    // The share now splits the smaller residual: price the rounds, report a
-    // wei, mint it.
-    await expect(hub.connect(rw).freezeRoundGross(await token.getCurrentRound())).to.not.be.reverted;
-    await expect(hub.connect(rw).noteIssued(1n)).to.not.be.reverted;
-    await expect(hub.connect(rw).rewardMint(sink.address, 1n)).to.not.be.reverted;
-    expect(await issuedOf(hub)).to.be.gte(issued0 + grossUp(1n, 2500n));
-
-    const cumAfter = await hub.merkleReserveCumulative();
-    expect(cumAfter).to.be.gte(mm);
-    // Both lanes stay inside what was reported to the token, and the raise
-    // moved none of it.
-    expect((await hub.onChainMinted()) + cumAfter).to.be.lte(await token.generalAccrued());
-    expect(await hub.merkleMinted()).to.be.lte(cumAfter);
-  });
-
   it("a round predicted before a step and scored after it pays the old rate", async function () {
     const residualOld = (await hub.emissionRateNow()) - (await hub.devRateNow());
     await predict(100);

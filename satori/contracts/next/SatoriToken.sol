@@ -54,18 +54,14 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
     uint256 public constant INITIAL_MINT = 846621902397116230417;
 
     // Dev fee = a share of every reward the controller reports as EARNED
-    // (`accrueRewards`: on-chain credits and the merkle reserve), booked at the
-    // rate in force when it is reported. EXCLUDES the airdrop and the bridge.
+    // (`accrueRewards`: on-chain credits and the merkle reserve). EXCLUDES the
+    // airdrop and the bridge.
     // Since gross == general + dev, the share is a ratio on the general lane:
     // dev = general * bps / (10000 - bps). `rewardMint` pays only what was
-    // reported, so a controller that stops reporting pays nobody, and a rate
-    // change touches nothing already booked.
+    // reported, so a controller that stops reporting pays nobody.
 
-    /// The band the fee may occupy. The band itself is unalterable; a governor
-    /// chooses within it.
-    uint256 public constant DEV_FEE_BPS_MIN = 500;   //  5%
-    uint256 public constant DEV_FEE_BPS_MAX = 2500;  // 25%
-    uint256 public constant DEV_FEE_BPS_DEFAULT = 1500; // 15%
+    /// 15%, forever: a constant, so no authority can ever move it.
+    uint256 public constant devFeeBps = 1500;
 
     address internal constant _PLACEHOLDER = 0x000000000000000000000000000000000000dEaD;
 
@@ -80,21 +76,6 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
     uint256 public devFeeAccrued;
     uint256 public generalMinted;
     uint256 public devFeeMinted;
-
-    /// Movable only within [DEV_FEE_BPS_MIN, DEV_FEE_BPS_MAX].
-    uint256 public devFeeBps;
-
-    /// A round's budget is sized at the rate live when the round starts, but
-    /// its rewards are booked at the rate live when they are scored, so a
-    /// change moves the dev's booking on the rounds in flight. Spacing the
-    /// changes bounds what a fee authority can gain by timing them.
-    uint256 public constant DEV_FEE_CHANGE_GAP_ROUNDS = 30;
-    uint256 public lastDevFeeChangeRound;
-
-    /// `pendingDevFeeBps == 0` = nothing pending (0 is outside the legal band).
-    /// Acceptance must land in a LATER block than the proposal.
-    uint256 public pendingDevFeeBps;
-    uint256 public pendingDevFeeBlock;
 
     uint256 public airdropMinted;
     mapping(address => uint256) public airdropMintedTo;
@@ -117,8 +98,6 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
     address public rootAuthority;
     address public pendingRootAuthority;
 
-    /// The dev fee, within the immutable band.
-    address public feeAuthority;
     /// `upgradeTo` / `renounceUpgrade` on every proxy. Read by SatoriUUPS.
     address public upgradeAuthority;
     /// The pointers on this contract, plus the hub's write-once merkle wiring.
@@ -141,7 +120,6 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
     bool public controllerFrozen;
     bool public hookFrozen;
     bool public bridgeAuthorityFrozen;
-    bool public devFeeBpsFrozen;
 
     /// TIER 2 bridge registry: which third-party bridges are authorized. Zero
     /// (the default) = no third-party transport at all.
@@ -222,17 +200,12 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
     event ControllerFrozen(address finalController);
     event HookFrozen(address finalHook);
     event BridgeAuthorityFrozen(address finalAuthority);
-    event DevFeeBpsFrozen(uint256 finalBps);
 
-    event DevFeeBpsProposed(uint256 newBps, uint256 atBlock);
-    event DevFeeBpsCancelled(uint256 cancelledBps);
-    event DevFeeBpsSet(uint256 oldBps, uint256 newBps);
 
     error Unauthorized();
     error BadInput();
     error BudgetExceeded();
     error NotAccrued();
-    error DevFeeChangeTooSoon();
     error Locked();
     error HookFailedWithoutReason();
     error ControllerNotSet();
@@ -242,11 +215,6 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
 
     modifier onlyRoot() {
         if (msg.sender != rootAuthority) revert Unauthorized();
-        _;
-    }
-
-    modifier onlyFee() {
-        if (msg.sender != feeAuthority) revert Unauthorized();
         _;
     }
 
@@ -290,15 +258,12 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
         if (devRecipient_ == address(0) || devRecipient_ == _PLACEHOLDER) revert BadInput();
         if (homeChainId_ == 0) revert BadInput();
         rootAuthority    = root_;
-        feeAuthority     = root_;
         upgradeAuthority = root_;
         wiringAuthority  = root_;
         appointAuthority = root_;
         freezeAuthority  = root_;
-        devFeeBps = DEV_FEE_BPS_DEFAULT;
         deploymentRound = block.timestamp / TIME_UNIT_SECONDS;
         deploymentBlock = block.number;
-        lastDevFeeChangeRound = deploymentRound;
         PLATFORM_FEE_RECIPIENT = devRecipient_;
         HOME_CHAIN_ID = homeChainId_;
 
@@ -309,7 +274,7 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
             // GENERAL FIRST, dev takes the remainder: for INITIAL_MINT the
             // remainder equals the rounded-up fee `accrueRewards` books (pinned
             // by a test), so genesis is the same formula as every later report.
-            uint256 generalGenesis = INITIAL_MINT * (10000 - DEV_FEE_BPS_DEFAULT) / 10000;
+            uint256 generalGenesis = INITIAL_MINT * (10000 - devFeeBps) / 10000;
             uint256 devGenesis = INITIAL_MINT - generalGenesis;
             generalAccrued = generalGenesis;
             generalMinted = generalGenesis;
@@ -322,12 +287,10 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
         }
 
         emit RootAuthorityTransferred(address(0), root_);
-        emit AuthoritySet("fee", address(0), root_);
         emit AuthoritySet("upgrade", address(0), root_);
         emit AuthoritySet("wiring", address(0), root_);
         emit AuthoritySet("appoint", address(0), root_);
         emit AuthoritySet("freeze", address(0), root_);
-        emit DevFeeBpsSet(0, DEV_FEE_BPS_DEFAULT);
     }
 
     // ------------------------------------------------------------------
@@ -577,50 +540,6 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
         emit BridgeAuthoritySet(newAuthority);
     }
 
-    // THE FEE DIAL. Two-step, NOT a timelock — the only guarantee is that the
-    // two transactions cannot share a block, so they cannot be bundled
-    // atomically. Any notice period is the DAO's job, not this contract's; the
-    // one spacing rule here (DEV_FEE_CHANGE_GAP_ROUNDS) bounds timing games,
-    // it is not a notice.
-    // ------------------------------------------------------------------
-
-    /// Re-proposing overwrites a standing proposal and resets its block.
-    function proposeDevFeeBps(uint256 newBps) external onlyFee onlyHomeChain {
-        if (devFeeBpsFrozen) revert Frozen();
-        if (newBps < DEV_FEE_BPS_MIN || newBps > DEV_FEE_BPS_MAX) revert BadInput();
-        pendingDevFeeBps = newBps;
-        pendingDevFeeBlock = block.number;
-        emit DevFeeBpsProposed(newBps, block.number);
-    }
-
-    function cancelDevFeeBps() external onlyFee {
-        uint256 cancelled = pendingDevFeeBps;
-        if (cancelled == 0) revert BadInput();
-        pendingDevFeeBps = 0;
-        pendingDevFeeBlock = 0;
-        emit DevFeeBpsCancelled(cancelled);
-    }
-
-    /// Enact in a LATER block than the proposal. In the SAME block, an
-    /// `eth_estimateGas` reverts (the node simulates against a head where
-    /// block.number still equals pendingDevFeeBlock), so a wallet waits a block;
-    /// nothing is wrong. Touches no counter: everything already reported stays
-    /// booked at the rate it was reported under.
-    function acceptDevFeeBps() external onlyFee onlyHomeChain {
-        if (devFeeBpsFrozen) revert Frozen();
-        uint256 newBps = pendingDevFeeBps;
-        if (newBps == 0) revert BadInput();
-        if (block.number <= pendingDevFeeBlock) revert BadInput();
-        uint256 cur = getCurrentRound();
-        if (cur < lastDevFeeChangeRound + DEV_FEE_CHANGE_GAP_ROUNDS) revert DevFeeChangeTooSoon();
-
-        emit DevFeeBpsSet(devFeeBps, newBps);
-        devFeeBps = newBps;
-        lastDevFeeChangeRound = cur;
-        pendingDevFeeBps = 0;
-        pendingDevFeeBlock = 0;
-    }
-
     // PER-LEVER FREEZES. Each stops one pointer moving, forever (one-way, no
     // upgrade path). The value stays where it is, working. The `*Locked` views
     // report either a freeze or the driving slot being emptied.
@@ -653,15 +572,6 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
         emit BridgeAuthorityFrozen(bridgeAuthority);
     }
 
-    /// Discards any standing proposal, so a freeze cannot be front-run by a
-    /// pending change.
-    function freezeDevFeeBps() external onlyFreeze onlyHomeChain {
-        devFeeBpsFrozen = true;
-        pendingDevFeeBps = 0;
-        pendingDevFeeBlock = 0;
-        emit DevFeeBpsFrozen(devFeeBps);
-    }
-
     /// True when the lever was frozen OR the slot that drives it is empty.
     function controllerLocked() external view returns (bool) {
         return controllerFrozen || wiringAuthority == address(0);
@@ -675,18 +585,10 @@ contract SatoriToken is ERC20, ERC20Burnable, ERC20Permit, IERC7802 {
     function bridgeAuthorityLocked() external view returns (bool) {
         return bridgeAuthorityFrozen || wiringAuthority == address(0);
     }
-    function devFeeBpsLocked() external view returns (bool) {
-        return devFeeBpsFrozen || feeAuthority == address(0);
-    }
 
     // The slot setters are one-step and immediate: they are RECALL paths, and a
     // pending state an attacker could re-trigger would be worse than severing a
     // bad holder now. `rootAuthority` alone is two-step — nothing can recall IT.
-
-    function setFeeAuthority(address who) external onlyRoot {
-        emit AuthoritySet("fee", feeAuthority, who);
-        feeAuthority = who;
-    }
 
     function setUpgradeAuthority(address who) external onlyRoot {
         emit AuthoritySet("upgrade", upgradeAuthority, who);

@@ -48,6 +48,7 @@ const { ethers, network } = require("hardhat");
 // block yet, so `getCode` returns "0x" for a contract that demonstrably exists.
 // Treating that as a failed deployment would invite a duplicate redeploy.
 const { waitForCode } = require("./live-reads-lib");
+const { presetOr, ROOT_SAFE } = require("./deploy-lib");
 
 // Safe 1.4.1 deployments — identical addresses on Base Sepolia (84532) and Base (8453).
 const FACTORY   = "0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67"; // SafeProxyFactory
@@ -179,17 +180,18 @@ async function main() {
   }
 
   // ---- inputs ----
-  const owners = (process.env.SAFE_OWNERS || "")
+  const preset = ROOT_SAFE[chainId] || {};
+  const owners = presetOr("SAFE_OWNERS", preset.owners)
     .split(",").map((s) => s.trim()).filter(Boolean)
     .map((a, i) => requireAddr(`SAFE_OWNERS[${i}]`, a));
   if (owners.length === 0) throw new Error("SAFE_OWNERS is required (comma-separated addresses).");
 
-  const threshold = BigInt((process.env.SAFE_THRESHOLD || "").trim() || "0");
+  const threshold = BigInt(presetOr("SAFE_THRESHOLD", preset.threshold) || "0");
   if (threshold < 1n) throw new Error("SAFE_THRESHOLD is required and must be >= 1.");
   if (threshold > BigInt(owners.length)) {
     throw new Error(`SAFE_THRESHOLD ${threshold} exceeds owner count ${owners.length}.`);
   }
-  const saltNonce = BigInt((process.env.SAFE_SALT_NONCE || "0").trim());
+  const saltNonce = BigInt(presetOr("SAFE_SALT_NONCE", preset.saltNonce) || "0");
 
   const dupes = owners.filter((o, i) => owners.indexOf(o) !== i);
   if (dupes.length) throw new Error(`duplicate owner(s): ${[...new Set(dupes)].join(", ")}`);
@@ -238,6 +240,9 @@ async function main() {
     ["bytes", "uint256"], [await factory.proxyCreationCode(), BigInt(SINGLETON)]);
   const predicted = ethers.getCreate2Address(FACTORY, salt, ethers.keccak256(deploymentData));
   console.log(`  local CREATE2 derivation   ${predicted}`);
+  if (preset.address && predicted.toLowerCase() !== preset.address.toLowerCase()) {
+    throw new Error(`these inputs give ${predicted}, not this chain's preset root Safe ${preset.address}`);
+  }
 
   // Idempotent: CREATE2 makes the address a pure function of (owners, threshold,
   // handler, saltNonce), so a re-run with the same inputs lands on the same Safe.

@@ -14,11 +14,7 @@ const ZERO = '0x0000000000000000000000000000000000000000';
 // fee has no tiers and no clock now, so there is no countdown to display and
 // nothing for the UI to anchor.
 //
-// It is `devFeeBps`, 1500 (15%) at deploy, and the GOVERNOR may move it within
-// [DEV_FEE_BPS_MIN, DEV_FEE_BPS_MAX] = [500, 2500] in a two-step propose/accept
-// (humble.md 1b). Read the band and any standing proposal from the chain rather
-// than mirroring them here — that is exactly what the old three constants did,
-// and they went stale.
+// It is `devFeeBps`, 1500 (15%), a constant nobody can move.
 //
 // What DOES move is the emission itself, in SatoriHub, and it moves with how
 // much SATORI has been issued, not with the date: 846.62 on day 1, then multiplied by
@@ -32,15 +28,11 @@ export interface OwnerData {
   admin: string;
   defaultStreamInitialized: boolean;
   // The platform fee: a percentage of everything minted (SatoriToken.devFeeBps),
-  // 15% at deploy. No ADMIN setter and no schedule — the GOVERNOR may move it
-  // within the band below, two-step. Its per-round form is computed at the HUB
+  // 15%, a constant: no setter and no schedule. Its per-round form is computed at the HUB
   // (`devRateNow = emissionRateNow x devFeeBps`) because the token no longer
   // knows the emission rate. The recipient is the immutable
   // PLATFORM_FEE_RECIPIENT and has no setter at all.
   platformFeeBps: number;             // basis points, live
-  devFeeBpsMin: number;               // the band's floor  (immutable constant)
-  devFeeBpsMax: number;               // the band's ceiling (immutable constant)
-  pendingDevFeeBps: number;           // 0 = nothing proposed
   platformFeeRecipient: string;       // read-only constant, no setter
   protocolFeePerRound: bigint;        // raw token amount (wei) for THIS round
   /// This round's emission under the hub's issuance-indexed schedule (wei). The dial
@@ -118,9 +110,6 @@ export function useOwner() {
         currentRound,
         governor,
         pendingGovernor,
-        devFeeBpsMinRaw,
-        devFeeBpsMaxRaw,
-        pendingDevFeeBpsRaw,
       ] = await Promise.all([
         contracts.cached.round.rewards.admin(),
         contracts.cached.round.satori.defaultStreamInitialized(),
@@ -138,9 +127,6 @@ export function useOwner() {
         getCurrentRound(),
         contracts.cached.round.token.rootAuthority(),
         contracts.cached.round.token.pendingRootAuthority(),
-        contracts.cached.round.token.DEV_FEE_BPS_MIN(),
-        contracts.cached.round.token.DEV_FEE_BPS_MAX(),
-        contracts.cached.round.token.pendingDevFeeBps(),
       ]);
       // The hub publishes the fee as WEI PER ROUND; bps is the derived view,
       // taken against THIS ROUND'S EMISSION — not against the token's 1440
@@ -257,9 +243,6 @@ export function useOwner() {
         emissionRatePerRound: emission,
         emission: emissionStatus,
         emissionHolder,
-        devFeeBpsMin: Number(devFeeBpsMinRaw),
-        devFeeBpsMax: Number(devFeeBpsMaxRaw),
-        pendingDevFeeBps: Number(pendingDevFeeBpsRaw),
         feeScheduleStartRound: Number(deploymentRound),
         currentRound: Number(currentRound),
         offchainShareBps, onChainRewardCeiling, merkleReserveCeiling, registrationFee,

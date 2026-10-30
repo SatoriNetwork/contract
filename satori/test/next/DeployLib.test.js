@@ -37,8 +37,12 @@ describe("deploy-lib", function () {
     it("on Base, refuses a root that is not a Safe", function () {
       expect(base(SAFE_ADDR, null).errors[0]).to.match(/is not a Safe/);
     });
-    it("on Base, refuses a 1-of-n Safe, a Safe the deployer owns, and a Safe other chains cannot reproduce", function () {
-      expect(base(SAFE_ADDR, { ...goodSafe, threshold: 1 }).errors[0]).to.match(/at least two signatures/);
+    it("on Base, warns on a 1-of-n Safe without refusing it", function () {
+      const r = base(SAFE_ADDR, { ...goodSafe, threshold: 1 });
+      expect(r.errors).to.deep.equal([]);
+      expect(r.warnings[0]).to.match(/any one owner alone is root/);
+    });
+    it("on Base, refuses a Safe the deployer owns, and a Safe other chains cannot reproduce", function () {
       expect(base(SAFE_ADDR, { ...goodSafe, owners: [...OWNERS, DEPLOYER] }).errors[0]).to.match(/deployer is an owner/);
       expect(base(SAFE_ADDR, { ...goodSafe, reproducible: false }).errors[0]).to.match(/same address on other chains/);
     });
@@ -55,7 +59,7 @@ describe("deploy-lib", function () {
       expect(sep.warnings[0]).to.match(/root of every copy/);
       const oneOfN = rootPolicy({ chainId: 84532, governor: SAFE_ADDR, deployer: DEPLOYER, safe: { ...goodSafe, threshold: 1 }, local: false });
       expect(oneOfN.errors).to.deep.equal([]);
-      expect(oneOfN.warnings[0]).to.match(/at least two signatures/);
+      expect(oneOfN.warnings[0]).to.match(/any one owner alone is root/);
       expect(rootPolicy({ chainId: 31337, governor: DEPLOYER, deployer: DEPLOYER, safe: null, local: true }))
         .to.deep.equal({ errors: [], warnings: [] });
     });

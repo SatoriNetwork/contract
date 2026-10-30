@@ -275,6 +275,24 @@ describe("SatoriToken — the dev fee is a share of what was earned", function (
   });
 
   describe("the ladder is gone", function () {
+    it("15% forever: a constant, with no dial, band, freeze or fee authority in the ABI", async function () {
+      expect(await token.devFeeBps()).to.equal(1500n);
+      const names = token.interface.fragments
+        .filter((f) => f.type === "function").map((f) => f.name);
+      for (const gone of ["proposeDevFeeBps", "cancelDevFeeBps", "acceptDevFeeBps",
+                          "pendingDevFeeBps", "pendingDevFeeBlock", "lastDevFeeChangeRound",
+                          "DEV_FEE_BPS_MIN", "DEV_FEE_BPS_MAX", "DEV_FEE_BPS_DEFAULT",
+                          "DEV_FEE_CHANGE_GAP_ROUNDS", "freezeDevFeeBps", "devFeeBpsFrozen",
+                          "devFeeBpsLocked", "feeAuthority", "setFeeAuthority"]) {
+        expect(names, `${gone} must be gone`).to.not.include(gone);
+      }
+      for (const sig of ["proposeDevFeeBps(uint256)", "setFeeAuthority(address)"]) {
+        const sel = ethers.id(sig).slice(0, 10).slice(2);
+        const code = await ethers.provider.getCode(await token.getAddress());
+        expect(code.includes(sel), `${sig} selector in bytecode`).to.equal(false);
+      }
+    });
+
     it("one flat constant, and no tier, clock or mint-time ceiling left in the ABI", async function () {
       expect(await token.devFeeBps()).to.equal(DEV_BPS);
       const names = token.interface.fragments

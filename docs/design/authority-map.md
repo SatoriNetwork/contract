@@ -14,9 +14,9 @@ lever or two directly* — so the first question any of it has to answer is
 
 ---
 
-## 1. The token's six authority slots
+## 1. The token's five authority slots
 
-**`token.governor` no longer exists.** It was one address gating the fee, every
+**`token.governor` no longer exists.** It was one address gating every
 proxy upgrade, and all three token pointers — several unrelated jobs held by one
 key. It was split on 2026-09-13 (`dao-governance.md` §10) into one slot per job,
 so each can be a different Safe.
@@ -26,7 +26,7 @@ boundaries of these slots can never change, only the addresses. Any one slot may
 later point at a contract instead of a Safe, and that contract can subdivide
 however it likes.
 
-**Who holds them.** The constructor takes one `root_` and seeds all six slots with
+**Who holds them.** The constructor takes one `root_` and seeds all five slots with
 it. On Base that is the association's Safe; the deploy script refuses anything
 else there. `root_` is a constructor argument, so it is part of the token's
 CREATE2 address, and the same Safe is root of every copy of the token anyone
@@ -34,17 +34,16 @@ deploys on any chain. The Safe can be created at the same address on each chain,
 and nobody can create one there with other owners (its owners and threshold are
 in its own CREATE2 salt). During the deploy the Safe lends the deploy key
 `wiringAuthority` and `appointAuthority`, plus the SATORI for the one adapter
-registration fee; root, fee, upgrade, freeze and the genesis SATORI never leave
+registration fee; root, upgrade, freeze and the genesis SATORI never leave
 it. After the deploy, one Safe transaction moves each slot to its holder.
 
 | Slot | Holds |
 |---|---|
-| `rootAuthority` | assigns all five below; `setRootAuthority` (two-step) / `renounceRootAuthority` |
-| `feeAuthority` | `proposeDevFeeBps` / `acceptDevFeeBps` / `cancelDevFeeBps` — **freezable** |
+| `rootAuthority` | assigns all four below; `setRootAuthority` (two-step) / `renounceRootAuthority` |
 | `upgradeAuthority` | `upgradeTo`, `renounceUpgrade` on all eight proxies |
 | `wiringAuthority` | `setController`, `setHook`, `setBridgeAuthority` (all **freezable**), `setAirdrop` (not freezable), `hub.setSatoriMerkle` |
 | `appointAuthority` | `rewards.setAdmin`, `airdrop.setAirdropAuthority` (recall), `engine.setCurveOperator`, `setDustFloor`, `setDustTarget` |
-| `freezeAuthority` | `freezeController` / `freezeHook` / `freezeBridgeAuthority` / `freezeDevFeeBps` — one-way |
+| `freezeAuthority` | `freezeController` / `freezeHook` / `freezeBridgeAuthority` — one-way |
 
 Every upgrade in the system resolves to `upgradeAuthority` —
 `SatoriUUPS._upgradeGovernor()` returns `token.upgradeAuthority()` — so that one

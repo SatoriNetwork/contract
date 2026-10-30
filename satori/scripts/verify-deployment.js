@@ -139,18 +139,12 @@ async function main() {
       (await token.ROUND_REWARD_BUDGET()) === ethers.parseEther("1440")],
     ["hub ROUND_REWARD_BUDGET == token's", async () =>
       (await hub.ROUND_REWARD_BUDGET()) === (await token.ROUND_REWARD_BUDGET())],
-    // The fee SHIPS at 15% and is the fee authority's to move afterwards, inside
-    // a band the immutable token fixes. Only the band is an invariant; the rate
-    // and any pending change are STATE below.
-    ["dev fee band is [500, 2500] and unalterable", async () =>
-      (await token.DEV_FEE_BPS_MIN()) === 500n &&
-      (await token.DEV_FEE_BPS_MAX()) === 2500n],
+    ["dev fee is 15%", async () => (await token.devFeeBps()) === 1500n],
     // NO SLOT MAY BE EMPTY. A zero slot is unrecoverable for that job: nothing
     // but `root` can refill it, and a zero `root` cannot refill anything at all.
     // Cheap to check, permanent to get wrong.
     ["no authority slot is the zero address", async () =>
       (await token.rootAuthority()) !== ethers.ZeroAddress &&
-      (await token.feeAuthority()) !== ethers.ZeroAddress &&
       (await token.upgradeAuthority()) !== ethers.ZeroAddress &&
       (await token.wiringAuthority()) !== ethers.ZeroAddress &&
       (await token.appointAuthority()) !== ethers.ZeroAddress &&
@@ -273,17 +267,14 @@ async function main() {
       (await token.totalRewardsMinted()) + (await token.airdropMinted()) +
       (await token.crosschainMinted()) - (await token.crosschainBurned()) -
       (await token.totalSupply()), eth),
-    await safe("devFeeBps (ships at 1500)", () => token.devFeeBps()),
-    await safe("pendingDevFeeBps", () => token.pendingDevFeeBps()),
-    await safe("levers frozen: controller / hook / bridgeAuthority / devFeeBps", async () =>
+    await safe("levers frozen: controller / hook / bridgeAuthority", async () =>
       [await token.controllerFrozen(), await token.hookFrozen(),
-       await token.bridgeAuthorityFrozen(), await token.devFeeBpsFrozen()].join(" / ")),
+       await token.bridgeAuthorityFrozen()].join(" / ")),
     await safe("devFeeMinted", () => token.devFeeMinted(), eth),
     await safe("dev fee owed (accrued - minted)", async () =>
       (await token.devFeeAccrued()) - (await token.devFeeMinted()), eth),
     await safe("PLATFORM_FEE_RECIPIENT", () => token.PLATFORM_FEE_RECIPIENT()),
     await safe("token.rootAuthority", () => token.rootAuthority()),
-    await safe("token.feeAuthority", () => token.feeAuthority()),
     await safe("token.upgradeAuthority", () => token.upgradeAuthority()),
     await safe("token.wiringAuthority", () => token.wiringAuthority()),
     await safe("token.appointAuthority", () => token.appointAuthority()),

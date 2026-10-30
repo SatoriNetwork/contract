@@ -4,7 +4,7 @@ const { ethers } = require("hardhat");
 // PER-LEVER RENOUNCEMENT — giving up ONE governor power permanently.
 //
 // humble.md 4, owner-approved 2026-09-12. `renounceGovernor()` is
-// all-or-nothing: it kills the fee dial, every proxy upgrade, and all three
+// all-or-nothing: it kills every proxy upgrade and all three
 // token pointers in one call. That welds the most valuable thing the governor
 // can do — re-pointing mint authority — to the things the protocol still needs
 // a governor for, which means a DAO handed `governor` is a DAO whose vote can
@@ -35,10 +35,10 @@ describe("SatoriToken — per-lever renouncement", function () {
 
   describe("nothing is frozen at deploy", function () {
     it("every lever starts live and every view says so", async function () {
-      for (const f of ["controllerFrozen", "hookFrozen", "bridgeAuthorityFrozen", "devFeeBpsFrozen"]) {
+      for (const f of ["controllerFrozen", "hookFrozen", "bridgeAuthorityFrozen"]) {
         expect(await token[f](), f).to.equal(false);
       }
-      for (const f of ["controllerLocked", "hookLocked", "bridgeAuthorityLocked", "devFeeBpsLocked", "airdropLocked"]) {
+      for (const f of ["controllerLocked", "hookLocked", "bridgeAuthorityLocked", "airdropLocked"]) {
         expect(await token[f](), f).to.equal(false);
       }
     });
@@ -91,13 +91,12 @@ describe("SatoriToken — per-lever renouncement", function () {
 
       await expect(token.connect(governor).setHook(ethers.ZeroAddress)).to.not.be.reverted;
       await expect(token.connect(governor).setBridgeAuthority(ethers.ZeroAddress)).to.not.be.reverted;
-      await expect(token.connect(governor).proposeDevFeeBps(2000n)).to.not.be.reverted;
       // Governor handoff still works, so the role is still transferable.
       await expect(token.connect(governor).setRootAuthority(other.address)).to.not.be.reverted;
     });
   });
 
-  describe("the other three levers", function () {
+  describe("the other two levers", function () {
     it("freezes the hook where it stands", async function () {
       const addr = await someContract();
       await token.connect(governor).setHook(addr);
@@ -121,34 +120,15 @@ describe("SatoriToken — per-lever renouncement", function () {
       await expect(token.connect(governor).setBridgeAuthority(await someContract()))
         .to.be.revertedWithCustomError(token, "Frozen");
     });
-
-    it("freezes the fee dial, and discards any standing proposal", async function () {
-      const before = await token.devFeeBps();
-      await token.connect(governor).proposeDevFeeBps(2500n);
-      expect(await token.pendingDevFeeBps()).to.equal(2500n);
-
-      // A freeze must not be front-runnable by a pending change: the proposal
-      // dies with the dial rather than surviving to be accepted afterwards.
-      await expect(token.connect(governor).freezeDevFeeBps())
-        .to.emit(token, "DevFeeBpsFrozen").withArgs(before);
-      expect(await token.pendingDevFeeBps()).to.equal(0n);
-      expect(await token.devFeeBps()).to.equal(before);
-
-      await expect(token.connect(governor).proposeDevFeeBps(2000n))
-        .to.be.revertedWithCustomError(token, "Frozen");
-      await expect(token.connect(governor).acceptDevFeeBps())
-        .to.be.revertedWithCustomError(token, "Frozen");
-    });
   });
 
   describe("authority and scope", function () {
-    it("is governor-only on all four", async function () {
+    it("is governor-only on all three", async function () {
       await token.connect(governor).setController(controller.address);
       for (const call of [
         token.connect(stranger).freezeController(),
         token.connect(stranger).freezeHook(),
         token.connect(stranger).freezeBridgeAuthority(),
-        token.connect(stranger).freezeDevFeeBps(),
         token.connect(controller).freezeController(),
       ]) {
         await expect(call).to.be.revertedWithCustomError(token, "Unauthorized");
@@ -160,10 +140,8 @@ describe("SatoriToken — per-lever renouncement", function () {
       const remote = await SatoriToken.connect(deployer).deploy(
         governor.address, dev.address, 999999);
       await remote.waitForDeployment();
-      // Minting and the fee do not exist off-home, so freezing them does not either.
+      // Minting does not exist off-home, so freezing it does not either.
       await expect(remote.connect(governor).freezeController())
-        .to.be.revertedWithCustomError(remote, "NotHomeChain");
-      await expect(remote.connect(governor).freezeDevFeeBps())
         .to.be.revertedWithCustomError(remote, "NotHomeChain");
       // The hook and the transport lane DO exist off-home, so these must work.
       await expect(remote.connect(governor).freezeHook()).to.not.be.reverted;
@@ -171,14 +149,14 @@ describe("SatoriToken — per-lever renouncement", function () {
     });
 
     it("renouncing the ROOT does NOT lock the levers — emptying their slots does", async function () {
-      // This used to assert that renounceGovernor subsumed all four freezes,
+      // This used to assert that renounceGovernor subsumed all the freezes,
       // which was true when one address gated everything. Since the split
       // (dao-governance.md v2) the root only grants the power to REASSIGN: give
       // it up and the standing authorities keep working, permanently.
       await token.connect(governor).setController(controller.address);
       await token.connect(governor).renounceRootAuthority();
 
-      for (const f of ["controllerLocked", "hookLocked", "bridgeAuthorityLocked", "devFeeBpsLocked"]) {
+      for (const f of ["controllerLocked", "hookLocked", "bridgeAuthorityLocked"]) {
         expect(await token[f](), f).to.equal(false);
       }
       await expect(token.connect(governor).setController(other.address)).to.not.be.reverted;
@@ -186,7 +164,7 @@ describe("SatoriToken — per-lever renouncement", function () {
 
     it("emptying a slot locks exactly ITS levers and says nothing about the others", async function () {
       // The sharper reading the split buys. Before, one question ("did the role
-      // go away?") stood in for four; now each view names the slot that actually
+      // go away?") stood in for each; now each view names the slot that actually
       // drives it.
       await token.connect(governor).setController(controller.address);
       await token.connect(governor).setWiringAuthority(ethers.ZeroAddress);
@@ -194,14 +172,10 @@ describe("SatoriToken — per-lever renouncement", function () {
       expect(await token.controllerLocked()).to.equal(true);
       expect(await token.hookLocked()).to.equal(true);
       expect(await token.bridgeAuthorityLocked()).to.equal(true);
-      expect(await token.devFeeBpsLocked()).to.equal(false);   // untouched
       await expect(token.connect(governor).setController(other.address))
         .to.be.revertedWithCustomError(token, "Unauthorized");
-      // ...and the fee dial still works, because it is a different slot.
-      await expect(token.connect(governor).proposeDevFeeBps(2000n)).to.not.be.reverted;
-
-      await token.connect(governor).setFeeAuthority(ethers.ZeroAddress);
-      expect(await token.devFeeBpsLocked()).to.equal(true);
+      // ...and the freeze slot's levers still work, because it is a different slot.
+      await expect(token.connect(governor).freezeHook()).to.not.be.reverted;
     });
   });
 });

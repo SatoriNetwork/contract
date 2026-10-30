@@ -204,7 +204,7 @@ export function AdminTab() {
       <div className="space-y-1.5">
         <Row
           title="Platform Fee"
-          subtitle={<>A percentage of everything the protocol mints as rewards — never the airdrop. Ships at 15% and is <strong>not an admin lever</strong>: only the <strong>governor</strong> can move it, only within the immutable band <strong>{bpsToPercentStr(data.devFeeBpsMin)}%&ndash;{bpsToPercentStr(data.devFeeBpsMax)}%</strong>, and only in two steps (propose, then accept in a later block). Reserved off the top of each round before anything reaches predictors, so it is never a subtraction from a payout. The recipient is fixed in the contract and has no setter at all.{data.pendingDevFeeBps > 0 && <span className="block mt-1 text-amber-600 dark:text-amber-400">Change pending: <strong>{bpsToPercentStr(data.pendingDevFeeBps)}%</strong> ({data.pendingDevFeeBps} bps) — awaiting the governor's acceptance.</span>}</>}
+          subtitle={<>A percentage of everything the protocol mints as rewards — never the airdrop. It is <strong>15% forever</strong>: a constant in the contract that nobody can change. Reserved off the top of each round before anything reaches predictors, so it is never a subtraction from a payout. The recipient is fixed in the contract and has no setter at all.</>}
           summary={<span><strong>{bpsToPercentStr(data.platformFeeBps)}%</strong> ({data.platformFeeBps} bps) · {fmtSatori(data.protocolFeePerRound)} this round</span>}
           input={null} action={null} onSave={() => {}} saving={false} disabled readOnly
         />

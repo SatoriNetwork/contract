@@ -68,7 +68,7 @@ const fs = require("fs");
 const path = require("path");
 
 // deploy.js checks the fee recipient against the same shape (checkFeeTree).
-const { FEE_TREE } = require("./deploy-lib");
+const { FEE_TREE, requireDeployer, SPLITTER_INPUTS, presetOr } = require("./deploy-lib");
 const BPS = FEE_TREE.bps;
 const [TOP_C_SHARE, TOP_B_SHARE] = FEE_TREE.top;   // A -> C, A -> B
 const LEAF_SHARE = FEE_TREE.leaf[0];               // each leaf recipient
@@ -76,8 +76,8 @@ const LEAF_SHARE = FEE_TREE.leaf[0];               // each leaf recipient
 const DEFAULT_THRESHOLD = FEE_TREE.threshold.C; // 0 == "use the contract default" (9000 = 90%)
 const B_THRESHOLD       = FEE_TREE.threshold.B; // 60%
 
-function requireAddr(name) {
-  const v = (process.env[name] || "").trim();
+function requireAddr(name, fallback) {
+  const v = presetOr(name, fallback);
   if (!v) throw new Error(`${name} is required. See .env.example.`);
   let a;
   try { a = ethers.getAddress(v); }
@@ -90,6 +90,7 @@ async function main() {
   const net = await ethers.provider.getNetwork();
   const chainId = Number(net.chainId);
   const [deployer] = await ethers.getSigners();
+  await requireDeployer(ethers.provider, deployer);
   if (!deployer) throw new Error("No signer — set PRIVATE_KEY in .env");
 
   console.log(`\n  network   ${network.name} (chainId ${chainId})`);
@@ -100,9 +101,10 @@ async function main() {
     console.log(`     and A's shares can never be changed either. Check the table below.\n`);
   }
 
-  const payees = [1, 2, 3, 4].map((i) => requireAddr(`PAYEE_${i}`));
-  const authorityC = requireAddr("SPLITTER_AUTHORITY_C");
-  const authorityB = requireAddr("SPLITTER_AUTHORITY_B");
+  const preset = SPLITTER_INPUTS[chainId] || {};
+  const payees = [1, 2, 3, 4].map((i) => requireAddr(`PAYEE_${i}`, preset[`PAYEE_${i}`]));
+  const authorityC = requireAddr("SPLITTER_AUTHORITY_C", preset.SPLITTER_AUTHORITY_C);
+  const authorityB = requireAddr("SPLITTER_AUTHORITY_B", preset.SPLITTER_AUTHORITY_B);
 
   const dupes = payees.filter((p, i) => payees.indexOf(p) !== i);
   if (dupes.length) throw new Error(`duplicate payee(s): ${[...new Set(dupes)].join(", ")}`);

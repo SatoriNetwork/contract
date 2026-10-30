@@ -36,8 +36,8 @@
 //   1. MOVE THE SATORI. One transfer, no coordination, no second party. It takes
 //      the prize off the hot key immediately. Nothing later depends on the
 //      deployer holding tokens.
-//   2. MOVE THE FIVE NON-ROOT AUTHORITY SLOTS. Single-step, immediate, no second
-//      party — `setFeeAuthority` and friends are `onlyRoot`, and the deployer is
+//   2. MOVE THE FOUR NON-ROOT AUTHORITY SLOTS. Single-step, immediate, no second
+//      party — `setUpgradeAuthority` and friends are `onlyRoot`, and the deployer is
 //      still root at this point.
 //
 //      THIS NARROWS THE MINTER HOLE. IT DOES NOT CLOSE IT. `setController` is
@@ -60,9 +60,9 @@
 //      so this script cannot do it and deliberately does not try — it prints the
 //      call for the Safe to execute.
 //
-// ORDER IS LOAD-BEARING, and differently than before. The five setters are
+// ORDER IS LOAD-BEARING, and differently than before. The four setters are
 // `onlyRoot`, so they have to happen BEFORE the Safe accepts root — after that
-// the deployer cannot move them and the Safe would have to send five more
+// the deployer cannot move them and the Safe would have to send four more
 // transactions itself. Doing them first also means every dangerous power is off
 // the hot key within one block, rather than hours later when signatures land.
 //
@@ -77,7 +77,7 @@ const { ethers, network } = require("hardhat");
 const fs = require("fs");
 const path = require("path");
 const { runChecks, readPolicy } = require("./live-reads-lib");
-const { SAFE, encodeMultiSend, txBuilderBatch } = require("./deploy-lib");
+const { SAFE, encodeMultiSend, txBuilderBatch, ROOT_PUBLISHER, NEW_ADMIN, requireDeployer, presetOr, NEW_GOVERNOR, BURN_ROOT_BALANCE } = require("./deploy-lib");
 const { execViaSafe } = require("./safe-exec");
 
 function requireAddr(name, v) {
@@ -94,6 +94,7 @@ async function main() {
   const chainId = Number((await ethers.provider.getNetwork()).chainId);
   const execute = !!(process.env.HANDOFF_EXECUTE || "").trim();
   const [deployer] = await ethers.getSigners();
+  await requireDeployer(ethers.provider, deployer);
   if (!deployer) throw new Error("No signer — set PRIVATE_KEY in .env");
 
   const book = process.env.ADDRESS_BOOK ||
@@ -107,12 +108,12 @@ async function main() {
   }
   const A = bookJson.addresses;
 
-  const newGovernor = requireAddr("NEW_GOVERNOR", process.env.NEW_GOVERNOR);
-  const newAdmin = requireAddr("NEW_ADMIN", process.env.NEW_ADMIN || process.env.NEW_GOVERNOR);
+  const newGovernor = requireAddr("NEW_GOVERNOR", presetOr("NEW_GOVERNOR", NEW_GOVERNOR[chainId]));
+  const newAdmin = requireAddr("NEW_ADMIN", presetOr("NEW_ADMIN", NEW_ADMIN[chainId]) || newGovernor);
   // Where the genesis supply goes. Defaults to the incoming governor, which is
   // the Safe — the treasury and the governor are the same body unless told
   // otherwise, and a separate value here is a deliberate choice, not a typo.
-  const treasury = requireAddr("TREASURY", process.env.TREASURY || process.env.NEW_GOVERNOR);
+  const treasury = requireAddr("TREASURY", process.env.TREASURY || newGovernor);
   // The merkle channel is always deployed now, and when ROOT_PUBLISHER was unset
   // at deploy time it starts on the DEPLOYER — a hot, throwaway key. Nothing
   // moved it before this, so it would have stayed there permanently while every
@@ -120,20 +121,19 @@ async function main() {
   // operational job, so it belongs with the admin rather than the governor, and
   // it can be rotated to a warm operator key afterwards from the Off-chain tab.
   const newRootPublisher = requireAddr("NEW_ROOT_PUBLISHER",
-    process.env.NEW_ROOT_PUBLISHER || process.env.NEW_ADMIN || process.env.NEW_GOVERNOR);
+    presetOr("NEW_ROOT_PUBLISHER", ROOT_PUBLISHER[chainId]) || newAdmin);
 
-  // The five non-root slots. Each defaults to NEW_GOVERNOR, so the simple case —
+  // The four non-root slots. Each defaults to NEW_GOVERNOR, so the simple case —
   // everything to one Safe — needs no new configuration at all, and splitting
   // them across Safes is opt-in per slot whenever those Safes exist.
   const SLOTS = [
-    ["fee",     "NEW_FEE_AUTHORITY",     "feeAuthority",     "setFeeAuthority"],
     ["upgrade", "NEW_UPGRADE_AUTHORITY", "upgradeAuthority", "setUpgradeAuthority"],
     ["wiring",  "NEW_WIRING_AUTHORITY",  "wiringAuthority",  "setWiringAuthority"],
     ["appoint", "NEW_APPOINT_AUTHORITY", "appointAuthority", "setAppointAuthority"],
     ["freeze",  "NEW_FREEZE_AUTHORITY",  "freezeAuthority",  "setFreezeAuthority"],
   ].map(([name, env, getter, setter]) => ({
     name, getter, setter,
-    target: requireAddr(env, process.env[env] || process.env.NEW_GOVERNOR),
+    target: requireAddr(env, process.env[env] || newGovernor),
   }));
 
   const token = await ethers.getContractAt("SatoriToken", A.token);
@@ -152,6 +152,10 @@ async function main() {
   const [govNow, pendingNow, adminNow, bal] = await Promise.all([
     token.rootAuthority(), token.pendingRootAuthority(), rewards.admin(), token.balanceOf(deployer.address),
   ]);
+  // A root Safe handing over to a different holder burns what it holds when this
+  // chain says so (Base mainnet: the genesis SATORI is not wanted).
+  const burnRoot = !!BURN_ROOT_BALANCE[chainId] && govNow.toLowerCase() !== newGovernor.toLowerCase();
+  const rootBal = burnRoot ? await token.balanceOf(govNow) : 0n;
   console.log(`\n== where things stand ==`);
   console.log(`  token.root              ${govNow}`);
   console.log(`  token.pendingRoot       ${pendingNow === ethers.ZeroAddress ? "(none)" : pendingNow}`);
@@ -182,7 +186,8 @@ async function main() {
   if (newGovernor === deployer.address) {
     throw new Error("NEW_GOVERNOR is the deployer — that is not a handoff.");
   }
-  for (const [name, a] of [["NEW_ADMIN", newAdmin], ["NEW_ROOT_PUBLISHER", newRootPublisher], ["TREASURY", treasury],
+  // NEW_ADMIN may be the deployer: the admin can touch no funds and no root.
+  for (const [name, a] of [["NEW_ROOT_PUBLISHER", newRootPublisher], ["TREASURY", treasury],
     ...SLOTS.map((sl) => [`NEW_${sl.name.toUpperCase()}_AUTHORITY`, sl.target])]) {
     if (a === deployer.address) throw new Error(`${name} is the deployer — that is not a handoff.`);
   }
@@ -222,10 +227,10 @@ async function main() {
     const p = await (await ethers.getContractAt("LockVoteGovernor", A.lockVoteGovernor)).proposer();
     proposerDone = p.toLowerCase() === newGovernor.toLowerCase();
   }
-  if (govDone && adminDone && tokensDone && pubDone && loaderDone && slotsDone && proposerDone) {
+  if (govDone && adminDone && tokensDone && pubDone && loaderDone && slotsDone && proposerDone && rootBal === 0n) {
     console.log(`\n== HANDOFF COMPLETE ==`);
-    console.log(`\n  The deployer holds no SATORI and no token slot, is not the governor, is not`);
-    console.log(`  the admin, the airdrop loader, the lock-vote proposer, or the merkle root publisher.`);
+    console.log(`\n  The deployer holds no SATORI and no token slot, is not the governor, the lock-vote`);
+    console.log(`  proposer or the merkle root publisher; the admin and airdrop loader are ${newAdmin}.`);
     console.log(`  Nothing further to do.\n`);
     return;
   }
@@ -245,7 +250,7 @@ async function main() {
     }
   }
 
-  if (!govDone && govNow.toLowerCase() !== deployer.address.toLowerCase()) {
+  if (!govDone && govNow.toLowerCase() !== deployer.address.toLowerCase() && (await ethers.provider.getCode(govNow)) === "0x") {
     throw new Error(
       `the deployer is not the current governor (${govNow}) and the handoff is not ` +
       `complete — wrong PRIVATE_KEY, or someone else already moved it.`
@@ -260,7 +265,7 @@ async function main() {
       run: () => token.transfer(treasury, bal),
     });
   }
-  // 2. The five non-root slots, BEFORE the root moves. They are `onlyRoot` and
+  // 2. The four non-root slots, BEFORE the root moves. They are `onlyRoot` and
   //    the deployer is still root; once the Safe accepts, the deployer cannot
   //    send these at all. `wiring` is the one that matters most — it carries
   //    `setController`, so this is where the minter hole actually closes.
@@ -272,7 +277,8 @@ async function main() {
     if (sl.now.toLowerCase() === sl.target.toLowerCase()) continue;
     if (!rootIsDeployer) {
       rootCalls.push({ to: A.token, data: token.interface.encodeFunctionData(sl.setter, [sl.target]),
-        label: `${sl.setter}(${sl.target})`, sl });
+        label: `${sl.setter}(${sl.target})`,
+        check: [`${sl.name} authority is ${sl.target}`, async () => (await token[sl.getter]()).toLowerCase() === sl.target.toLowerCase()] });
       continue;
     }
     steps.push({
@@ -284,7 +290,27 @@ async function main() {
     });
   }
 
-  if (!govDone && !nominated) {
+  if (!rootIsDeployer && !govDone) {
+    if (!nominated) {
+      rootCalls.push({ to: A.token, data: token.interface.encodeFunctionData("setRootAuthority", [newGovernor]),
+        label: `setRootAuthority(${newGovernor})`,
+        check: [`pending root is ${newGovernor}`, async () => (await token.pendingRootAuthority()).toLowerCase() === newGovernor.toLowerCase()] });
+    }
+    if (A.lockVoteGovernor) {
+      const lockGov = await ethers.getContractAt("LockVoteGovernor", A.lockVoteGovernor);
+      if ((await lockGov.proposer()).toLowerCase() === govNow.toLowerCase()) {
+        rootCalls.push({ to: A.lockVoteGovernor, data: lockGov.interface.encodeFunctionData("transferProposer", [newGovernor]),
+          label: `lockVoteGovernor.transferProposer(${newGovernor})`,
+          check: [`lock-vote proposer is ${newGovernor}`, async () => (await lockGov.proposer()).toLowerCase() === newGovernor.toLowerCase()] });
+      }
+    }
+    if (rootBal > 0n) {
+      rootCalls.push({ to: A.token, data: token.interface.encodeFunctionData("burn", [rootBal]),
+        label: `burn(${ethers.formatEther(rootBal)} SATORI)`,
+        check: [`root Safe burned its SATORI`, async () => (await token.balanceOf(govNow)) === 0n] });
+    }
+  }
+  if (rootIsDeployer && !govDone && !nominated) {
     steps.push({
       n: 4, label: `nominate ${newGovernor} as root authority`,
       why: "only nominates; the deployer stays root until the Safe accepts",
@@ -446,14 +472,29 @@ async function main() {
       console.log("  executing it with SIGNER_KEYS (testnet convenience)...");
       await execViaSafe({ provider: new ethers.JsonRpcProvider(network.config.url), safe: govNow,
         to: SAFE.multiSendCallOnly, data, operation: 1, keys, log: console.log });
-      const { failed } = await runChecks(rootCalls.map((c) => [`${c.sl.name} authority is ${c.sl.target}`,
-        async () => (await token[c.sl.getter]()).toLowerCase() === c.sl.target.toLowerCase()]), { ...policy, log: console.log });
+      const { failed } = await runChecks(rootCalls.map((c) => c.check), { ...policy, log: console.log });
       if (failed.length) {
-        console.error(`\n  the Safe ran, but ${failed.length} slot(s) did not move — check the Safe transaction.\n`);
+        console.error(`\n  the Safe ran, but ${failed.map(([m]) => m).join("; ")} did not hold — check the Safe transaction.\n`);
         process.exit(1);
       }
-      console.log("  every slot is with its holder. Re-run this script to confirm the handoff is complete.\n");
+      console.log("  the root Safe's batch landed.\n");
     }
+  }
+
+  // ---- the new root accepts ----
+  const acceptKeys = (process.env.NEW_GOVERNOR_SIGNER_KEYS || "").split(",").map((k) => k.trim()).filter(Boolean);
+  if (!govDone && execute && acceptKeys.length
+      && (await token.pendingRootAuthority()).toLowerCase() === newGovernor.toLowerCase()) {
+    if (!network.config.url) throw new Error("NEW_GOVERNOR_SIGNER_KEYS needs a network with a URL");
+    console.log(`\n== ${newGovernor} accepts root, signed with NEW_GOVERNOR_SIGNER_KEYS ==`);
+    await execViaSafe({ provider: new ethers.JsonRpcProvider(network.config.url), safe: newGovernor,
+      to: A.token, data: token.interface.encodeFunctionData("acceptRootAuthority", []), operation: 0,
+      keys: acceptKeys, log: console.log });
+    const { failed } = await runChecks([[`root is ${newGovernor}`,
+      async () => (await token.rootAuthority()).toLowerCase() === newGovernor.toLowerCase()]], { ...policy, log: console.log });
+    if (failed.length) { console.error(`\n  the accept ran but root did not move.\n`); process.exit(1); }
+    console.log(`  root is ${newGovernor}. Re-run this script to confirm the handoff is complete.\n`);
+    return;
   }
 
   // ---- the half this script cannot do ----

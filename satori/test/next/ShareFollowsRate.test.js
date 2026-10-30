@@ -52,27 +52,6 @@ describe("Off-chain share follows the residual", function () {
     expect(await rewards.offchainShareBps()).to.equal(SHARE); // nobody re-set it
   });
 
-  it("a dev-fee change mid-round cannot over-subscribe the round's emission", async function () {
-    const fa = await token.feeAuthority();
-    await impersonateAccount(fa);
-    await setBalance(fa, ethers.parseEther("10"));
-    const fee = await ethers.getSigner(fa);
-    for (let i = 0; i < 31; i++) await nextRound(); // past DEV_FEE_CHANGE_GAP_ROUNDS
-    const rate = await satori.emissionRateNow();
-    const oldBps = await token.devFeeBps();
-    const newBps = oldBps === 0n ? 1000n : oldBps + 500n;
-    // Worst order: the reserve banks round R at the old fee, then the fee moves,
-    // then the on-chain lane prices R at the new one.
-    const { reserve } = await lanesThisRound();
-    await token.connect(fee).proposeDevFeeBps(newBps);
-    await token.connect(fee).acceptDevFeeBps();
-    const gross = await satori.onChainGrossNow();
-    // Each lane's fee is booked at the rate it is reported under, so each takes
-    // its share of the emission and the round costs at most the rate.
-    const grossUp = (g, bps) => (g * 10000n + (10000n - bps) - 1n) / (10000n - bps);
-    expect(grossUp(reserve, oldBps) + grossUp(gross, newBps)).to.be.at.most(rate + 2n);
-  });
-
   it("refuses 100%, and at 99.99% leaves the on-chain lane at least 1 wei", async function () {
     await expect(rewards.connect(owner).setOffchainShareBps(10000)).to.be.revertedWithCustomError(rewards, "BadInput");
     await rewards.connect(owner).setOffchainShareBps(9999);

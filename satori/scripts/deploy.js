@@ -25,8 +25,9 @@
 //   PLATFORM_FEE_RECIPIENT   splitter A from deploy-splitters.js; read from its
 //                       splitters-<network>.json when unset. Off local chains
 //                       the tree is checked on chain before the token exists (M05).
-//   MARKETING_FEE_RECIPIENT  marketing wallet for un-referred referral cut   [REQUIRED]
-//   ROOT_PUBLISHER      SatoriMerkle root publisher                          [default: deployer]
+//   MARKETING_FEE_RECIPIENT  marketing wallet for un-referred referral cut   [REQUIRED; Base: per chain in deploy-lib]
+//   OFFICIAL_RELAYER    rewards.officialRelayer (the gasless relayer)  [default: per chain in deploy-lib, else unset]
+//   ROOT_PUBLISHER      SatoriMerkle root publisher      [default: per chain in deploy-lib, else deployer]
 //                       NOT a switch: the merkle channel is ALWAYS deployed.
 //   ACTIVATION_WINDOW_BLOCKS  proof governor activation window              [default: 256]
 //   VOTING_PERIOD_SECONDS     proof governor voting period                  [default: 604800 (7d)]
@@ -80,7 +81,7 @@ const { runChecks, waitForHead, readPolicy } = require("./live-reads-lib");
 const { ensureFactory, deployDeterministic, predictAddress, buildInitCode } = require("./create2-lib");
 const {
   SAFE, predictSafe, rootPolicy, adoption, delegationCalls, delegated, encodeMultiSend, txBuilderBatch, validateInputs,
-  checkFeeTree,
+  checkFeeTree, UNISWAP_V3_FACTORY, SEQUENCER_UPTIME_FEED, OFFICIAL_RELAYER, ROOT_PUBLISHER, MARKETING_FEE_RECIPIENT, requireDeployer, presetOr, ROOT_SAFE,
 } = require("./deploy-lib");
 const { execViaSafe } = require("./safe-exec");
 const same = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
@@ -112,9 +113,10 @@ async function readSafe(addr, saltNonce) {
 
 async function main() {
   const [deployer] = await ethers.getSigners();
+  await requireDeployer(ethers.provider, deployer);
   const net = hre.network.name;
 
-  const governor = ethers.getAddress(process.env.GOVERNOR || deployer.address);
+  const governor = ethers.getAddress(presetOr("GOVERNOR", ROOT_SAFE[Number((await ethers.provider.getNetwork()).chainId)]?.address) || deployer.address);
   // The deploy registers the adapters as the admin, so a run with another
   // admin could not finish; handoff.js moves the admin afterwards.
   if (process.env.REWARDS_ADMIN && !same(process.env.REWARDS_ADMIN, deployer.address)) {
@@ -122,8 +124,9 @@ async function main() {
       `Leave it unset and move the admin with handoff.js (NEW_ADMIN).`);
   }
   const rewardsAdmin = deployer.address;
-  const { holderWindow, holderPeriod, rootPublisher } = validateInputs(process.env);
+  const { holderWindow, holderPeriod, rootPublisher: publisherEnv } = validateInputs(process.env);
   const chainId = Number((await ethers.provider.getNetwork()).chainId);
+  const rootPublisher = ROOT_PUBLISHER[chainId] ? ethers.getAddress(presetOr("ROOT_PUBLISHER", ROOT_PUBLISHER[chainId])) : publisherEnv;
   const delegating = !same(governor, deployer.address);
 
   // PLATFORM_FEE_RECIPIENT is splitter A, and it becomes an `immutable` on a token
@@ -160,7 +163,8 @@ async function main() {
       `(it writes ${phase1Path}), or set it explicitly. See .env.example.`
     );
   }
-  const marketingFeeRecipient = requireAddr("MARKETING_FEE_RECIPIENT", process.env.MARKETING_FEE_RECIPIENT, PLACEHOLDER_MARKETING);
+  const marketingFeeRecipient = requireAddr("MARKETING_FEE_RECIPIENT",
+    presetOr("MARKETING_FEE_RECIPIENT", MARKETING_FEE_RECIPIENT[chainId]), PLACEHOLDER_MARKETING);
   if (marketingFeeRecipient === ethers.ZeroAddress) throw new Error("MARKETING_FEE_RECIPIENT must not be the zero address");
   // The recipient takes its 5% by calling hub.claim itself, so a contract that cannot
   // send a transaction (a splitter, say) would strand the cut. A wallet or a Safe can.
@@ -220,7 +224,7 @@ async function main() {
     }
   }
 
-  const saltNonce = BigInt((process.env.SAFE_SALT_NONCE || "0").trim());
+  const saltNonce = BigInt(presetOr("SAFE_SALT_NONCE", ROOT_SAFE[chainId]?.saltNonce) || "0");
   const safeInfo = await readSafe(governor, saltNonce);
   const rootRule = rootPolicy({ chainId, governor, deployer: deployer.address, safe: safeInfo, local: localChain });
   // Once the token exists its root is fixed, so the rule only warns: a Safe
@@ -240,7 +244,7 @@ async function main() {
   const coinedAddress = coinedEnv ? requireAddr("COINED_ADDRESS", coinedEnv) : null;
   // ChainlinkV3Adapter is immutable and its sequencer feed with it, so a wrong
   // value is a new adapter id: prove the feed answers before the first chain write.
-  const factoryEnv = (process.env.UNISWAP_V3_FACTORY || "").trim();
+  const factoryEnv = presetOr("UNISWAP_V3_FACTORY", UNISWAP_V3_FACTORY[chainId]);
   if (!localChain && !factoryEnv) {
     throw new Error(
       `UNISWAP_V3_FACTORY is required on '${net}': UniswapV3Adapter accepts only pools this factory created, ` +
@@ -252,7 +256,9 @@ async function main() {
   if (uniswapFactory !== ethers.ZeroAddress && (await ethers.provider.getCode(uniswapFactory)) === "0x") {
     throw new Error(`UNISWAP_V3_FACTORY ${uniswapFactory} has no code on '${net}'.`);
   }
-  const sequencerEnv = (process.env.SEQUENCER_UPTIME_FEED || "").trim();
+  const relayerEnv = presetOr("OFFICIAL_RELAYER", OFFICIAL_RELAYER[chainId]);
+  const officialRelayer = relayerEnv ? requireAddr("OFFICIAL_RELAYER", relayerEnv) : ethers.ZeroAddress;
+  const sequencerEnv = presetOr("SEQUENCER_UPTIME_FEED", SEQUENCER_UPTIME_FEED[chainId]);
   if (!localChain && !sequencerEnv) {
     throw new Error(
       `SEQUENCER_UPTIME_FEED is required on '${net}': Chainlink reads must stop while the ` +
@@ -597,6 +603,10 @@ async function main() {
     // emissionSplitAuthority is unset, so it falls to the admin, the deployer.
     console.log(`Setting the reward split: ${OFFCHAIN_SHARE_BPS / 100}% off chain...`);
     await (await rewards.setOffchainShareBps(OFFCHAIN_SHARE_BPS)).wait();
+    if (officialRelayer !== ethers.ZeroAddress) {
+      console.log(`Setting the official relayer: ${officialRelayer}...`);
+      await (await rewards.setOfficialRelayer(officialRelayer)).wait();
+    }
 
     // 8a. GOVERNANCE INSTRUMENTS — both holder-voting paths, deployed as part
     // of the stack so no chain ships without them (owner, 2026-09-15). Neither
@@ -669,6 +679,7 @@ async function main() {
       return true;
     }],
     ["offchainShareBps == 50% split", async () => (await rewards.offchainShareBps()) === BigInt(OFFCHAIN_SHARE_BPS)],
+    ["officialRelayer == OFFICIAL_RELAYER", async () => eq(await rewards.officialRelayer(), officialRelayer)],
     ["token.controller == hub", async () => eq(await token.controller(), A.hub)],
     ["token.hook == hub", async () => eq(await token.hook(), A.hub)],
     // The airdrop lane: the token's pointer is the ONLY door, the contract
@@ -679,11 +690,10 @@ async function main() {
     ["airdrop loading not finalized at deploy", async () => (await airdrop.airdropLoadingFinalized()) === false],
     // The constructor seeds EVERY slot with the root; a Safe root has lent
     // wiring and appoint to the deployer, and handoff.js pulls them all apart.
-    // Checking only `root` here would pass a token whose other five slots were
+    // Checking only `root` here would pass a token whose other four slots were
     // somehow wrong, which is exactly the failure the split makes possible.
-    [`token root, fee, upgrade, freeze == governor; wiring, appoint == ${delegating ? "deployer (lent)" : "governor"}`, async () =>
+    [`token root, upgrade, freeze == governor; wiring, appoint == ${delegating ? "deployer (lent)" : "governor"}`, async () =>
       eq(await token.rootAuthority(), governor) &&
-      eq(await token.feeAuthority(), governor) &&
       eq(await token.upgradeAuthority(), governor) &&
       eq(await token.wiringAuthority(), delegating ? deployer.address : governor) &&
       eq(await token.appointAuthority(), delegating ? deployer.address : governor) &&

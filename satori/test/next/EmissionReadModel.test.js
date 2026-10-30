@@ -92,31 +92,6 @@ describe("Emission read model — issued and the Merkle reserve rebuild from log
     }
   });
 
-  it("a silent bank before a fee raise under the deepest share still folds exactly", async function () {
-    const merkleLane = sink;
-    await hub.connect(owner).setSatoriMerkle(merkleLane.address);
-    await rewards.connect(owner).setOffchainShareBps(9999);
-    for (let i = 0; i < 5; i++) await advanceRound();
-    await hub.connect(sink).syncEmission();         // banks at the old residual
-    await expectFolds("after the early bank");
-    await atRound(token, (await token.deploymentRound()) + 30n);   // the fee dial's gap counts from genesis
-    await token.connect(owner).proposeDevFeeBps(2500);
-    await token.connect(owner).acceptDevFeeBps();   // the residual the share splits falls
-    await advanceRound();
-    const rw = await rewardsSigner(rewards);
-    const banks = async (label, send) => {
-      const before = await hub.merkleReserveCumulative();
-      await send();
-      expect(await hub.merkleReserveCumulative(), `${label} banks`).to.be.gt(before);
-      await expectFolds(label);
-    };
-    await banks("after the fee raise", () => hub.connect(rw).noteIssued(E(1)));   // banks the rest at the new one
-    await advanceRound();
-    await banks("after a merkle-lane rewardMint bank", () => hub.connect(merkleLane).rewardMint(sink.address, 1n));
-    await advanceRound();
-    await banks("after a round-pricing bank", async () => hub.connect(rw).freezeRoundGross(await token.getCurrentRound()));
-  });
-
   it("an emission step folds exactly", async function () {
     await rewards.connect(owner).setOffchainShareBps(5000);
     await advanceRound();
