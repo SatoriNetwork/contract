@@ -81,7 +81,7 @@ const { runChecks, waitForHead, readPolicy } = require("./live-reads-lib");
 const { ensureFactory, deployDeterministic, predictAddress, buildInitCode } = require("./create2-lib");
 const {
   SAFE, predictSafe, rootPolicy, adoption, delegationCalls, delegated, encodeMultiSend, txBuilderBatch, validateInputs,
-  checkFeeTree, UNISWAP_V3_FACTORY, SEQUENCER_UPTIME_FEED, OFFICIAL_RELAYER, ROOT_PUBLISHER, MARKETING_FEE_RECIPIENT, requireDeployer, presetOr, ROOT_SAFE,
+  checkFeeTree, UNISWAP_V3_FACTORY, SEQUENCER_UPTIME_FEED, OFFICIAL_RELAYER, ROOT_PUBLISHER, MARKETING_FEE_RECIPIENT, requireDeployer, presetOr, ROOT_SAFE, COINED,
 } = require("./deploy-lib");
 const { execViaSafe } = require("./safe-exec");
 const same = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
@@ -234,7 +234,7 @@ async function main() {
   if (delegating && !safeInfo) {
     throw new Error(`GOVERNOR ${governor} is neither the deployer nor a Safe; deploy.js cannot get the setup rights it needs.`);
   }
-  const coinedEnv = (process.env.COINED_ADDRESS || "").trim();
+  const coinedEnv = (presetOr("COINED_ADDRESS", COINED[chainId]) || "").trim();
   if (!localChain && !coinedEnv) {
     throw new Error(
       `COINED_ADDRESS is required on '${net}': named streams coin their names on Coined, ` +
@@ -404,7 +404,7 @@ async function main() {
       if (!hre.network.config.url) throw new Error("SIGNER_KEYS needs a network with a URL");
       console.log("  executing the Safe's delegation with SIGNER_KEYS (testnet convenience)...");
       await execViaSafe({ provider: new ethers.JsonRpcProvider(hre.network.config.url), safe: governor,
-        to: SAFE.multiSendCallOnly, data, operation: 1, keys, log: console.log });
+        to: SAFE.multiSendCallOnly, data, operation: 1, keys, relayerKey: process.env.RELAYER_KEY, log: console.log });
       const ok = await runChecks([["the Safe lent wiring, appoint and the fee",
         async () => delegated(await readState(), deployer.address, ADAPTER_FEE)]], { ...readPolicy(net), log: console.log });
       if (ok.failed.length) throw new Error("the Safe transaction ran but the deployer does not hold wiring, appoint and the fee");

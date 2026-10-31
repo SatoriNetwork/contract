@@ -472,7 +472,7 @@ async function main() {
       if (!network.config.url) throw new Error("SIGNER_KEYS needs a network with a URL");
       console.log("  executing it with SIGNER_KEYS (testnet convenience)...");
       await execViaSafe({ provider: new ethers.JsonRpcProvider(network.config.url), safe: govNow,
-        to: SAFE.multiSendCallOnly, data, operation: 1, keys, log: console.log });
+        to: SAFE.multiSendCallOnly, data, operation: 1, keys, relayerKey: process.env.RELAYER_KEY, log: console.log });
       const { failed } = await runChecks(rootCalls.map((c) => c.check), { ...policy, log: console.log });
       if (failed.length) {
         console.error(`\n  the Safe ran, but ${failed.map(([m]) => m).join("; ")} did not hold — check the Safe transaction.\n`);
@@ -490,7 +490,7 @@ async function main() {
     console.log(`\n== ${newGovernor} accepts root, signed with NEW_GOVERNOR_SIGNER_KEYS ==`);
     await execViaSafe({ provider: new ethers.JsonRpcProvider(network.config.url), safe: newGovernor,
       to: A.token, data: token.interface.encodeFunctionData("acceptRootAuthority", []), operation: 0,
-      keys: acceptKeys, log: console.log });
+      keys: acceptKeys, relayerKey: process.env.RELAYER_KEY, log: console.log });
     const { failed } = await runChecks([[`root is ${newGovernor}`,
       async () => (await token.rootAuthority()).toLowerCase() === newGovernor.toLowerCase()]], { ...policy, log: console.log });
     if (failed.length) { console.error(`\n  the accept ran but root did not move.\n`); process.exit(1); }

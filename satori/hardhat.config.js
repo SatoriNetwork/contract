@@ -110,6 +110,7 @@ module.exports = {
     // See docs/LAUNCH_CHECKLIST.md section C before ever running this.
     base: {
       url: process.env.BASE_RPC_URL || "https://mainnet.base.org",
+      timeout: 300000,
       chainId: 8453,
       accounts: ACCOUNTS,
       // Same pin and reason as baseSepolia. 0.1 gwei is far above Base's usual
