@@ -77,7 +77,7 @@ const { ethers, network } = require("hardhat");
 const fs = require("fs");
 const path = require("path");
 const { runChecks, readPolicy } = require("./live-reads-lib");
-const { SAFE, encodeMultiSend, txBuilderBatch, ROOT_PUBLISHER, NEW_ADMIN, requireDeployer, presetOr, NEW_GOVERNOR, BURN_ROOT_BALANCE } = require("./deploy-lib");
+const { SAFE, encodeMultiSend, txBuilderBatch, ROOT_PUBLISHER, NEW_ADMIN, requireDeployer, presetOr, NEW_GOVERNOR, ROOT_BALANCE_TO } = require("./deploy-lib");
 const { execViaSafe } = require("./safe-exec");
 
 function requireAddr(name, v) {
@@ -152,10 +152,11 @@ async function main() {
   const [govNow, pendingNow, adminNow, bal] = await Promise.all([
     token.rootAuthority(), token.pendingRootAuthority(), rewards.admin(), token.balanceOf(deployer.address),
   ]);
-  // A root Safe handing over to a different holder burns what it holds when this
-  // chain says so (Base mainnet: the genesis SATORI is not wanted).
-  const burnRoot = !!BURN_ROOT_BALANCE[chainId] && govNow.toLowerCase() !== newGovernor.toLowerCase();
-  const rootBal = burnRoot ? await token.balanceOf(govNow) : 0n;
+  // A root Safe handing over to a different holder sends what it holds to this
+  // chain's ROOT_BALANCE_TO (Base mainnet: wallet 40).
+  const rootBalanceTo = ROOT_BALANCE_TO[chainId];
+  const moveRootBal = !!rootBalanceTo && govNow.toLowerCase() !== newGovernor.toLowerCase();
+  const rootBal = moveRootBal ? await token.balanceOf(govNow) : 0n;
   console.log(`\n== where things stand ==`);
   console.log(`  token.root              ${govNow}`);
   console.log(`  token.pendingRoot       ${pendingNow === ethers.ZeroAddress ? "(none)" : pendingNow}`);
@@ -305,9 +306,9 @@ async function main() {
       }
     }
     if (rootBal > 0n) {
-      rootCalls.push({ to: A.token, data: token.interface.encodeFunctionData("burn", [rootBal]),
-        label: `burn(${ethers.formatEther(rootBal)} SATORI)`,
-        check: [`root Safe burned its SATORI`, async () => (await token.balanceOf(govNow)) === 0n] });
+      rootCalls.push({ to: A.token, data: token.interface.encodeFunctionData("transfer", [rootBalanceTo, rootBal]),
+        label: `transfer(${rootBalanceTo}, ${ethers.formatEther(rootBal)} SATORI)`,
+        check: [`root Safe sent its SATORI to ${rootBalanceTo}`, async () => (await token.balanceOf(govNow)) === 0n] });
     }
   }
   if (rootIsDeployer && !govDone && !nominated) {

@@ -9,7 +9,7 @@ export interface CoinedName {
   id: string;
   text: string;
   hashed: boolean;
-  /// wei behind the term, as a decimal string
+  /// USDC base units (6 decimals) behind the term, as a decimal string
   pile: string;
 }
 

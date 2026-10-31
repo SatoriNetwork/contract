@@ -3,13 +3,14 @@
 // another curve, would make every Coined stream fail or read wrong, for good.
 //
 // Read-only, so deploy.js runs it before its first chain write. Id 0x00..01 is
-// never coined, so its supply is 0: its price is V/K, and 1 ETH buys
-// isqrt(V² + 1e18·2K·1e18) − V units. The two pin V and K.
+// never coined, so its supply is 0: its price is V/K, and 1 USDC buys
+// isqrt(V² + 1e6·2K·1e18) − V units. The two pin V and K.
 const { ethers } = require("ethers");
 
 // Keep equal to CoinedAdapter.VIRTUAL_SUPPLY and CoinedAdapter.K.
 const V = 1_000n * 10n ** 18n;
-const K = 500_000n;
+const K = 5n * 10n ** 15n;
+const USDC = 10n ** 6n;
 const WAD = 10n ** 18n;
 
 function isqrt(n) {
@@ -30,15 +31,15 @@ async function checkCoined(provider, address) {
   try {
     await c.openOf(never);
     price = await c.priceOf(never);
-    units = await c.quoteBuy(never, WAD);
+    units = await c.quoteBuy(never, USDC);
   } catch (e) {
     throw new Error(`COINED_ADDRESS ${address} does not answer openOf, priceOf and quoteBuy ` +
       `(${e.shortMessage ?? e.message}) — CoinedAdapter needs Coined from current master.`);
   }
-  const wantUnits = isqrt(V * V + WAD * 2n * K * WAD) - V;
+  const wantUnits = isqrt(V * V + USDC * 2n * K * WAD) - V;
   if (price !== V / K || units !== wantUnits) {
     throw new Error(`COINED_ADDRESS ${address} prices on another curve than CoinedAdapter copies: ` +
-      `priceOf(0x..01) = ${price} (want ${V / K}), quoteBuy(0x..01, 1 ETH) = ${units} (want ${wantUnits}).`);
+      `priceOf(0x..01) = ${price} (want ${V / K}), quoteBuy(0x..01, 1 USDC) = ${units} (want ${wantUnits}).`);
   }
 }
 

@@ -1,4 +1,4 @@
-import { trimName, nameProblem, localIdOf, ethShort } from './coinedName';
+import { trimName, nameProblem, localIdOf, usd } from './coinedName';
 import { keccak256, toUtf8Bytes, getBytes, hexlify } from 'ethers';
 
 /// A named stream's name is a Coined term, so the id Satori predicts must be
@@ -80,12 +80,12 @@ describe('Coined d2a101d: every space but the plain one', () => {
   });
 });
 
-describe('ethShort', () => {
-  it('reads to two or three significant figures', () => {
-    expect(ethShort(BigInt('420000000000000000'))).toBe('0.42');
-    expect(ethShort(BigInt('322872999999999999999'))).toBe('323');
-    expect(ethShort(BigInt('5999999999999999999'))).toBe('6');
-    expect(ethShort(BigInt('1230000000000000'))).toBe('0.00123');
-    expect(ethShort(BigInt(0))).toBe('0');
+describe('usd', () => {
+  it('reads like Coined: cents from a dollar, four places under it, six under a cent', () => {
+    expect(usd(BigInt(420000))).toBe('$0.4200');
+    expect(usd(BigInt(322872999))).toBe('$322.87');
+    expect(usd(BigInt(1234567890))).toBe('$1,234.57');
+    expect(usd(BigInt(1230))).toBe('$0.001230');
+    expect(usd(BigInt(0))).toBe('$0');
   });
 });

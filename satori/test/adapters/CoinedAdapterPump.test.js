@@ -1,7 +1,7 @@
 // A Coined-backed stream records Coined's price as the block opened (sweep item B5).
 //
 // Coined charges no fee, so a buy, a pull and a sell in one block cost about a
-// wei. Reading the live price let anyone write any value that way; the adapter
+// base unit of its asset (USDC). Reading the live price let anyone write any value that way; the adapter
 // reads the supply the block opened with, which no trade in the block can move.
 //
 // Runs against Coined's real bytecode: its forge artifact in /code/coined, or
@@ -20,9 +20,10 @@ const ARTIFACT = process.env.COINED_ARTIFACT
 const HOUR = 3600;
 const UP = 1;
 const DOWN = 2;
-const K = 500_000n;
+const K = 5n * 10n ** 15n;
 const V = 1_000n * 10n ** 18n;
 const E = (n) => ethers.parseEther(String(n));
+const D = (n) => ethers.parseUnits(String(n), 6);
 const pack1 = (d) => ethers.hexlify(new Uint8Array([d]));
 const cfg = (term) => ethers.AbiCoder.defaultAbiCoder().encode(["bytes32"], [term]);
 const TEXT = "bitcoin";
@@ -33,11 +34,16 @@ async function setup() {
   const { token, hub, voting, registry, games, owner, signers } = fix;
   const [attacker, honest, holder, seller] = signers.slice(5, 9);
 
-  const coined = await new ethers.ContractFactory(art.abi, art.bytecode.object, owner).deploy();
+  const usdc = await (await ethers.getContractFactory("MockERC20WithDecimals")).deploy("USD Coin", "USDC", 6);
+  const coined = await new ethers.ContractFactory(art.abi, art.bytecode.object, owner).deploy(await usdc.getAddress());
   await coined.waitForDeployment();
+  for (const u of signers.slice(5, 10)) {
+    await (await usdc.mint(u.address, D(1_000_000))).wait();
+    await (await usdc.connect(u).approve(await coined.getAddress(), ethers.MaxUint256)).wait();
+  }
   const term = await coined.idOf(TEXT);
-  await (await coined.connect(holder).buy(TEXT, E(10), 0n, { value: E(10) })).wait();
-  await (await coined.connect(seller).buy(TEXT, E(2), 0n, { value: E(2) })).wait();
+  await (await coined.connect(holder).buy(TEXT, D(10), 0n)).wait();
+  await (await coined.connect(seller).buy(TEXT, D(2), 0n)).wait();
 
   const adapter = await (await ethers.getContractFactory("CoinedAdapter")).deploy(await coined.getAddress());
   await adapter.waitForDeployment();
@@ -58,7 +64,7 @@ async function setup() {
   expect(await registry.getValue(sid)).to.equal(baseline);
   // A fresh hour, so the next pull is due.
   await time.increaseTo(Math.floor((await time.latest()) / HOUR) * HOUR + 2 * HOUR + 60);
-  return { ...fix, attacker, honest, holder, seller, coined, term, adapter, sid, gid, baseline, create };
+  return { ...fix, usdc, attacker, honest, holder, seller, coined, term, adapter, sid, gid, baseline, create };
 }
 
 // Sends the txs into one block and returns their receipts. A tx left out of
@@ -115,11 +121,11 @@ describe("CoinedAdapter: the price as the block opened (B5)", function () {
 
   it("a buy, predict DOWN and sell in one block writes nothing, and the honest UP wins", async function () {
     const { token, engine, hub, rewards, registry, attacker, honest, holder, coined, term, sid, gid, baseline } = await setup();
-    const units = await coined.quoteBuy(term, E(100));
+    const units = await coined.quoteBuy(term, D(100));
     const gas = { gasLimit: 5_000_000n };
     let n = await nextNonce(attacker);
     const [, rPredict] = await oneBlock([
-      () => coined.connect(attacker).buy(TEXT, E(100), 0n, { value: E(100), nonce: n++, ...gas }),
+      () => coined.connect(attacker).buy(TEXT, D(100), 0n, { nonce: n++, ...gas }),
       () => predict(engine, attacker, gid, DOWN, { nonce: n++, ...gas }),
       () => coined.connect(attacker).sell(term, units, 0n, { nonce: n++, ...gas }),
     ]);
@@ -133,7 +139,7 @@ describe("CoinedAdapter: the price as the block opened (B5)", function () {
 
     // The market really rises over the window.
     await time.increaseTo(Math.floor(attackTs / HOUR) * HOUR + 24 * HOUR + 120);
-    await (await coined.connect(holder).buy(TEXT, E(1), 0n, { value: E(1) })).wait();
+    await (await coined.connect(holder).buy(TEXT, D(1), 0n)).wait();
     await (await registry.updateValue(sid)).wait();
     expect(await registry.getValue(sid)).to.be.gt(baseline);
 
@@ -158,7 +164,7 @@ describe("CoinedAdapter: the price as the block opened (B5)", function () {
     const [, rPredict] = await oneBlock([
       () => coined.connect(holder).sell(term, units, 0n, { nonce: n++, ...gas }),
       () => predict(engine, holder, gid, UP, { nonce: n++, ...gas }),
-      () => coined.connect(holder).buy(TEXT, proceeds, 0n, { value: proceeds, nonce: n++, ...gas }),
+      () => coined.connect(holder).buy(TEXT, proceeds, 0n, { nonce: n++, ...gas }),
     ]);
     const dumpTs = (await ethers.provider.getBlock(rPredict.blockNumber)).timestamp;
     expect(written(rPredict, registry, sid)).to.deep.equal([]);
@@ -182,7 +188,7 @@ describe("CoinedAdapter: the price as the block opened (B5)", function () {
   });
 
   it("matches Coined's priceOf in any block the term has not traded in, and reads only the pinned Coined", async function () {
-    const { owner, signers, coined, term, adapter, create } = await setup();
+    const { owner, signers, usdc, coined, term, adapter, create } = await setup();
     const coinedAddr = await coined.getAddress();
     expect(await adapter.coined()).to.equal(coinedAddr);
     const read = (t) => adapter.readValue(coinedAddr, cfg(t));
@@ -193,7 +199,7 @@ describe("CoinedAdapter: the price as the block opened (B5)", function () {
 
     const buyer = signers[9];
     for (const spend of ["0.001", "1", "10", "1000"]) {
-      await (await coined.connect(buyer).buy(TEXT, E(spend), 0n, { value: E(spend) })).wait();
+      await (await coined.connect(buyer).buy(TEXT, D(spend), 0n)).wait();
       await network.provider.send("evm_mine", []);
       expect(await read(term)).to.equal(await coined.priceOf(term));
     }
@@ -202,8 +208,9 @@ describe("CoinedAdapter: the price as the block opened (B5)", function () {
     await expect(create(coinedAddr, ethers.ZeroHash)).to.be.revertedWithCustomError(adapter, "UnknownTerm");
 
     const art = JSON.parse(fs.readFileSync(ARTIFACT, "utf8"));
-    const other = await new ethers.ContractFactory(art.abi, art.bytecode.object, owner).deploy();
-    await (await other.connect(buyer).buy(TEXT, E(1), 0n, { value: E(1) })).wait();
+    const other = await new ethers.ContractFactory(art.abi, art.bytecode.object, owner).deploy(await usdc.getAddress());
+    await (await usdc.connect(buyer).approve(await other.getAddress(), ethers.MaxUint256)).wait();
+    await (await other.connect(buyer).buy(TEXT, D(1), 0n)).wait();
     await expect(create(await other.getAddress(), term)).to.be.revertedWithCustomError(adapter, "InvalidProvider");
     await expect(adapter.readValue(await other.getAddress(), cfg(term)))
       .to.be.revertedWithCustomError(adapter, "InvalidProvider");
@@ -220,7 +227,7 @@ describe("CoinedAdapter: the price as the block opened (B5)", function () {
 
   it("a buy shows from the next block on, even when sold back in that block (B5's leftover)", async function () {
     const { attacker, registry, coined, term, sid, baseline } = await setup();
-    await (await coined.connect(attacker).buy(TEXT, E(100), 0n, { value: E(100) })).wait();
+    await (await coined.connect(attacker).buy(TEXT, D(100), 0n)).wait();
     const pumpedUnits = await coined.unitsOf(term);
     const units = await coined.holdsOf(attacker.address, term);
     let n = await nextNonce(attacker);

@@ -16,7 +16,7 @@ const stream = (id: number, name: string, isNamed = true): StreamBasic =>
      approved: true, minCadenceMinutes: 60, adapterId: 9, isCommunityAdapter: false, config: '0x' });
 
 type Term = { id: string; text: string; hashed: boolean; pile: string };
-const term = (text: string, pile = '420000000000000000'): Term =>
+const term = (text: string, pile = '420000'): Term =>
   ({ id: localIdOf(text), text, hashed: false, pile });
 
 /// The real indexer's shape: `/search` never carries the exact typed text,
@@ -124,7 +124,7 @@ describe('suggestions', () => {
     await mount(<Harness />);
     type('bit');
     const row = await screen.findByRole('button', { name: /^Bitcoin/ });
-    expect(row).toHaveTextContent('coined · 0.42 ETH');
+    expect(row).toHaveTextContent('coined · $0.4200');
     fireEvent.click(row);
     expect(last).toEqual({ value: 'Bitcoin', keepCase: true });
   });
@@ -190,7 +190,7 @@ describe('suggestions', () => {
     mockCoined({ coined: [term('bitcoin')], search: [term('bitcoins')] });
     await mount(<Harness />);
     type('bitcoin');
-    expect(await screen.findByText('Coined already — "bitcoin" (0.42 ETH backing)')).toBeInTheDocument();
+    expect(await screen.findByText('Coined already — "bitcoin" ($0.4200 backing)')).toBeInTheDocument();
     expect(coinedRows().map(rowText)).toEqual(['bitcoins']);
   });
 
@@ -198,7 +198,7 @@ describe('suggestions', () => {
     mockCoined({ coined: [term('bitcoin')], search: [term('bitcoins', '1000000000000000000'), term('bitcoin')] });
     await mount(<Harness />);
     type('Bitcoin');
-    expect(await screen.findByText('Coined already — "bitcoin" (0.42 ETH backing)')).toBeInTheDocument();
+    expect(await screen.findByText('Coined already — "bitcoin" ($0.4200 backing)')).toBeInTheDocument();
     expect(coinedRows().map(rowText)).toEqual(['bitcoins']);
 
     fireEvent.click(screen.getByRole('button', { name: 'keep "Bitcoin" as typed' }));
@@ -215,7 +215,7 @@ describe('suggestions', () => {
     expect(rowText(row)).toBe('Bitcoin');
     fireEvent.click(row);
     expect(last).toEqual({ value: 'Bitcoin', keepCase: true });
-    expect(await screen.findByText('Coined already — "Bitcoin" (0.42 ETH backing)')).toBeInTheDocument();
+    expect(await screen.findByText('Coined already — "Bitcoin" ($0.4200 backing)')).toBeInTheDocument();
   });
 
   it('treats any other case-variant as a plain row, not as the twin', async () => {

@@ -6,7 +6,7 @@ import { getCoinedIndexerUrl, TESTNET_CHAIN_ID } from '../contracts/addresses';
 // must keep working from Satori's own stream list when this is null.
 
 const realFetch = (global as any).fetch;
-const ROW = { id: '0x6269', text: 'bitcoin', hashed: false, pile: '420000000000000000' };
+const ROW = { id: '0x6269', text: 'bitcoin', hashed: false, pile: '420000' };
 
 function mockFetch(impl: (url: string) => Promise<any>): jest.Mock {
   const fn = jest.fn((input: unknown) => impl(String(input)));

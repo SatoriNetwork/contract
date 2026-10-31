@@ -31,7 +31,7 @@ contract CoinedAdapter is IStreamAdapter, IStreamAdapterUIDescriptor {
     /// internal to Coined. Must equal Coined's Curve.sol; CoinedAdapterPump.test.js
     /// checks it against Coined's build, and scripts/coined-probe.js against
     /// COINED_ADDRESS before deploy.js writes anything.
-    uint256 internal constant K = 500_000;
+    uint256 internal constant K = 5e15;
     uint256 internal constant VIRTUAL_SUPPLY = 1_000e18;
 
     address public immutable coined;
@@ -79,6 +79,6 @@ contract CoinedAdapter is IStreamAdapter, IStreamAdapterUIDescriptor {
         override
         returns (uint8 decimals, string memory unit, string memory label)
     {
-        return (18, "ETH", "Coined price");
+        return (6, "USDC", "Coined price");
     }
 }

@@ -1,4 +1,4 @@
-import { formatEther, getBytes, hexlify, keccak256, toUtf8Bytes } from 'ethers';
+import { formatUnits, getBytes, hexlify, keccak256, toUtf8Bytes } from 'ethers';
 
 /// trimName / nameProblem / localIdOf are COPIED from
 /// /code/coined/ui/src/lib/values.ts — Coined's client mirror of its contract's
@@ -101,9 +101,13 @@ export function localIdOf(text: string): string {
   return hexlify(h);
 }
 
-/// ETH backing as a tag: two or three significant figures.
-export function ethShort(wei: bigint): string {
-  const n = Number(formatEther(wei));
-  if (n === 0) return '0';
-  return n >= 100 ? Math.round(n).toString() : Number(n.toPrecision(3)).toString();
+/// Coined's money is USDC (6 decimals), shown by Coined's own rule
+/// (coined ui/src/utils/format.ts `usd`): cents from a dollar up, four places
+/// under a dollar, six under a cent.
+export function usd(amount: bigint): string {
+  const n = Number(formatUnits(amount, 6));
+  if (n === 0) return '$0';
+  if (n < 0.01) return `$${n.toFixed(6)}`;
+  if (n < 1) return `$${n.toFixed(4)}`;
+  return `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }

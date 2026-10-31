@@ -86,7 +86,13 @@ const scheduleGeneral = (priced, deploymentRound) =>
 const SEED_BURN  = E("1");
 const CHURN_BURN = E("0.01");
 
-async function nextRound() { await time.increase(TIME_UNIT); }
+// To just past the next round's start: a round's hundreds of blocks each add a
+// second, so a flat +TIME_UNIT drifts and, depending on the hour the suite
+// starts, crosses midnight mid-round, ahead of the invariant check.
+async function nextRound() {
+  const now = await time.latest();
+  await time.increaseTo((Math.floor(now / TIME_UNIT) + 1) * TIME_UNIT + 60);
+}
 
 // Not wrapped in try: a reported credit that cannot be minted is exactly the
 // failure these sims hunt for.

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import type { StreamBasic } from '../hooks/useStreamList';
-import { trimName, nameProblem, localIdOf, ethShort } from '../lib/coinedName';
+import { trimName, nameProblem, localIdOf, usd } from '../lib/coinedName';
 import { coinedIndexer, type CoinedName } from '../utils/coinedIndexer';
 
 /// The name box for a NAMED stream. Lowercase by default: a capital is sent
@@ -220,7 +220,7 @@ export default function NameSuggest({
       const id = n.id.toLowerCase();
       if (id === sentId || satoriIds.has(id) || seen.has(id)) continue;
       seen.add(id);
-      out.push({ key: id, text: n.text, tag: `coined · ${ethShort(BigInt(n.pile ?? '0'))} ETH`, taken: false, rank: rank(n.text, 1) });
+      out.push({ key: id, text: n.text, tag: `coined · ${usd(BigInt(n.pile ?? '0'))}`, taken: false, rank: rank(n.text, 1) });
     }
     return out.sort((a, b) => a.rank - b.rank).slice(0, 6);
   }, [named, coined, known, canon, lower, variant, sentId, satoriIds]);
@@ -232,7 +232,7 @@ export default function NameSuggest({
 
   let status: string | null = null;
   if (!blocker && canon) {
-    if (coinedExact) status = `Coined already — "${coinedExact.text}" (${ethShort(BigInt(coinedExact.pile ?? '0'))} ETH backing)`;
+    if (coinedExact) status = `Coined already — "${coinedExact.text}" (${usd(BigInt(coinedExact.pile ?? '0'))} backing)`;
     else if (coinedVariant) status = keepCase
       ? `"${coinedVariant.text}" exists — pick it, or keep your capitals`
       : `"${coinedVariant.text}" exists — pick it, or create "${lower}"`;

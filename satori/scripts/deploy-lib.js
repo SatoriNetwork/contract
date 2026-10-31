@@ -30,9 +30,9 @@ const ROOT_SAFE = {
   },
 };
 // Who holds root and the other token slots on this chain after handoff.js
-// (Base mainnet: Safe #1), and whether the outgoing root Safe burns its SATORI.
+// (Base mainnet: Safe #1), and where the outgoing root Safe sends its SATORI.
 const NEW_GOVERNOR = { [BASE_MAINNET]: "0xaCEa49E019ae0c5f3AC8BF2018CdCCAF245f17E6" };
-const BURN_ROOT_BALANCE = { [BASE_MAINNET]: true };
+const ROOT_BALANCE_TO = { [BASE_MAINNET]: "0x9d84b3d7A30b895E48142222F2069b20484fBe66" }; // wallet 40
 // The fee-splitter inputs per chain (deploy-splitters.js); the same-named env vars override them.
 const SPLITTER_INPUTS = {
   [BASE_MAINNET]: {
@@ -326,6 +326,6 @@ function validateInputs(env) {
 }
 
 module.exports = {
-  BASE_MAINNET, UNISWAP_V3_FACTORY, SEQUENCER_UPTIME_FEED, OFFICIAL_RELAYER, ROOT_PUBLISHER, MARKETING_FEE_RECIPIENT, DEPLOYER, NEW_ADMIN, requireDeployer, SPLITTER_INPUTS, presetOr, ROOT_SAFE, NEW_GOVERNOR, BURN_ROOT_BALANCE, SAFE, predictSafe, rootPolicy, adoption, delegationCalls, delegated,
+  BASE_MAINNET, UNISWAP_V3_FACTORY, SEQUENCER_UPTIME_FEED, OFFICIAL_RELAYER, ROOT_PUBLISHER, MARKETING_FEE_RECIPIENT, DEPLOYER, NEW_ADMIN, requireDeployer, SPLITTER_INPUTS, presetOr, ROOT_SAFE, NEW_GOVERNOR, ROOT_BALANCE_TO, SAFE, predictSafe, rootPolicy, adoption, delegationCalls, delegated,
   encodeMultiSend, txBuilderBatch, txBuilderChecksum, validateInputs, FEE_TREE, checkFeeTree,
 };

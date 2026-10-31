@@ -28,7 +28,7 @@ contract CoinedAdapterTest is Test {
     CoinedAdapter a;
     MockValues v;
     bytes32 constant TERM = keccak256("honesty");
-    uint256 constant K = 500_000;
+    uint256 constant K = 5e15;
     uint256 constant V = 1_000e18;
 
     function setUp() public {
@@ -96,10 +96,15 @@ contract CoinedAdapterTest is Test {
         a.validate(address(v), _cfg(bytes32(0)));
     }
 
-    function test_readValue_reverts_on_int232_overflow() public {
-        v.setOpen(TERM, (uint256(int256(type(int232).max)) + 1) * K);
-        vm.expectRevert(CoinedAdapter.ValueOverflow.selector);
-        a.readValue(address(v), _cfg(TERM));
+    /// With K = 5e15 every uint256 supply prices inside int232.
+    function test_readValue_fits_int232_at_any_supply() public {
+        assertEq(_read(type(uint256).max - V), int256(type(uint256).max / K));
+    }
+
+    function test_value_display_is_usdc() public view {
+        (uint8 decimals, string memory unit, ) = a.valueDisplay(address(v), _cfg(TERM));
+        assertEq(decimals, 6);
+        assertEq(unit, "USDC");
     }
 
     function test_config_schema_names_its_field_by_key() public view {
